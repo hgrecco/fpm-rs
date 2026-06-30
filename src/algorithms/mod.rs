@@ -2,10 +2,13 @@ mod alternating_projection;
 mod common;
 mod epry;
 mod fpie;
+mod gradient_descent;
+mod regularization;
 
 pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;
 pub use fpie::Fpie;
+pub use gradient_descent::GradientDescent;
 
 use crate::{
     Result,
