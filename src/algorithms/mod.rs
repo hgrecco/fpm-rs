@@ -1,3 +1,4 @@
+mod admm;
 mod alternating_projection;
 mod common;
 mod epry;
@@ -5,6 +6,7 @@ mod fpie;
 mod gradient_descent;
 mod regularization;
 
+pub use admm::Admm;
 pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;
 pub use fpie::Fpie;
