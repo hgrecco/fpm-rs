@@ -1,0 +1,381 @@
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
+
+use crate::{
+    Result,
+    algorithms::ReconstructionAlgorithm,
+    backend::Backend,
+    callbacks::{Callback, CallbackAction, CallbackHook, StepContext},
+    complex,
+    diagnostics::{
+        DiagnosticRequest, Diagnostics, IterationRecord, ReconstructionHistory, StepDiagnostics,
+    },
+    error::Error,
+    measurements::MeasurementRead,
+    model::ForwardModel,
+};
+
+use super::{
+    Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionResult,
+    ReconstructionState, RunOptions, RuntimeInfo, state_object,
+};
+
+pub struct Runner<A> {
+    algorithm: A,
+    options: RunOptions,
+    callbacks: Vec<Box<dyn Callback>>,
+    initial_checkpoint: Option<ReconstructionCheckpoint>,
+    backend: Option<Arc<dyn Backend>>,
+}
+
+impl<A: ReconstructionAlgorithm> Runner<A> {
+    pub fn new(algorithm: A, options: RunOptions) -> Self {
+        Self {
+            algorithm,
+            options,
+            callbacks: Vec::new(),
+            initial_checkpoint: None,
+            backend: None,
+        }
+    }
+
+    pub fn with_callback(mut self, callback: Box<dyn Callback>) -> Self {
+        self.callbacks.push(callback);
+        self
+    }
+
+    pub fn with_callbacks(mut self, callbacks: Vec<Box<dyn Callback>>) -> Self {
+        self.callbacks.extend(callbacks);
+        self
+    }
+
+    pub fn resume_from(mut self, checkpoint: ReconstructionCheckpoint) -> Self {
+        self.initial_checkpoint = Some(checkpoint);
+        self
+    }
+
+    pub fn with_backend(mut self, backend: Arc<dyn Backend>) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    pub fn run<M: MeasurementRead>(
+        mut self,
+        problem: &ReconstructionProblem<M>,
+    ) -> Result<ReconstructionResult> {
+        self.algorithm.validate()?;
+        problem.validate()?;
+        self.algorithm.validate_problem(problem)?;
+        if self.options.batch_size == 0 {
+            return Err(Error::InvalidParameter {
+                name: "batch_size",
+                reason: "must be greater than zero".into(),
+            });
+        }
+        let started = Instant::now();
+        let algorithm_name = std::any::type_name::<A>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("reconstruction algorithm")
+            .to_owned();
+        let (mut state, mut history, starting_iteration) =
+            if let Some(checkpoint) = &self.initial_checkpoint {
+                (
+                    if let Some(backend) = &self.backend {
+                        ReconstructionState::from_checkpoint_with_backend(
+                            problem,
+                            checkpoint,
+                            backend.clone(),
+                        )?
+                    } else {
+                        ReconstructionState::from_checkpoint(problem, checkpoint)?
+                    },
+                    checkpoint.history.clone(),
+                    checkpoint.completed_iterations,
+                )
+            } else {
+                (
+                    if let Some(backend) = &self.backend {
+                        self.algorithm
+                            .initialize_with_backend(problem, backend.clone())?
+                    } else {
+                        self.algorithm.initialize(problem)?
+                    },
+                    ReconstructionHistory::default(),
+                    0,
+                )
+            };
+        let previous_elapsed = history
+            .iterations
+            .last()
+            .map_or(0.0, |record| record.elapsed_seconds);
+        let start_requests =
+            callback_requests(&self.callbacks, CallbackHook::Start, starting_iteration);
+        let start_diagnostics =
+            build_diagnostics(problem, &mut state, &start_requests, None, None)?;
+        let start_context = StepContext {
+            iteration: starting_iteration,
+            frame_index: None,
+            batch_index: None,
+            state: &state,
+            diagnostics: &start_diagnostics,
+            history: &history,
+            model: &problem.model,
+            problem_name: problem.name.as_deref(),
+        };
+        let mut stopped_early = false;
+        for callback in &mut self.callbacks {
+            if callback.on_start(&start_context)? == CallbackAction::Stop {
+                stopped_early = true;
+            }
+        }
+        if !stopped_early {
+            for zero_based_iteration in starting_iteration..self.options.max_iterations {
+                let current_iteration = zero_based_iteration + 1;
+                let frame_requests =
+                    callback_requests(&self.callbacks, CallbackHook::FrameEnd, current_iteration);
+                let order = self
+                    .options
+                    .schedule
+                    .order_for_problem(problem, zero_based_iteration)?;
+                let mut iteration_step = StepDiagnostics::default();
+                for (batch_index, indices) in order.chunks(self.options.batch_size).enumerate() {
+                    let batch = Batch::new(indices.to_vec(), batch_index);
+                    let batch_step =
+                        self.algorithm
+                            .step(problem, &mut state, &batch, zero_based_iteration)?;
+                    state.object_real_space_cache = None;
+                    if self.options.enable_frame_callbacks {
+                        let batch_loss = batch_step.mean_loss();
+                        let mut diagnostics = build_diagnostics(
+                            problem,
+                            &mut state,
+                            &frame_requests,
+                            batch_loss,
+                            Some(&batch_step),
+                        )?;
+                        // A batch update completes every frame in the batch at
+                        // once. Emit one frame hook per completed frame, with
+                        // the frame's own natural loss and the shared post-batch
+                        // state. Expensive diagnostics are computed only once.
+                        for &frame in &batch.indices {
+                            if frame_requests.contains(&DiagnosticRequest::Loss) {
+                                diagnostics.loss = batch_step.per_frame_loss.get(&frame).copied();
+                            }
+                            let context = StepContext {
+                                iteration: current_iteration,
+                                frame_index: Some(frame),
+                                batch_index: Some(batch_index),
+                                state: &state,
+                                diagnostics: &diagnostics,
+                                history: &history,
+                                model: &problem.model,
+                                problem_name: problem.name.as_deref(),
+                            };
+                            for callback in &mut self.callbacks {
+                                if callback.on_frame_end(&context)? == CallbackAction::Stop {
+                                    stopped_early = true;
+                                }
+                            }
+                            if stopped_early {
+                                break;
+                            }
+                        }
+                    }
+                    iteration_step.merge(batch_step);
+                    if stopped_early {
+                        break;
+                    }
+                }
+                let loss = iteration_step.mean_loss().unwrap_or(f64::NAN);
+                history.iterations.push(IterationRecord {
+                    iteration: current_iteration,
+                    loss,
+                    elapsed_seconds: previous_elapsed + started.elapsed().as_secs_f64(),
+                });
+                let iteration_requests = callback_requests(
+                    &self.callbacks,
+                    CallbackHook::IterationEnd,
+                    current_iteration,
+                );
+                let diagnostics = build_diagnostics(
+                    problem,
+                    &mut state,
+                    &iteration_requests,
+                    Some(loss),
+                    Some(&iteration_step),
+                )?;
+                let context = StepContext {
+                    iteration: current_iteration,
+                    frame_index: None,
+                    batch_index: None,
+                    state: &state,
+                    diagnostics: &diagnostics,
+                    history: &history,
+                    model: &problem.model,
+                    problem_name: problem.name.as_deref(),
+                };
+                for callback in &mut self.callbacks {
+                    if callback.on_iteration_end(&context)? == CallbackAction::Stop {
+                        stopped_early = true;
+                    }
+                }
+                if stopped_early {
+                    break;
+                }
+            }
+        }
+
+        let runtime = RuntimeInfo {
+            elapsed_seconds: previous_elapsed + started.elapsed().as_secs_f64(),
+            completed_iterations: history
+                .iterations
+                .last()
+                .map_or(starting_iteration, |record| record.iteration),
+            stopped_early,
+            algorithm: algorithm_name,
+        };
+        let mut result = ReconstructionResult::from_state(&mut state, history, runtime)?;
+        if let Some(name) = &problem.name {
+            result.metadata.insert("problem_name".into(), name.clone());
+        }
+        for callback in &mut self.callbacks {
+            callback.on_finish(&result)?;
+        }
+        Ok(result)
+    }
+}
+
+fn callback_requests(
+    callbacks: &[Box<dyn Callback>],
+    hook: CallbackHook,
+    iteration: usize,
+) -> BTreeSet<DiagnosticRequest> {
+    callbacks
+        .iter()
+        .flat_map(|callback| callback.requires_for(hook, iteration))
+        .collect()
+}
+
+fn build_diagnostics<M: MeasurementRead>(
+    problem: &ReconstructionProblem<M>,
+    state: &mut ReconstructionState,
+    requests: &BTreeSet<DiagnosticRequest>,
+    natural_loss: Option<f64>,
+    step: Option<&StepDiagnostics>,
+) -> Result<Diagnostics> {
+    let mut diagnostics = Diagnostics::default();
+    if requests.contains(&DiagnosticRequest::Loss) {
+        diagnostics.loss = natural_loss;
+    }
+    if requests.contains(&DiagnosticRequest::PerFrameError) {
+        if let Some(step) = step {
+            let mut values = vec![f64::NAN; problem.model.frame_count()];
+            for (&frame, &loss) in &step.per_frame_loss {
+                values[frame] = loss;
+            }
+            diagnostics.per_frame_error = Some(values);
+        } else {
+            let diagnostic_model = model_with_state_calibration(problem, state)?;
+            let forward = ForwardModel::with_backend(&diagnostic_model, state.backend.clone())?;
+            let mut workspace = forward.workspace();
+            let mut predicted =
+                vec![0.0; problem.model.image_shape.0 * problem.model.image_shape.1];
+            let mut values = Vec::with_capacity(problem.model.frame_count());
+            for frame in 0..problem.model.frame_count() {
+                forward.forward_intensity_into(
+                    &state.object_spectrum,
+                    &state.pupil,
+                    frame,
+                    &mut workspace,
+                    &mut predicted,
+                )?;
+                let measured = problem.measurements.frame(frame)?;
+                let mask = problem.measurements.frame_mask(frame)?;
+                let mut loss_sum = 0.0;
+                let mut valid_pixels = 0;
+                for pixel in 0..predicted.len() {
+                    if mask.is_none_or(|values| values[pixel] != 0) {
+                        let residual =
+                            predicted[pixel].max(0.0).sqrt() - measured[pixel].max(0.0).sqrt();
+                        loss_sum += residual * residual;
+                        valid_pixels += 1;
+                    }
+                }
+                values.push(if valid_pixels == 0 {
+                    0.0
+                } else {
+                    loss_sum / valid_pixels as f64
+                });
+            }
+            diagnostics.per_frame_error = Some(values);
+        }
+    }
+    if requests.contains(&DiagnosticRequest::ObjectAmplitude)
+        || requests.contains(&DiagnosticRequest::ObjectPhase)
+    {
+        let object = state_object(state)?;
+        if requests.contains(&DiagnosticRequest::ObjectAmplitude) {
+            diagnostics.object_amplitude = Some(complex::amplitude(&object));
+        }
+        if requests.contains(&DiagnosticRequest::ObjectPhase) {
+            diagnostics.object_phase = Some(complex::phase(&object));
+        }
+    }
+    if requests.contains(&DiagnosticRequest::Pupil) {
+        diagnostics.pupil_amplitude = Some(complex::amplitude(&state.pupil.values));
+        diagnostics.pupil_phase = Some(complex::phase(&state.pupil.values));
+    }
+    if requests.contains(&DiagnosticRequest::ResidualImages) {
+        let diagnostic_model = model_with_state_calibration(problem, state)?;
+        let forward = ForwardModel::with_backend(&diagnostic_model, state.backend.clone())?;
+        let mut workspace = forward.workspace();
+        let mut predicted = vec![0.0; problem.model.image_shape.0 * problem.model.image_shape.1];
+        let mut images = Vec::with_capacity(problem.model.frame_count());
+        for frame in 0..problem.model.frame_count() {
+            forward.forward_intensity_into(
+                &state.object_spectrum,
+                &state.pupil,
+                frame,
+                &mut workspace,
+                &mut predicted,
+            )?;
+            let measured = problem.measurements.frame(frame)?;
+            let mut residual: Vec<_> = predicted
+                .iter()
+                .zip(measured.iter())
+                .map(|(&predicted, &measured)| predicted - measured)
+                .collect();
+            if let Some(mask) = problem.measurements.frame_mask(frame)? {
+                for (value, &valid) in residual.iter_mut().zip(mask) {
+                    if valid == 0 {
+                        *value = 0.0;
+                    }
+                }
+            }
+            images.push(crate::Array2::from_vec(
+                problem.model.image_shape,
+                residual,
+            )?);
+        }
+        diagnostics.residual_images = Some(images);
+    }
+    Ok(diagnostics)
+}
+
+fn model_with_state_calibration<M: MeasurementRead>(
+    problem: &ReconstructionProblem<M>,
+    state: &ReconstructionState,
+) -> Result<crate::model::ImagePlaneModel> {
+    let mut model = problem.model.clone();
+    model.frame_gains = state.frame_gains.clone();
+    model.background = state.background.clone();
+    if state.illumination_corrections.is_some() {
+        model.subpixel_offsets = Some(
+            (0..model.source_count())
+                .map(|source| state.effective_source_offset(&problem.model, source))
+                .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    model.validate()?;
+    Ok(model)
+}
