@@ -3,3 +3,10 @@
 //! The central boundary is [`model::ImagePlaneModel`]: experimental descriptions
 //! compile into this computational model, and algorithms only consume the model.
 
+pub mod array;
+pub mod complex;
+pub mod error;
+
+pub use array::Array2;
+pub use error::{Error, Result};
+pub use num_complex::Complex64;
