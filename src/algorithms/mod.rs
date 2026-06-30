@@ -1,3 +1,12 @@
+mod alternating_projection;
+mod common;
+mod epry;
+mod fpie;
+
+pub use alternating_projection::AlternatingProjection;
+pub use epry::Epry;
+pub use fpie::Fpie;
+
 use crate::{
     Result,
     backend::Backend,
