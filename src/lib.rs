@@ -4,6 +4,7 @@
 //! compile into this computational model, and algorithms only consume the model.
 
 pub mod array;
+pub mod backend;
 pub mod complex;
 pub mod diagnostics;
 pub mod error;
