@@ -15,6 +15,7 @@ mod image_io;
 pub mod measurements;
 pub mod model;
 pub mod reconstruction;
+pub mod simulation;
 
 pub use array::Array2;
 pub use error::{Error, Result};
