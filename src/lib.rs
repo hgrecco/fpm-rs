@@ -5,6 +5,7 @@
 
 pub mod array;
 pub mod complex;
+pub mod diagnostics;
 pub mod error;
 
 pub use array::Array2;
