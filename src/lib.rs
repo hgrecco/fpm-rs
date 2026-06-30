@@ -9,6 +9,7 @@ pub mod complex;
 pub mod diagnostics;
 pub mod error;
 pub mod experiment;
+pub mod model;
 
 pub use array::Array2;
 pub use error::{Error, Result};
