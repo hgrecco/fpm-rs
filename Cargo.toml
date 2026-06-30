@@ -25,7 +25,10 @@ tiff = "0.11"
 approx = "0.5"
 tempfile = "3"
 
-
 [[bench]]
 name = "forward_model"
+harness = false
+
+[[bench]]
+name = "gradient_parallel"
 harness = false
