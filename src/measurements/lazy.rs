@@ -26,6 +26,14 @@ use super::{
 /// cache keeps the working set out of core while returned shared frame handles
 /// remain stable. Cache byte accounting covers frame pixel buffers retained by
 /// the cache, not handles that callers keep alive after eviction.
+///
+/// Frame decoding occurs without holding the cache mutex, so callers can read
+/// different uncached frames concurrently; a second lookup makes concurrent
+/// reads of the same frame converge on one cached handle. A poisoned cache is
+/// treated as corrupted state: [`Self::frame`] returns an error rather than
+/// reusing it. The infallible cache-statistics accessors report zero after
+/// poisoning because they cannot expose that error; rebuild the stack before
+/// using it again.
 #[derive(Debug)]
 pub struct LazyMeasurementStack {
     paths: Vec<PathBuf>,
@@ -360,6 +368,9 @@ impl LazyMeasurementStack {
     }
 
     pub fn cached_frame_count(&self) -> usize {
+        // These lightweight status accessors predate fallible cache metrics.
+        // Zero is deliberately a conservative value when a poisoned lock makes
+        // the cache contents unavailable; `frame` reports the actual error.
         self.cache.lock().map_or(0, |cache| cache.frames.len())
     }
 
@@ -660,5 +671,35 @@ fn metadata_or_labels(
             .collect()
     } else {
         frame_metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::*;
+
+    #[test]
+    fn poisoned_cache_fails_frame_reads_and_hides_unavailable_statistics() {
+        let stack = LazyMeasurementStack::new(
+            vec![PathBuf::from("unreadable-after-poison.png")],
+            vec![None],
+            (1, 1),
+            vec![FrameMetadata::new(0)],
+        )
+        .unwrap();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = stack.cache.lock().unwrap();
+            panic!("intentional cache-lock poison for test");
+        }));
+        assert!(result.is_err());
+
+        assert!(
+            matches!(stack.frame(0), Err(Error::Numerical(message)) if message.contains("poisoned"))
+        );
+        assert_eq!(stack.cached_frame_count(), 0);
+        assert_eq!(stack.cached_byte_count(), 0);
     }
 }
