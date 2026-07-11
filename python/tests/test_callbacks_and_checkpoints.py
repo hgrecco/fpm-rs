@@ -72,3 +72,22 @@ def test_python_callback_exception_propagates(problem: fpm.ReconstructionProblem
             problem,
             callbacks=[fpm.IterationCallback(fail)],
         )
+
+
+def test_python_callback_can_be_reused_after_an_exception(
+    problem: fpm.ReconstructionProblem,
+) -> None:
+    calls = 0
+
+    def fail_once(_context: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise LookupError("first callback failure")
+
+    callback = fpm.IterationCallback(fail_once)
+    with pytest.raises(LookupError, match="first callback failure"):
+        fpm.AlternatingProjection(iterations=1).run(problem, callbacks=[callback])
+
+    result = fpm.AlternatingProjection(iterations=1).run(problem, callbacks=[callback])
+    assert result.runtime.completed_iterations == 1

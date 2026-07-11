@@ -85,6 +85,7 @@ impl PyReconstructionProblem {
     #[new]
     #[pyo3(signature = (measurements, model, *, frame_weights=None, masks=None, name=None))]
     fn new(
+        py: Python<'_>,
         measurements: &Bound<'_, PyAny>,
         model: PyRef<'_, PyImagePlaneModel>,
         frame_weights: Option<Vec<f64>>,
@@ -92,9 +93,12 @@ impl PyReconstructionProblem {
         name: Option<String>,
     ) -> PyResult<Self> {
         let measurements = extract_measurements(measurements, frame_weights, masks)?;
-        let mut inner =
-            ReconstructionProblem::new(SharedMeasurementStack(measurements), model.inner.clone())
-                .map_err(to_py_err)?;
+        let model = model.inner.clone();
+        let mut inner = py
+            .detach(move || {
+                ReconstructionProblem::new(SharedMeasurementStack(measurements), (*model).clone())
+            })
+            .map_err(to_py_err)?;
         inner.name = name;
         Ok(Self { inner })
     }
@@ -123,20 +127,26 @@ impl PyReconstructionProblem {
 #[pyclass(module = "fpm_rs._core", name = "ReconstructionCheckpoint", frozen)]
 #[derive(Clone)]
 pub(crate) struct PyReconstructionCheckpoint {
-    inner: ReconstructionCheckpoint,
+    // Checkpoints can hold large object spectra. Shared immutable ownership
+    // keeps saving them from cloning that state while the GIL is held.
+    inner: Arc<ReconstructionCheckpoint>,
 }
 
 #[pymethods]
 impl PyReconstructionCheckpoint {
     #[staticmethod]
-    fn load(path: PathBuf) -> PyResult<Self> {
+    fn load(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         Ok(Self {
-            inner: ReconstructionCheckpoint::load(path).map_err(to_py_err)?,
+            inner: Arc::new(
+                py.detach(move || ReconstructionCheckpoint::load(path))
+                    .map_err(to_py_err)?,
+            ),
         })
     }
 
-    fn save(&self, path: PathBuf) -> PyResult<()> {
-        self.inner.save(path).map_err(to_py_err)
+    fn save(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
+        let checkpoint = self.inner.clone();
+        py.detach(move || checkpoint.save(path)).map_err(to_py_err)
     }
 
     #[getter]
@@ -402,10 +412,9 @@ impl PyDiagnosticRecorder {
         diagnostics_to_py(py, &self.inner.diagnostics())
     }
 
-    fn to_json(&self, path: PathBuf) -> PyResult<()> {
-        self.inner
-            .diagnostics()
-            .to_json_file(path)
+    fn to_json(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
+        let recorder = self.inner.clone();
+        py.detach(move || recorder.diagnostics().to_json_file(path))
             .map_err(to_py_err)
     }
 }
@@ -663,7 +672,7 @@ impl Callback for PythonIterationCallback {
                     CallbackAction::Stop
                 }),
                 Err(error) => {
-                    *self.error.lock().expect("Python callback error lock") = Some(error);
+                    *lock_callback_error(&self.error) = Some(error);
                     Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "Python iteration callback failed",
                     ))
@@ -675,6 +684,16 @@ impl Callback for PythonIterationCallback {
 }
 
 type CallbackErrors = Vec<Arc<Mutex<Option<PyErr>>>>;
+
+/// Python exceptions are best-effort delivery state. Recover its payload after
+/// a panic rather than turning a later exception check into a second panic.
+fn lock_callback_error(
+    error: &Arc<Mutex<Option<PyErr>>>,
+) -> std::sync::MutexGuard<'_, Option<PyErr>> {
+    error
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn build_callbacks(
     py: Python<'_>,
@@ -780,7 +799,7 @@ where
         enable_frame_callbacks: false,
     };
     let problem = problem.inner.clone();
-    let checkpoint = resume_from.map(|checkpoint| checkpoint.inner.clone());
+    let checkpoint = resume_from.map(|checkpoint| (*checkpoint.inner).clone());
     let (callbacks, callback_errors) = build_callbacks(py, callbacks)?;
     let result = py.detach(move || {
         let mut runner = Runner::new(algorithm, options).with_callbacks(callbacks);
@@ -790,7 +809,7 @@ where
         runner.run(&problem)
     });
     for error in callback_errors {
-        if let Some(error) = error.lock().expect("Python callback error lock").take() {
+        if let Some(error) = lock_callback_error(&error).take() {
             return Err(error);
         }
     }
