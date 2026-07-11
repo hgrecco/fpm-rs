@@ -70,10 +70,12 @@ impl Simulator {
         self
     }
 
-    /// Sets the model supplied to reconstruction after simulation.
+    /// Sets the optical model supplied to reconstruction after simulation.
     ///
     /// For an optical mismatch, compile this model and the true model from
-    /// separate experiment descriptions.
+    /// separate experiment descriptions. When a camera model is present,
+    /// [`Self::simulate`] compiles the known linear camera response into this
+    /// returned reconstruction model.
     pub fn reconstruction_model(mut self, model: ImagePlaneModel) -> Self {
         self.reconstruction_model = Some(model);
         self
@@ -84,6 +86,13 @@ impl Simulator {
         self
     }
 
+    /// Simulates measurements and returns detector counts plus a count-space
+    /// reconstruction model.
+    ///
+    /// This differs from serialized [`crate::configuration::SimulationConfiguration`],
+    /// which stores a strict optical reconstruction model and exposes
+    /// `reconstruction_model_for_counts()` for callers that load detector
+    /// counts later.
     pub fn simulate(self) -> Result<SimulationResult> {
         self.true_model.validate()?;
         let object = self.object.ok_or(Error::InvalidParameter {

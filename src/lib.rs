@@ -8,6 +8,7 @@ pub mod array;
 pub mod backend;
 pub mod callbacks;
 pub mod complex;
+pub mod configuration;
 pub mod diagnostics;
 pub mod error;
 pub mod experiment;
