@@ -67,25 +67,35 @@ impl PySyntheticObject {
     }
 
     #[staticmethod]
-    fn from_amplitude_image(path: PathBuf) -> PyResult<Self> {
+    fn from_amplitude_image(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         Ok(Self {
-            inner: SyntheticObject::from_amplitude_image(path).map_err(to_py_err)?,
+            // Image decoding and normalization can be substantial for camera
+            // sized inputs. `path` is Rust-owned, so no Python-backed buffer is
+            // accessed while detached.
+            inner: py
+                .detach(move || SyntheticObject::from_amplitude_image(path))
+                .map_err(to_py_err)?,
         })
     }
 
     #[staticmethod]
     fn from_amplitude_phase_images(
+        py: Python<'_>,
         amplitude_path: PathBuf,
         phase_path: PathBuf,
         phase_extent: f64,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: SyntheticObject::from_amplitude_phase_images(
-                amplitude_path,
-                phase_path,
-                phase_extent,
-            )
-            .map_err(to_py_err)?,
+            // Both images are opened and decoded entirely in Rust.
+            inner: py
+                .detach(move || {
+                    SyntheticObject::from_amplitude_phase_images(
+                        amplitude_path,
+                        phase_path,
+                        phase_extent,
+                    )
+                })
+                .map_err(to_py_err)?,
         })
     }
 
@@ -112,11 +122,7 @@ impl PySyntheticObject {
     }
 
     #[staticmethod]
-    fn random_phase(
-        shape: (usize, usize),
-        standard_deviation: f64,
-        seed: u64,
-    ) -> PyResult<Self> {
+    fn random_phase(shape: (usize, usize), standard_deviation: f64, seed: u64) -> PyResult<Self> {
         Ok(Self {
             inner: SyntheticObject::random_phase(shape, standard_deviation, seed)
                 .map_err(to_py_err)?,
@@ -168,8 +174,8 @@ impl PySyntheticObject {
 pub(crate) struct PySimulationResult {
     measurements: Arc<fpm_rs::measurements::MeasurementStack>,
     ground_truth_object: Py<PyArray2<Complex64>>,
-    true_model: fpm_rs::model::ImagePlaneModel,
-    reconstruction_model: fpm_rs::model::ImagePlaneModel,
+    true_model: Arc<fpm_rs::model::ImagePlaneModel>,
+    reconstruction_model: Arc<fpm_rs::model::ImagePlaneModel>,
     ideal: bool,
     missing_frames: Vec<usize>,
     random_seed: u64,
@@ -180,8 +186,8 @@ impl PySimulationResult {
         Ok(Self {
             measurements: Arc::new(result.measurements),
             ground_truth_object: complex_array2_to_py(py, result.ground_truth_object)?,
-            true_model: result.true_model,
-            reconstruction_model: result.reconstruction_model,
+            true_model: Arc::new(result.true_model),
+            reconstruction_model: Arc::new(result.reconstruction_model),
             ideal: result.parameters.ideal,
             missing_frames: result.parameters.missing_frames,
             random_seed: result.random_seed,
@@ -245,7 +251,9 @@ fn extract_synthetic_object(value: &Bound<'_, PyAny>) -> PyResult<SyntheticObjec
             )
         })?
         .readonly();
-    Ok(SyntheticObject::new(core_array2(&array).map_err(to_py_err)?))
+    Ok(SyntheticObject::new(
+        core_array2(&array).map_err(to_py_err)?,
+    ))
 }
 
 #[pyfunction]
@@ -268,14 +276,14 @@ pub(crate) fn simulate(
     let result = py
         .detach(move || {
             let mut simulator = if ideal {
-                Simulator::ideal(true_model)
+                Simulator::ideal((*true_model).clone())
             } else {
-                Simulator::new(true_model)
+                Simulator::new((*true_model).clone())
             }
             .object(object)
             .seed(seed);
             if let Some(model) = assumed_model {
-                simulator = simulator.reconstruction_model(model);
+                simulator = simulator.reconstruction_model((*model).clone());
             }
             if let Some(camera) = camera {
                 simulator = simulator.camera(camera);

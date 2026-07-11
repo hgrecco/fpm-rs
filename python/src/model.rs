@@ -1,6 +1,7 @@
 use fpm_rs::model::ImagePlaneModel;
 use numpy::{PyArray1, PyArray2, ndarray};
 use pyo3::prelude::*;
+use std::sync::Arc;
 
 use crate::{
     arrays::{complex_array2_to_py, vec2_to_py},
@@ -11,7 +12,7 @@ use crate::{
 #[pyclass(module = "fpm_rs._core", name = "ImagePlaneModel", frozen)]
 #[derive(Clone)]
 pub(crate) struct PyImagePlaneModel {
-    pub(crate) inner: ImagePlaneModel,
+    pub(crate) inner: Arc<ImagePlaneModel>,
 }
 
 #[pymethods]
@@ -89,32 +90,46 @@ impl PyImagePlaneModel {
 
 #[pyfunction]
 pub(crate) fn compile_model(
+    py: Python<'_>,
     optics: PyRef<'_, PyOptics>,
     illumination: &Bound<'_, PyAny>,
     image_shape: (usize, usize),
     reconstruction_shape: (usize, usize),
 ) -> PyResult<PyImagePlaneModel> {
     let illumination = extract_illumination(illumination)?;
-    let inner = ImagePlaneModel::from_experiment(
-        &optics.inner,
-        &illumination,
-        image_shape,
-        reconstruction_shape,
-    )
-    .map_err(to_py_err)?;
-    Ok(PyImagePlaneModel { inner })
+    let optics = optics.inner.clone();
+    // The inputs are all Rust-owned after conversion. Pupil construction and
+    // source/crop compilation are independent of the interpreter and can take
+    // appreciable time for dense illumination arrays.
+    let inner = py
+        .detach(move || {
+            ImagePlaneModel::from_experiment(
+                &optics,
+                &illumination,
+                image_shape,
+                reconstruction_shape,
+            )
+        })
+        .map_err(to_py_err)?;
+    Ok(PyImagePlaneModel {
+        inner: Arc::new(inner),
+    })
 }
 
 #[pyfunction]
 pub(crate) fn compile_camera_model(
+    py: Python<'_>,
     model: PyRef<'_, PyImagePlaneModel>,
     camera: PyRef<'_, PyCameraModel>,
 ) -> PyResult<PyImagePlaneModel> {
-    let inner = camera
-        .inner
-        .compile_reconstruction_model(model.inner.clone())
+    let model = model.inner.clone();
+    let camera = camera.inner.clone();
+    let inner = py
+        .detach(move || camera.compile_reconstruction_model((*model).clone()))
         .map_err(to_py_err)?;
-    Ok(PyImagePlaneModel { inner })
+    Ok(PyImagePlaneModel {
+        inner: Arc::new(inner),
+    })
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

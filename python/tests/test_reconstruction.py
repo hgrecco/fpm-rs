@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import math
 
 import numpy as np
@@ -71,3 +72,50 @@ def test_algorithm_parameter_errors_remain_typed() -> None:
 
     with pytest.raises(ValueError, match="loss_type"):
         fpm.GradientDescent(loss_type="unknown")
+
+
+def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
+    expected = {
+        fpm.Epry: [
+            "iterations",
+            "object_step",
+            "pupil_step",
+            "batch_size",
+            "recover_pupil",
+            "constrain_pupil_support",
+            "recover_frame_gains",
+            "gain_step",
+            "gain_bounds",
+            "recover_background",
+            "background_step",
+            "background_bounds",
+            "epsilon",
+            "loss_type",
+        ],
+        fpm.GradientDescent: [
+            "iterations",
+            "object_step",
+            "batch_size",
+            "epsilon",
+            "loss_type",
+            "recover_illumination",
+            "illumination_step",
+            "illumination_finite_difference",
+            "illumination_bounds",
+            "recover_pupil",
+            "pupil_step",
+            "constrain_pupil_support",
+            "object_tv",
+            "object_tv_epsilon",
+            "pupil_smoothing",
+            "parallel_workers",
+        ],
+    }
+
+    for cls, names in expected.items():
+        signature = inspect.signature(cls)
+        assert list(signature.parameters) == names
+        assert all(
+            parameter.kind is inspect.Parameter.KEYWORD_ONLY
+            for parameter in signature.parameters.values()
+        )
