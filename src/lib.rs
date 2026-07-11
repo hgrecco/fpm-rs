@@ -6,6 +6,7 @@
 pub mod algorithms;
 pub mod array;
 pub mod backend;
+pub mod benchmark;
 pub mod callbacks;
 pub mod complex;
 pub mod configuration;
