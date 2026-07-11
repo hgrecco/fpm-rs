@@ -1,0 +1,76 @@
+name: Hardening
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  dependency-advisory:
+    name: Dependency advisory audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit main workspace lockfile
+        run: cargo audit --file Cargo.lock
+  miri:
+    name: Miri invariant smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      - run: cargo +nightly miri setup
+      - name: Run Miri on serialization invariant tests
+        run: cargo +nightly miri test -p fpm-rs --test array_tests --locked
+
+  address-sanitizer:
+    name: AddressSanitizer smoke
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      ASAN_OPTIONS: detect_leaks=1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: asan
+      - name: Run ASan on serialization invariant tests
+        run: cargo +nightly test -p fpm-rs --test array_tests --target x86_64-unknown-linux-gnu -Zbuild-std --locked
+
+  python-packaging-smoke:
+    name: Python wheel install smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build dependency
+        run: python -m pip install "maturin>=1.9,<2" "numpy>=2.1"
+      - name: Build wheel
+        run: maturin build --release --out dist --interpreter python3.13
+      - name: Install wheel in a clean virtual environment
+        shell: bash
+        run: |
+          python -m venv .venv-smoke
+          source .venv-smoke/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+          python -c "import fpm_rs; print(fpm_rs.__version__)"
