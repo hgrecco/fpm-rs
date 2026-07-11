@@ -308,9 +308,9 @@ impl<'a> ForwardModel<'a> {
                 })
                 .collect();
             for handle in handles {
-                handle.join().map_err(|_| {
-                    Error::Numerical("parallel forward worker panicked".into())
-                })??;
+                handle
+                    .join()
+                    .map_err(|_| Error::Numerical("parallel forward worker panicked".into()))??;
             }
             Ok(())
         })

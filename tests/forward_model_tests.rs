@@ -4,7 +4,7 @@ use approx::assert_abs_diff_eq;
 use fpm_rs::{
     Array2, Complex64, Error,
     backend::{Backend, CpuBackend, FftDirection, MemoryLocation},
-    model::{ForwardModel, FourierOffset},
+    model::{ForwardModel, FourierCrop, FourierOffset},
 };
 use std::sync::atomic::Ordering;
 
@@ -153,6 +153,70 @@ fn subpixel_patch_uses_bilinear_fourier_sampling() {
             assert_abs_diff_eq!(patch[(row, column)].im, expected.im, epsilon = 1e-12);
         }
     }
+}
+
+#[test]
+fn bilinear_subpixel_sampling_error_increases_with_fourier_grid_bandwidth() {
+    let shape = (32, 32);
+    let crop = FourierCrop::new(10, 10, 8, 8);
+    let offset = FourierOffset::new(0.5, 0.0);
+    let low_band_error = subpixel_sinusoid_relative_rms_error(shape, crop, offset, 1);
+    let mid_band_error = subpixel_sinusoid_relative_rms_error(shape, crop, offset, 4);
+    let high_band_error = subpixel_sinusoid_relative_rms_error(shape, crop, offset, 8);
+
+    // For a half-pixel shift of exp(i 2 pi nu r / H), linear interpolation
+    // attenuates the field by cos(pi nu / H). The continuous sinusoid below is
+    // the bandlimited-shift reference, independent of crop implementation.
+    for (cycles, error) in [
+        (1, low_band_error),
+        (4, mid_band_error),
+        (8, high_band_error),
+    ] {
+        let expected = 1.0 - (std::f64::consts::PI * cycles as f64 / shape.0 as f64).cos();
+        assert_abs_diff_eq!(error, expected, epsilon = 1e-12);
+    }
+    assert!(low_band_error < 0.005);
+    assert!(mid_band_error > low_band_error);
+    assert!(high_band_error > mid_band_error);
+    assert!(high_band_error > 0.29);
+}
+
+fn subpixel_sinusoid_relative_rms_error(
+    shape: (usize, usize),
+    crop: FourierCrop,
+    offset: FourierOffset,
+    cycles: usize,
+) -> f64 {
+    let spectrum = Array2::from_vec(
+        shape,
+        (0..shape.0 * shape.1)
+            .map(|index| {
+                let row = index / shape.1;
+                Complex64::from_polar(
+                    1.0,
+                    std::f64::consts::TAU * cycles as f64 * row as f64 / shape.0 as f64,
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    let mut sampled = vec![Complex64::default(); crop.height * crop.width];
+    crop.extract_subpixel(&spectrum, &mut sampled, offset)
+        .unwrap();
+    let squared_error: f64 = sampled
+        .iter()
+        .enumerate()
+        .map(|(index, &sampled)| {
+            let row = index / crop.width;
+            let reference_row = crop.start_row as f64 + row as f64 + offset.row;
+            let reference = Complex64::from_polar(
+                1.0,
+                std::f64::consts::TAU * cycles as f64 * reference_row / shape.0 as f64,
+            );
+            (sampled - reference).norm_sqr()
+        })
+        .sum();
+    (squared_error / sampled.len() as f64).sqrt()
 }
 
 #[test]

@@ -83,6 +83,10 @@ impl FourierCrop {
     }
 
     /// Bilinearly samples a potentially fractional crop from `source`.
+    ///
+    /// This is a local Fourier-grid interpolation, not a bandlimited shift
+    /// operator. Its approximation error grows with grid-frequency content and
+    /// fractional displacement; low-bandwidth objects are the intended regime.
     pub fn extract_subpixel(
         &self,
         source: &Array2<Complex64>,
@@ -247,9 +251,9 @@ fn interpolation_axis(
         .ok_or_else(|| Error::InvalidModel("subpixel crop starts outside the grid".into()))?;
     let lower_start = usize::try_from(lower_start)
         .map_err(|_| Error::InvalidModel("subpixel crop starts outside the grid".into()))?;
-    let lower_end = lower_start.checked_add(length).ok_or_else(|| {
-        Error::InvalidModel("subpixel crop dimensions overflow the grid".into())
-    })?;
+    let lower_end = lower_start
+        .checked_add(length)
+        .ok_or_else(|| Error::InvalidModel("subpixel crop dimensions overflow the grid".into()))?;
     let needs_upper = fraction > 0.0;
     if lower_end > bound || (needs_upper && lower_end >= bound) {
         return Err(Error::InvalidModel(
