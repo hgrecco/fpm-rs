@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::{
-    FrameMetadata, ImagePreprocessingConfig, MeasurementManifest, MeasurementStack,
+    FrameMetadata, MeasurementSpec, MeasurementStack, PreprocessingConfig,
     stack::{load_manifest_image, load_manifest_image_set, resolve_path},
 };
 
@@ -36,7 +36,7 @@ pub struct LazyMeasurementStack {
     flat_field: Option<Vec<f64>>,
     background: Option<Vec<f64>>,
     masks: Option<Vec<u8>>,
-    preprocessing: ImagePreprocessingConfig,
+    preprocessing: PreprocessingConfig,
     cache_capacity: usize,
     cache_byte_capacity: Option<usize>,
     cache: Mutex<FrameCache>,
@@ -145,13 +145,13 @@ impl LazyMeasurementStack {
     /// loaded once; configured corrections are applied during frame decoding.
     pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let manifest = MeasurementManifest::load(path)?;
+        let manifest = MeasurementSpec::load(path)?;
         let base_directory = path.parent().unwrap_or_else(|| Path::new("."));
         Self::from_manifest_definition(manifest, base_directory)
     }
 
     pub fn from_manifest_definition(
-        manifest: MeasurementManifest,
+        manifest: MeasurementSpec,
         base_directory: impl AsRef<Path>,
     ) -> Result<Self> {
         let base_directory = base_directory.as_ref();
@@ -167,6 +167,8 @@ impl LazyMeasurementStack {
             .map(|(index, frame)| FrameMetadata {
                 frame_index: index,
                 illumination_index: frame.illumination_index,
+                original_frame_index: Some(index),
+                original_illumination_index: frame.illumination_index,
                 exposure_time: frame.exposure_time,
                 weight: frame.weight,
                 label: frame
@@ -231,7 +233,7 @@ impl LazyMeasurementStack {
             flat_field: None,
             background: None,
             masks: None,
-            preprocessing: ImagePreprocessingConfig::default(),
+            preprocessing: PreprocessingConfig::default(),
             cache_capacity: 1,
             cache_byte_capacity: None,
             cache: Mutex::new(FrameCache::default()),
@@ -296,7 +298,7 @@ impl LazyMeasurementStack {
 
     /// Replaces the preprocessing flags. Required correction arrays must have
     /// already been supplied through the corresponding builder.
-    pub fn with_preprocessing(mut self, preprocessing: ImagePreprocessingConfig) -> Result<Self> {
+    pub fn with_preprocessing(mut self, preprocessing: PreprocessingConfig) -> Result<Self> {
         self.preprocessing = preprocessing;
         self.reset_cache();
         self.validate()?;
@@ -347,7 +349,7 @@ impl LazyMeasurementStack {
         &self.frame_metadata
     }
 
-    pub fn preprocessing(&self) -> &ImagePreprocessingConfig {
+    pub fn preprocessing(&self) -> &PreprocessingConfig {
         &self.preprocessing
     }
 
@@ -544,9 +546,7 @@ impl LazyMeasurementStack {
         let exposure = self.frame_metadata[frame_index].exposure_time;
         let dark = if self.preprocessing.subtract_dark {
             Some(self.dark_frame.as_deref().ok_or_else(|| {
-                Error::InvalidMeasurements(
-                    "dark subtraction requested without a dark frame".into(),
-                )
+                Error::InvalidMeasurements("dark subtraction requested without a dark frame".into())
             })?)
         } else {
             None

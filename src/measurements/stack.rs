@@ -6,7 +6,7 @@ use crate::{
     image_io::{GrayscaleScaling, load_grayscale, load_grayscale_tiff_pages},
 };
 
-use super::{FrameMetadata, ImagePreprocessingConfig, ManifestImageSet, MeasurementManifest};
+use super::{FrameMetadata, ImageSet, MeasurementSpec, PreprocessingConfig};
 
 /// An in-memory stack of image-plane intensity measurements.
 #[derive(Clone, Debug, Serialize)]
@@ -19,7 +19,7 @@ pub struct MeasurementStack {
     pub flat_field: Option<Vec<f64>>,
     pub background: Option<Vec<f64>>,
     pub masks: Option<Vec<u8>>,
-    pub preprocessing: ImagePreprocessingConfig,
+    pub preprocessing: PreprocessingConfig,
 }
 
 impl<'de> Deserialize<'de> for MeasurementStack {
@@ -37,7 +37,7 @@ impl<'de> Deserialize<'de> for MeasurementStack {
             flat_field: Option<Vec<f64>>,
             background: Option<Vec<f64>>,
             masks: Option<Vec<u8>>,
-            preprocessing: ImagePreprocessingConfig,
+            preprocessing: PreprocessingConfig,
         }
 
         let representation = Representation::deserialize(deserializer)?;
@@ -104,7 +104,7 @@ impl MeasurementStack {
             flat_field: None,
             background: None,
             masks: None,
-            preprocessing: ImagePreprocessingConfig::default(),
+            preprocessing: PreprocessingConfig::default(),
         };
         stack.validate()?;
         Ok(stack)
@@ -201,13 +201,13 @@ impl MeasurementStack {
     /// not applied until [`Self::apply_preprocessing`] is called.
     pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let manifest = MeasurementManifest::load(path)?;
+        let manifest = MeasurementSpec::load(path)?;
         let base_directory = path.parent().unwrap_or_else(|| Path::new("."));
         Self::from_manifest_definition(manifest, base_directory)
     }
 
     pub fn from_manifest_definition(
-        manifest: MeasurementManifest,
+        manifest: MeasurementSpec,
         base_directory: impl AsRef<Path>,
     ) -> Result<Self> {
         let base_directory = base_directory.as_ref();
@@ -223,6 +223,8 @@ impl MeasurementStack {
             .map(|(index, frame)| FrameMetadata {
                 frame_index: index,
                 illumination_index: frame.illumination_index,
+                original_frame_index: Some(index),
+                original_illumination_index: frame.illumination_index,
                 exposure_time: frame.exposure_time,
                 weight: frame.weight,
                 label: frame
@@ -572,13 +574,13 @@ pub(super) fn load_manifest_image(
 
 pub(super) fn load_manifest_image_set(
     base_directory: &Path,
-    images: &ManifestImageSet,
+    images: &ImageSet,
     expected_shape: (usize, usize),
     frame_count: usize,
 ) -> Result<Vec<f64>> {
     match images {
-        ManifestImageSet::Single(path) => load_manifest_image(base_directory, path, expected_shape),
-        ManifestImageSet::PerFrame(paths) => {
+        ImageSet::Single(path) => load_manifest_image(base_directory, path, expected_shape),
+        ImageSet::PerFrame(paths) => {
             if paths.len() != frame_count {
                 return Err(Error::InvalidMeasurements(format!(
                     "manifest image set has {} entries for {frame_count} frames",

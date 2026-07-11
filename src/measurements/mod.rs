@@ -6,8 +6,8 @@ mod read;
 mod stack;
 
 pub use lazy::LazyMeasurementStack;
-pub use manifest::{ManifestFrame, ManifestImageSet, MeasurementManifest};
+pub use manifest::{FrameSpec, ImageSet, MeasurementSpec};
 pub use metadata::FrameMetadata;
-pub use preprocessing::ImagePreprocessingConfig;
+pub use preprocessing::PreprocessingConfig;
 pub use read::MeasurementRead;
 pub use stack::MeasurementStack;

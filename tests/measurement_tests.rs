@@ -7,8 +7,8 @@ use std::{
 };
 
 use fpm_rs::measurements::{
-    FrameMetadata, ImagePreprocessingConfig, LazyMeasurementStack, ManifestFrame, ManifestImageSet,
-    MeasurementManifest, MeasurementRead, MeasurementStack,
+    FrameMetadata, FrameSpec, ImageSet, LazyMeasurementStack, MeasurementRead, MeasurementSpec,
+    MeasurementStack, PreprocessingConfig,
 };
 use image::{GrayImage, ImageBuffer, Luma};
 
@@ -32,8 +32,7 @@ fn assert_measurement_read<M: MeasurementRead>(
 
 #[test]
 fn in_memory_stack_implements_read_only_measurement_access() {
-    let stack = MeasurementStack::from_vec(vec![1.0, 2.0, 3.0, 4.0], (1, 2), Vec::new())
-        .unwrap();
+    let stack = MeasurementStack::from_vec(vec![1.0, 2.0, 3.0, 4.0], (1, 2), Vec::new()).unwrap();
     assert_measurement_read(&stack, &[1.0, 2.0], &[3.0, 4.0]);
 }
 
@@ -418,19 +417,19 @@ fn manifest_loads_relative_images_metadata_and_preprocessing() {
     save_u16("background.tiff", vec![4, 4]);
     save_u16("mask.tiff", vec![1, 0]);
 
-    let mut first = ManifestFrame::new("frame0.tiff");
+    let mut first = FrameSpec::new("frame0.tiff");
     first.illumination_index = Some(7);
     first.exposure_time = 2.0;
     first.weight = 0.5;
     first.label = Some("brightfield".into());
-    let mut second = ManifestFrame::new("frame1.tiff");
+    let mut second = FrameSpec::new("frame1.tiff");
     second.exposure_time = 4.0;
-    let mut manifest = MeasurementManifest::new(vec![first, second]);
+    let mut manifest = MeasurementSpec::new(vec![first, second]);
     manifest.dark_frame = Some(PathBuf::from("dark.tiff"));
     manifest.flat_field = Some(PathBuf::from("flat.tiff"));
-    manifest.background = Some(ManifestImageSet::Single(PathBuf::from("background.tiff")));
-    manifest.mask = Some(ManifestImageSet::Single(PathBuf::from("mask.tiff")));
-    manifest.preprocessing = ImagePreprocessingConfig {
+    manifest.background = Some(ImageSet::Single(PathBuf::from("background.tiff")));
+    manifest.mask = Some(ImageSet::Single(PathBuf::from("mask.tiff")));
+    manifest.preprocessing = PreprocessingConfig {
         subtract_dark: true,
         divide_flat_field: true,
         normalize_exposure: true,
@@ -474,5 +473,5 @@ fn manifest_rejects_unknown_fields() {
         r#"{"frames":[],"preprocesing":{"normalize_exposure":true}}"#,
     )
     .unwrap();
-    assert!(MeasurementManifest::load(manifest_path).is_err());
+    assert!(MeasurementSpec::load(manifest_path).is_err());
 }

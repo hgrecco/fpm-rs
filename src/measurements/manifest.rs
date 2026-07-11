@@ -8,33 +8,34 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-use super::ImagePreprocessingConfig;
+use super::PreprocessingConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MeasurementManifest {
-    pub frames: Vec<ManifestFrame>,
+/// Serializable specification for loading a measurement stack.
+pub struct MeasurementSpec {
+    pub frames: Vec<FrameSpec>,
     #[serde(default)]
     pub dark_frame: Option<PathBuf>,
     #[serde(default)]
     pub flat_field: Option<PathBuf>,
     #[serde(default)]
-    pub background: Option<ManifestImageSet>,
+    pub background: Option<ImageSet>,
     #[serde(default)]
-    pub mask: Option<ManifestImageSet>,
+    pub mask: Option<ImageSet>,
     #[serde(default)]
-    pub preprocessing: ImagePreprocessingConfig,
+    pub preprocessing: PreprocessingConfig,
 }
 
-impl MeasurementManifest {
-    pub fn new(frames: Vec<ManifestFrame>) -> Self {
+impl MeasurementSpec {
+    pub fn new(frames: Vec<FrameSpec>) -> Self {
         Self {
             frames,
             dark_frame: None,
             flat_field: None,
             background: None,
             mask: None,
-            preprocessing: ImagePreprocessingConfig::default(),
+            preprocessing: PreprocessingConfig::default(),
         }
     }
 
@@ -52,7 +53,8 @@ impl MeasurementManifest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ManifestFrame {
+/// Path and acquisition metadata for one measurement frame.
+pub struct FrameSpec {
     pub path: PathBuf,
     #[serde(default)]
     pub illumination_index: Option<usize>,
@@ -64,7 +66,7 @@ pub struct ManifestFrame {
     pub label: Option<String>,
 }
 
-impl ManifestFrame {
+impl FrameSpec {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -78,7 +80,8 @@ impl ManifestFrame {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ManifestImageSet {
+/// A single image shared by all frames or one image per frame.
+pub enum ImageSet {
     Single(PathBuf),
     PerFrame(Vec<PathBuf>),
 }
