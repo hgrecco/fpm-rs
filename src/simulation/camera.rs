@@ -1,14 +1,22 @@
+use rand::Rng;
+use rand_distr::{Distribution, Normal, Poisson};
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, error::Error};
+use crate::{Result, error::Error, model::ImagePlaneModel};
 
+/// Concrete detector pipeline from optical intensity to digital counts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CameraModel {
+    /// Expected photoelectrons per pixel at unit optical intensity.
     pub photons_per_pixel: f64,
     pub gain_counts_per_electron: f64,
     pub offset_counts: f64,
     pub read_noise_electrons: f64,
     pub dark_current_electrons: f64,
+    /// Whether to Poisson-sample photoelectrons and dark current.
+    pub shot_noise: bool,
+    /// Multiplicative detector sensitivity for each pixel.
+    pub pixel_sensitivity: Option<Vec<f64>>,
     pub bit_depth: Option<u8>,
     pub saturation_counts: Option<f64>,
     pub quantize: bool,
@@ -24,6 +32,8 @@ impl Default for CameraModel {
             offset_counts: 0.0,
             read_noise_electrons: 0.0,
             dark_current_electrons: 0.0,
+            shot_noise: false,
+            pixel_sensitivity: None,
             bit_depth: Some(16),
             saturation_counts: None,
             quantize: true,
@@ -36,6 +46,24 @@ impl Default for CameraModel {
 impl CameraModel {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Unit detector response without noise, clipping, or quantization.
+    pub fn ideal() -> Self {
+        Self {
+            photons_per_pixel: 1.0,
+            gain_counts_per_electron: 1.0,
+            offset_counts: 0.0,
+            read_noise_electrons: 0.0,
+            dark_current_electrons: 0.0,
+            shot_noise: false,
+            pixel_sensitivity: None,
+            bit_depth: None,
+            saturation_counts: None,
+            quantize: false,
+            bad_pixels: Vec::new(),
+            bad_pixel_value_counts: None,
+        }
     }
 
     pub fn photons_per_pixel(mut self, value: f64) -> Self {
@@ -60,6 +88,16 @@ impl CameraModel {
 
     pub fn dark_current_electrons(mut self, value: f64) -> Self {
         self.dark_current_electrons = value;
+        self
+    }
+
+    pub fn shot_noise(mut self, enabled: bool) -> Self {
+        self.shot_noise = enabled;
+        self
+    }
+
+    pub fn pixel_sensitivity(mut self, values: Vec<f64>) -> Self {
+        self.pixel_sensitivity = Some(values);
         self
     }
 
@@ -141,10 +179,123 @@ impl CameraModel {
                 reason: "a finite bad-pixel value or camera maximum is required".into(),
             });
         }
+        if self.pixel_sensitivity.as_ref().is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        }) {
+            return Err(Error::InvalidParameter {
+                name: "pixel_sensitivity",
+                reason: "values must be finite and non-negative".into(),
+            });
+        }
+        let mut bad_pixels = self.bad_pixels.clone();
+        bad_pixels.sort_unstable();
+        if bad_pixels.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(Error::InvalidParameter {
+                name: "bad_pixels",
+                reason: "indices must be unique".into(),
+            });
+        }
         Ok(())
     }
 
-    pub(crate) fn maximum_count(&self) -> f64 {
+    pub fn validate_for_frame(&self, frame_len: usize) -> Result<()> {
+        self.validate()?;
+        if self
+            .pixel_sensitivity
+            .as_ref()
+            .is_some_and(|values| values.len() != frame_len)
+        {
+            return Err(Error::InvalidParameter {
+                name: "pixel_sensitivity",
+                reason: format!("must contain {frame_len} values"),
+            });
+        }
+        if self.bad_pixels.iter().any(|&pixel| pixel >= frame_len) {
+            return Err(Error::InvalidParameter {
+                name: "bad_pixels",
+                reason: format!("indices must be below the frame size {frame_len}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Converts one optical-intensity frame into detector counts in place.
+    pub fn measure_frame<R: Rng + ?Sized>(&self, intensity: &mut [f64], rng: &mut R) -> Result<()> {
+        self.validate_for_frame(intensity.len())?;
+        let read_noise = (self.read_noise_electrons > 0.0)
+            .then(|| Normal::new(0.0, self.read_noise_electrons))
+            .transpose()
+            .map_err(|error| Error::Numerical(error.to_string()))?;
+        for (pixel, value) in intensity.iter_mut().enumerate() {
+            let sensitivity = self
+                .pixel_sensitivity
+                .as_ref()
+                .map_or(1.0, |values| values[pixel]);
+            let expected_electrons =
+                value.max(0.0) * sensitivity * self.photons_per_pixel + self.dark_current_electrons;
+            let mut electrons = if self.shot_noise && expected_electrons > 0.0 {
+                Poisson::new(expected_electrons)
+                    .map_err(|error| Error::Numerical(error.to_string()))?
+                    .sample(rng)
+            } else {
+                expected_electrons
+            };
+            if let Some(distribution) = &read_noise {
+                electrons += distribution.sample(rng);
+            }
+            let mut counts = electrons * self.gain_counts_per_electron + self.offset_counts;
+            counts = counts.clamp(0.0, self.maximum_count());
+            if self.quantize {
+                counts = counts.round();
+            }
+            *value = counts;
+        }
+        for &pixel in &self.bad_pixels {
+            let mut value = self
+                .bad_pixel_value_counts
+                .unwrap_or_else(|| self.maximum_count())
+                .clamp(0.0, self.maximum_count());
+            if self.quantize {
+                value = value.round();
+            }
+            intensity[pixel] = value;
+        }
+        Ok(())
+    }
+
+    /// Compiles known uniform linear response into a reconstruction model.
+    ///
+    /// Pixel sensitivity, stochastic noise, clipping, quantization, and bad
+    /// pixels remain detector effects and are not compiled into the model.
+    pub fn compile_reconstruction_model(
+        &self,
+        mut model: ImagePlaneModel,
+    ) -> Result<ImagePlaneModel> {
+        self.validate_for_frame(model.image_shape.0 * model.image_shape.1)?;
+        let scale = self.photons_per_pixel * self.gain_counts_per_electron;
+        model.frame_gains = Some(match &model.frame_gains {
+            Some(gains) => gains.iter().map(|gain| gain * scale).collect(),
+            None => vec![scale; model.frame_count()],
+        });
+        let additive_counts =
+            self.dark_current_electrons * self.gain_counts_per_electron + self.offset_counts;
+        if let Some(background) = &mut model.background {
+            for value in background {
+                *value = *value * scale + additive_counts;
+            }
+        } else if additive_counts != 0.0 {
+            model.background = Some(vec![
+                additive_counts;
+                model.image_shape.0 * model.image_shape.1
+            ]);
+        }
+        model.validate()?;
+        Ok(model)
+    }
+
+    fn maximum_count(&self) -> f64 {
         let digital_maximum = self
             .bit_depth
             .map_or(f64::INFINITY, |bits| (2_f64).powi(bits as i32) - 1.0);

@@ -181,12 +181,11 @@ impl SyntheticObject {
         let values = if standard_deviation == 0.0 {
             vec![Complex64::new(1.0, 0.0); shape.0 * shape.1]
         } else {
-            let distribution = Normal::new(0.0, standard_deviation).map_err(|error| {
-                Error::InvalidParameter {
+            let distribution =
+                Normal::new(0.0, standard_deviation).map_err(|error| Error::InvalidParameter {
                     name: "standard_deviation",
                     reason: error.to_string(),
-                }
-            })?;
+                })?;
             (0..shape.0 * shape.1)
                 .map(|_| Complex64::from_polar(1.0, distribution.sample(&mut rng)))
                 .collect()

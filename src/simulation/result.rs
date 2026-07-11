@@ -2,10 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Array2, Complex64, measurements::MeasurementStack, model::ImagePlaneModel};
 
-use super::{
-    AberrationModel, BackgroundModel, CameraModel, FlatFieldModel, IlluminationErrorModel,
-    NoiseModel,
-};
+use super::{CameraModel, IlluminationAcquisitionErrors};
 
 #[derive(Clone, Debug)]
 pub struct SimulationResult {
@@ -14,11 +11,7 @@ pub struct SimulationResult {
     pub true_model: ImagePlaneModel,
     pub reconstruction_model: ImagePlaneModel,
     pub camera: Option<CameraModel>,
-    pub noise: NoiseModel,
-    pub illumination_errors: Option<IlluminationErrorModel>,
-    pub aberration: Option<AberrationModel>,
-    pub background: Option<BackgroundModel>,
-    pub flat_field: Option<FlatFieldModel>,
+    pub illumination_acquisition_errors: Option<IlluminationAcquisitionErrors>,
     pub parameters: SimulationParameters,
     pub random_seed: u64,
 }
