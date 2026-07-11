@@ -29,7 +29,15 @@ pub fn compare_to_ground_truth(
     result: &ReconstructionResult,
     ground_truth: &Array2<Complex64>,
 ) -> Result<GroundTruthMetrics> {
-    compare(result, ground_truth, None)
+    compare(result, ground_truth, None, None)
+}
+
+pub fn compare_to_ground_truth_masked(
+    result: &ReconstructionResult,
+    ground_truth: &Array2<Complex64>,
+    valid_object_mask: &Array2<u8>,
+) -> Result<GroundTruthMetrics> {
+    compare(result, ground_truth, None, Some(valid_object_mask))
 }
 
 pub fn compare_with_true_model(
@@ -37,7 +45,21 @@ pub fn compare_with_true_model(
     ground_truth: &Array2<Complex64>,
     true_model: &ImagePlaneModel,
 ) -> Result<GroundTruthMetrics> {
-    compare(result, ground_truth, Some(true_model))
+    compare(result, ground_truth, Some(true_model), None)
+}
+
+pub fn compare_with_true_model_masked(
+    result: &ReconstructionResult,
+    ground_truth: &Array2<Complex64>,
+    true_model: &ImagePlaneModel,
+    valid_object_mask: &Array2<u8>,
+) -> Result<GroundTruthMetrics> {
+    compare(
+        result,
+        ground_truth,
+        Some(true_model),
+        Some(valid_object_mask),
+    )
 }
 
 /// Ground-truth metrics plus normalized intensity residuals against a problem's
@@ -48,8 +70,49 @@ pub fn compare_with_problem<M: MeasurementRead>(
     ground_truth: &Array2<Complex64>,
     true_model: Option<&ImagePlaneModel>,
 ) -> Result<GroundTruthMetrics> {
+    compare_with_problem_mask(result, problem, ground_truth, true_model, None)
+}
+
+pub fn compare_with_problem_masked<M: MeasurementRead>(
+    result: &ReconstructionResult,
+    problem: &ReconstructionProblem<M>,
+    ground_truth: &Array2<Complex64>,
+    true_model: Option<&ImagePlaneModel>,
+    valid_object_mask: &Array2<u8>,
+) -> Result<GroundTruthMetrics> {
+    compare_with_problem_mask(
+        result,
+        problem,
+        ground_truth,
+        true_model,
+        Some(valid_object_mask),
+    )
+}
+
+fn compare_with_problem_mask<M: MeasurementRead>(
+    result: &ReconstructionResult,
+    problem: &ReconstructionProblem<M>,
+    ground_truth: &Array2<Complex64>,
+    true_model: Option<&ImagePlaneModel>,
+    valid_object_mask: Option<&Array2<u8>>,
+) -> Result<GroundTruthMetrics> {
     problem.validate()?;
-    let mut metrics = compare(result, ground_truth, true_model)?;
+    let mut metrics = compare(result, ground_truth, true_model, valid_object_mask)?;
+    metrics.illumination_position_rmse = true_model
+        .map(|model| illumination_position_rmse(result, &problem.model, model))
+        .transpose()?;
+    metrics.per_frame_residuals = Some(per_frame_residuals(result, problem)?);
+    Ok(metrics)
+}
+
+/// Normalized intensity residual for every measured frame. Masks are honored
+/// and zero-weight frames report zero. This metric does not require object
+/// ground truth and is therefore available for public experimental datasets.
+pub fn per_frame_residuals<M: MeasurementRead>(
+    result: &ReconstructionResult,
+    problem: &ReconstructionProblem<M>,
+) -> Result<Vec<f64>> {
+    problem.validate()?;
     let mut recovered_model = problem.model.clone();
     recovered_model.frame_gains = result.recovered_frame_gains.clone();
     recovered_model.background = result.recovered_background.clone();
@@ -75,9 +138,6 @@ pub fn compare_with_problem<M: MeasurementRead>(
         );
     }
     recovered_model.validate()?;
-    metrics.illumination_position_rmse = true_model
-        .map(|model| illumination_position_rmse(result, &problem.model, model))
-        .transpose()?;
     let forward = ForwardModel::new(&recovered_model)?;
     let mut workspace = forward.workspace();
     let mut predicted = vec![0.0; recovered_model.image_shape.0 * recovered_model.image_shape.1];
@@ -106,14 +166,14 @@ pub fn compare_with_problem<M: MeasurementRead>(
         }
         residuals.push((squared_error / squared_measurement.max(f64::EPSILON)).sqrt());
     }
-    metrics.per_frame_residuals = Some(residuals);
-    Ok(metrics)
+    Ok(residuals)
 }
 
 fn compare(
     result: &ReconstructionResult,
     ground_truth: &Array2<Complex64>,
     true_model: Option<&ImagePlaneModel>,
+    valid_object_mask: Option<&Array2<u8>>,
 ) -> Result<GroundTruthMetrics> {
     if result.object.shape() != ground_truth.shape() || ground_truth.is_empty() {
         return Err(Error::InvalidShape(format!(
@@ -122,12 +182,16 @@ fn compare(
             ground_truth.shape()
         )));
     }
+    let count = validate_object_mask(valid_object_mask, ground_truth.shape())?;
+    let is_valid = |index: usize| valid_object_mask.is_none_or(|mask| mask.as_slice()[index] != 0);
     let cross: Complex64 = result
         .object
         .as_slice()
         .iter()
         .zip(ground_truth.as_slice())
-        .map(|(&reconstructed, &truth)| reconstructed * truth.conj())
+        .enumerate()
+        .filter(|(index, _)| is_valid(*index))
+        .map(|(_, (&reconstructed, &truth))| reconstructed * truth.conj())
         .sum();
     let phase_offset = cross.arg();
     let correction = Complex64::from_polar(1.0, -phase_offset);
@@ -135,7 +199,16 @@ fn compare(
     let mut phase_squared = 0.0;
     let mut complex_squared = 0.0;
     let mut truth_squared = 0.0;
-    for (&reconstructed, &truth) in result.object.as_slice().iter().zip(ground_truth.as_slice()) {
+    for (index, (&reconstructed, &truth)) in result
+        .object
+        .as_slice()
+        .iter()
+        .zip(ground_truth.as_slice())
+        .enumerate()
+    {
+        if !is_valid(index) {
+            continue;
+        }
         let aligned = reconstructed * correction;
         amplitude_squared += (aligned.norm() - truth.norm()).powi(2);
         let phase_error = wrap_phase(aligned.arg() - truth.arg());
@@ -143,10 +216,47 @@ fn compare(
         complex_squared += (aligned - truth).norm_sqr();
         truth_squared += truth.norm_sqr();
     }
-    let count = ground_truth.len() as f64;
-    let truth_spectrum = spectrum(ground_truth, result.object_spectrum.shape())?;
-    let fourier_squared: f64 = result
-        .object_spectrum
+    let (truth_for_spectrum, recovered_spectrum) = if let Some(mask) = valid_object_mask {
+        let masked_truth = Array2::from_vec(
+            ground_truth.shape(),
+            ground_truth
+                .as_slice()
+                .iter()
+                .zip(mask.as_slice())
+                .map(|(&value, &valid)| {
+                    if valid == 0 {
+                        Complex64::default()
+                    } else {
+                        value
+                    }
+                })
+                .collect(),
+        )?;
+        let masked_recovered = Array2::from_vec(
+            result.object.shape(),
+            result
+                .object
+                .as_slice()
+                .iter()
+                .zip(mask.as_slice())
+                .map(|(&value, &valid)| {
+                    if valid == 0 {
+                        Complex64::default()
+                    } else {
+                        value
+                    }
+                })
+                .collect(),
+        )?;
+        (
+            masked_truth,
+            spectrum(&masked_recovered, result.object_spectrum.shape())?,
+        )
+    } else {
+        (ground_truth.clone(), result.object_spectrum.clone())
+    };
+    let truth_spectrum = spectrum(&truth_for_spectrum, result.object_spectrum.shape())?;
+    let fourier_squared: f64 = recovered_spectrum
         .as_slice()
         .iter()
         .zip(truth_spectrum.as_slice())
@@ -242,8 +352,8 @@ fn compare(
             None
         };
     Ok(GroundTruthMetrics {
-        amplitude_rmse: (amplitude_squared / count).sqrt(),
-        phase_rmse: (phase_squared / count).sqrt(),
+        amplitude_rmse: (amplitude_squared / count as f64).sqrt(),
+        phase_rmse: (phase_squared / count as f64).sqrt(),
         complex_field_error: (complex_squared / truth_squared.max(f64::EPSILON)).sqrt(),
         fourier_domain_error: (fourier_squared / truth_fourier_squared.max(f64::EPSILON)).sqrt(),
         pupil_amplitude_error,
@@ -253,6 +363,26 @@ fn compare(
         per_frame_residuals: None,
         global_phase_offset: phase_offset,
     })
+}
+
+fn validate_object_mask(mask: Option<&Array2<u8>>, shape: (usize, usize)) -> Result<usize> {
+    let Some(mask) = mask else {
+        return Ok(shape.0 * shape.1);
+    };
+    if mask.shape() != shape {
+        return Err(Error::InvalidShape(format!(
+            "valid-object mask shape {:?} differs from object shape {shape:?}",
+            mask.shape()
+        )));
+    }
+    let selected = mask.as_slice().iter().filter(|&&value| value != 0).count();
+    if selected == 0 {
+        return Err(Error::InvalidParameter {
+            name: "valid_object_mask",
+            reason: "must select at least one object pixel".into(),
+        });
+    }
+    Ok(selected)
 }
 
 fn illumination_position_rmse(

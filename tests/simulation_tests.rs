@@ -1,14 +1,14 @@
 mod common;
 
 use fpm_rs::reconstruction::ReconstructionProblem;
-use fpm_rs::simulation::{
-    AberrationModel, CameraModel, Simulator, IlluminationErrorModel, NoiseModel, SyntheticObject,
-};
+use fpm_rs::simulation::{CameraModel, IlluminationAcquisitionErrors, Simulator, SyntheticObject};
 use fpm_rs::{
     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
-    model::ForwardModel,
+    experiment::{LEDArray, Optics, PupilAberration},
+    model::{ForwardModel, ImagePlaneModel},
 };
 use image::GrayImage;
+use rand::{SeedableRng, rngs::StdRng};
 
 #[test]
 fn ideal_simulation_uses_shared_forward_model() {
@@ -21,6 +21,11 @@ fn ideal_simulation_uses_shared_forward_model() {
         .unwrap();
     assert_eq!(simulation.measurements.frame_count(), model.frame_count());
     assert_eq!(simulation.measurements.image_shape(), model.image_shape);
+    assert_eq!(simulation.true_model.pupil.values, model.pupil.values);
+    assert_eq!(
+        simulation.reconstruction_model.pupil.values,
+        model.pupil.values
+    );
     assert!(
         simulation
             .measurements
@@ -36,19 +41,18 @@ fn poisson_gaussian_noise_is_reproducible() {
     let object = SyntheticObject::resolution_target((16, 16)).unwrap();
     let camera = CameraModel::new()
         .photons_per_pixel(200.0)
+        .shot_noise(true)
         .read_noise_electrons(1.5)
         .bit_depth(12);
     let first = Simulator::new(model.clone())
         .object(object.clone())
         .camera(camera.clone())
-        .noise(NoiseModel::PoissonGaussian)
         .seed(1234)
         .simulate()
         .unwrap();
     let second = Simulator::new(model)
         .object(object)
         .camera(camera)
-        .noise(NoiseModel::PoissonGaussian)
         .seed(1234)
         .simulate()
         .unwrap();
@@ -83,38 +87,255 @@ fn camera_quantizes_and_saturates() {
 }
 
 #[test]
-fn illumination_mismatch_keeps_true_and_reconstruction_models_distinct() {
-    let model = common::direct_model().unwrap();
-    let simulation = Simulator::new(model.clone())
-        .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
-        .illumination_errors(IlluminationErrorModel::new().global_shift((0.25, -0.4)))
-        .seed(4)
-        .simulate()
+fn ideal_camera_is_an_identity_detector() {
+    let camera = CameraModel::ideal();
+    let mut frame = vec![0.0, 0.5, 2.0];
+    camera
+        .measure_frame(&mut frame, &mut StdRng::seed_from_u64(1))
         .unwrap();
-    assert_ne!(
-        simulation.true_model.k_vectors[0].kx,
-        simulation.reconstruction_model.k_vectors[0].kx
-    );
-    assert_eq!(simulation.reconstruction_model.k_vectors, model.k_vectors);
-    let offset = simulation.true_model.source_offset(0).unwrap();
-    assert!((offset.row + 0.4).abs() < 1e-12);
-    assert!((offset.column - 0.25).abs() < 1e-12);
+    assert_eq!(frame, vec![0.0, 0.5, 2.0]);
 }
 
 #[test]
-fn illumination_vignetting_attenuates_frames_and_multiplexed_sources() {
-    let strength = std::f64::consts::LN_2;
-    let mut model = common::direct_model().unwrap();
-    model.frame_gains = Some(vec![2.0; model.frame_count()]);
-    model.validate().unwrap();
+fn camera_converts_intensity_with_pixel_sensitivity_and_electronics() {
+    let camera = CameraModel::ideal()
+        .photons_per_pixel(10.0)
+        .pixel_sensitivity(vec![1.0, 0.5])
+        .dark_current_electrons(3.0)
+        .gain(2.0)
+        .offset_counts(5.0);
+    let mut frame = vec![2.0, 2.0];
+    camera
+        .measure_frame(&mut frame, &mut StdRng::seed_from_u64(2))
+        .unwrap();
+    assert_eq!(frame, vec![51.0, 31.0]);
+}
+
+#[test]
+fn camera_noise_is_seeded_and_owned_by_the_camera() {
+    let camera = CameraModel::ideal()
+        .photons_per_pixel(50.0)
+        .shot_noise(true)
+        .read_noise_electrons(1.5);
+    let mut first = vec![1.0; 16];
+    let mut second = first.clone();
+    camera
+        .measure_frame(&mut first, &mut StdRng::seed_from_u64(3))
+        .unwrap();
+    camera
+        .measure_frame(&mut second, &mut StdRng::seed_from_u64(3))
+        .unwrap();
+    assert_eq!(first, second);
+    assert!(first.iter().any(|&value| value != 50.0));
+}
+
+#[test]
+fn shot_noise_moments_match_the_poisson_model() {
+    let expected_electrons = 100.0;
+    let camera = CameraModel::ideal()
+        .photons_per_pixel(expected_electrons)
+        .shot_noise(true);
+    let mut frame = vec![1.0; 65_536];
+    camera
+        .measure_frame(&mut frame, &mut StdRng::seed_from_u64(4))
+        .unwrap();
+    let (mean, variance) = sample_mean_and_variance(&frame);
+    assert!((mean - expected_electrons).abs() < 0.5, "mean={mean}");
+    assert!(
+        (variance - expected_electrons).abs() < 4.0,
+        "variance={variance}"
+    );
+}
+
+#[test]
+fn read_noise_variance_scales_through_detector_gain() {
+    let expected_electrons = 50.0;
+    let read_noise_electrons = 4.0;
+    let gain = 2.0;
+    let offset = 7.0;
+    let camera = CameraModel::ideal()
+        .dark_current_electrons(expected_electrons)
+        .read_noise_electrons(read_noise_electrons)
+        .gain(gain)
+        .offset_counts(offset);
+    let mut frame = vec![0.0; 65_536];
+    camera
+        .measure_frame(&mut frame, &mut StdRng::seed_from_u64(5))
+        .unwrap();
+    let (mean, variance) = sample_mean_and_variance(&frame);
+    assert!((mean - (gain * expected_electrons + offset)).abs() < 0.35);
+    assert!((variance - (gain * read_noise_electrons).powi(2)).abs() < 3.0);
+}
+
+#[test]
+fn poisson_gaussian_moments_add_before_detector_gain() {
+    let expected_electrons = 80.0;
+    let read_noise_electrons = 3.0;
+    let gain = 1.5;
+    let offset = 11.0;
+    let camera = CameraModel::ideal()
+        .photons_per_pixel(expected_electrons)
+        .shot_noise(true)
+        .read_noise_electrons(read_noise_electrons)
+        .gain(gain)
+        .offset_counts(offset);
+    let mut frame = vec![1.0; 65_536];
+    camera
+        .measure_frame(&mut frame, &mut StdRng::seed_from_u64(6))
+        .unwrap();
+    let (mean, variance) = sample_mean_and_variance(&frame);
+    let expected_mean = gain * expected_electrons + offset;
+    let expected_variance = gain * gain * (expected_electrons + read_noise_electrons.powi(2));
+    assert!((mean - expected_mean).abs() < 0.6, "mean={mean}");
+    assert!(
+        (variance - expected_variance).abs() < 5.0,
+        "variance={variance}"
+    );
+}
+
+#[test]
+fn camera_applies_clipping_then_quantization_before_bad_pixel_override() {
+    let camera = CameraModel::ideal()
+        .photons_per_pixel(10.0)
+        .gain(2.0)
+        .offset_counts(1.0)
+        .bit_depth(4)
+        .saturation(10.0)
+        .quantize(true)
+        .bad_pixels(vec![1], 7.4);
+    let mut frame = vec![-1.0, 0.12, 0.55, 1.0];
+    camera
+        .measure_frame(&mut frame, &mut StdRng::seed_from_u64(7))
+        .unwrap();
+    assert_eq!(frame, vec![1.0, 7.0, 10.0, 10.0]);
+}
+
+fn sample_mean_and_variance(values: &[f64]) -> (f64, f64) {
+    let count = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / count;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / (count - 1.0);
+    (mean, variance)
+}
+
+#[test]
+fn camera_validates_pixel_maps_and_bad_pixel_indices_for_the_frame() {
+    let mut frame = vec![1.0; 2];
+    assert!(
+        CameraModel::ideal()
+            .pixel_sensitivity(vec![1.0])
+            .measure_frame(&mut frame, &mut StdRng::seed_from_u64(4))
+            .is_err()
+    );
+    assert!(
+        CameraModel::ideal()
+            .bad_pixels(vec![2], 0.0)
+            .measure_frame(&mut frame, &mut StdRng::seed_from_u64(4))
+            .is_err()
+    );
+}
+
+#[test]
+fn illumination_mismatch_keeps_true_and_reconstruction_models_distinct() {
+    let optics = Optics {
+        wavelength: 532e-9,
+        objective_na: 0.1,
+        magnification: 4.0,
+        camera_pixel_size: 6.5e-6,
+        medium_index: 1.0,
+        defocus_distance: None,
+        pupil_aberration: None,
+    };
+    let assumed_array = LEDArray::new()
+        .grid_shape((1, 3))
+        .pitch(4.0e-3)
+        .distance(90.0e-3)
+        .center((1.0, 0.0));
+    let true_array = LEDArray::new()
+        .grid_shape((1, 3))
+        .pitch(4.05e-3)
+        .distance(89.5e-3)
+        .center((1.08, -0.04))
+        .rotation_deg(0.7);
+    let true_model =
+        ImagePlaneModel::from_experiment(&optics, &true_array, (8, 8), (16, 16)).unwrap();
+    let reconstruction_model =
+        ImagePlaneModel::from_experiment(&optics, &assumed_array, (8, 8), (16, 16)).unwrap();
+
+    let simulation = Simulator::new(true_model.clone())
+        .reconstruction_model(reconstruction_model.clone())
+        .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
+        .simulate()
+        .unwrap();
+    assert_ne!(true_model.k_vectors, reconstruction_model.k_vectors);
+    assert_eq!(simulation.true_model.k_vectors, true_model.k_vectors);
+    assert_eq!(
+        simulation.reconstruction_model.k_vectors,
+        reconstruction_model.k_vectors
+    );
+    assert!(simulation.illumination_acquisition_errors.is_none());
+}
+
+#[test]
+fn pupil_mismatch_comes_from_the_provided_models() {
+    let assumed_optics = Optics {
+        wavelength: 532e-9,
+        objective_na: 0.1,
+        magnification: 4.0,
+        camera_pixel_size: 6.5e-6,
+        medium_index: 1.0,
+        defocus_distance: None,
+        pupil_aberration: None,
+    };
+    let true_optics = Optics {
+        defocus_distance: Some(-12e-6),
+        pupil_aberration: Some(PupilAberration {
+            astigmatism: 0.2,
+            spherical: 0.1,
+            edge_apodization: 0.3,
+            ..PupilAberration::default()
+        }),
+        ..assumed_optics.clone()
+    };
+    let illumination = LEDArray::new();
+    let true_model =
+        ImagePlaneModel::from_experiment(&true_optics, &illumination, (8, 8), (16, 16)).unwrap();
+    let reconstruction_model =
+        ImagePlaneModel::from_experiment(&assumed_optics, &illumination, (8, 8), (16, 16)).unwrap();
+
+    let simulation = Simulator::new(true_model.clone())
+        .reconstruction_model(reconstruction_model.clone())
+        .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
+        .simulate()
+        .unwrap();
+
+    assert_ne!(true_model.pupil.values, reconstruction_model.pupil.values);
+    assert_eq!(simulation.true_model.pupil.values, true_model.pupil.values);
+    assert_eq!(
+        simulation.reconstruction_model.pupil.values,
+        reconstruction_model.pupil.values
+    );
+}
+
+#[test]
+fn source_weights_encode_angle_dependent_transmission() {
+    let mut reconstruction_model = common::direct_model().unwrap();
+    reconstruction_model.frame_gains = Some(vec![2.0; reconstruction_model.frame_count()]);
+    reconstruction_model.validate().unwrap();
+    let mut true_model = reconstruction_model.clone();
+    true_model.frame_gains = Some(vec![1.0, 1.0, 2.0, 1.0, 1.0]);
+    true_model.validate().unwrap();
     let object = SyntheticObject::mixed_test_pattern((16, 16)).unwrap();
-    let baseline = Simulator::ideal(model.clone())
+    let baseline = Simulator::ideal(reconstruction_model.clone())
         .object(object.clone())
         .simulate()
         .unwrap();
-    let ordinary = Simulator::new(model)
+    let ordinary = Simulator::new(true_model)
+        .reconstruction_model(reconstruction_model)
         .object(object)
-        .aberration(AberrationModel::new().illumination_vignetting(strength))
         .simulate()
         .unwrap();
     let true_gains = ordinary.true_model.frame_gains.as_ref().unwrap();
@@ -136,13 +357,17 @@ fn illumination_vignetting_attenuates_frames_and_multiplexed_sources() {
         Some(vec![2.0; 5])
     );
 
-    let multiplexed_model = common::direct_model()
+    let reconstruction_model = common::direct_model()
         .unwrap()
         .with_multiplexing(vec![vec![(0, 1.0), (2, 1.0)], vec![(1, 0.25), (4, 0.75)]])
         .unwrap();
-    let multiplexed = Simulator::new(multiplexed_model)
+    let true_model = common::direct_model()
+        .unwrap()
+        .with_multiplexing(vec![vec![(0, 0.5), (2, 1.0)], vec![(1, 0.125), (4, 0.375)]])
+        .unwrap();
+    let multiplexed = Simulator::new(true_model)
+        .reconstruction_model(reconstruction_model)
         .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
-        .aberration(AberrationModel::new().illumination_vignetting(strength))
         .simulate()
         .unwrap();
     let true_matrix = multiplexed.true_model.multiplexing_matrix.as_ref().unwrap();
@@ -154,20 +379,16 @@ fn illumination_vignetting_attenuates_frames_and_multiplexed_sources() {
         multiplexed.reconstruction_model.multiplexing_matrix,
         Some(vec![vec![(0, 1.0), (2, 1.0)], vec![(1, 0.25), (4, 0.75)]])
     );
-    assert!(
-        AberrationModel::new()
-            .illumination_vignetting(-0.1)
-            .validate()
-            .is_err()
-    );
 }
 
 #[test]
-fn missing_sources_become_zero_weight_dark_frames() {
+fn missing_frames_become_zero_weight_dark_frames() {
     let model = common::direct_model().unwrap();
     let simulation = Simulator::new(model)
         .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
-        .illumination_errors(IlluminationErrorModel::new().missing_sources(vec![1, 3]))
+        .illumination_acquisition_errors(
+            IlluminationAcquisitionErrors::new().missing_frames(vec![1, 3]),
+        )
         .simulate()
         .unwrap();
     assert_eq!(simulation.parameters.missing_frames, vec![1, 3]);
@@ -186,12 +407,14 @@ fn missing_sources_become_zero_weight_dark_frames() {
 }
 
 #[test]
-fn source_order_mismatch_reorders_true_geometry_only() {
+fn source_permutation_reorders_true_sources_only() {
     let model = common::direct_model().unwrap();
     let order = vec![4, 3, 2, 1, 0];
     let simulation = Simulator::new(model.clone())
         .object(SyntheticObject::phase_disk((16, 16), 4.0, 0.5).unwrap())
-        .illumination_errors(IlluminationErrorModel::new().source_order(order.clone()))
+        .illumination_acquisition_errors(
+            IlluminationAcquisitionErrors::new().source_permutation(order.clone()),
+        )
         .simulate()
         .unwrap();
     for (frame, &source) in order.iter().enumerate() {
@@ -201,7 +424,73 @@ fn source_order_mismatch_reorders_true_geometry_only() {
         );
     }
     assert_eq!(simulation.reconstruction_model.k_vectors, model.k_vectors);
-    assert!(simulation.illumination_errors.is_some());
+    assert!(simulation.illumination_acquisition_errors.is_some());
+}
+
+#[test]
+fn frame_gain_variation_multiplies_existing_source_gains() {
+    let mut weighted_model = common::direct_model().unwrap();
+    weighted_model.frame_gains = Some(vec![2.0; weighted_model.frame_count()]);
+    weighted_model.validate().unwrap();
+    let unweighted_model = common::direct_model().unwrap();
+    let object = SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap();
+    let errors = IlluminationAcquisitionErrors::new().frame_gain_relative_std(0.2);
+
+    let weighted = Simulator::new(weighted_model)
+        .object(object.clone())
+        .illumination_acquisition_errors(errors.clone())
+        .seed(19)
+        .simulate()
+        .unwrap();
+    let unweighted = Simulator::new(unweighted_model)
+        .object(object)
+        .illumination_acquisition_errors(errors)
+        .seed(19)
+        .simulate()
+        .unwrap();
+
+    let weighted_gains = weighted.true_model.frame_gains.as_ref().unwrap();
+    let unweighted_gains = unweighted.true_model.frame_gains.as_ref().unwrap();
+    for (&weighted_gain, &unweighted_gain) in weighted_gains.iter().zip(unweighted_gains) {
+        assert!((weighted_gain - 2.0 * unweighted_gain).abs() < 1e-12);
+    }
+    assert_eq!(
+        weighted.reconstruction_model.frame_gains,
+        Some(vec![2.0; weighted.reconstruction_model.frame_count()])
+    );
+}
+
+#[test]
+fn illumination_acquisition_errors_reject_invalid_parameters() {
+    let object = || SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap();
+
+    assert!(
+        Simulator::new(common::direct_model().unwrap())
+            .object(object())
+            .illumination_acquisition_errors(
+                IlluminationAcquisitionErrors::new().frame_gain_relative_std(-0.1),
+            )
+            .simulate()
+            .is_err()
+    );
+    assert!(
+        Simulator::new(common::direct_model().unwrap())
+            .object(object())
+            .illumination_acquisition_errors(
+                IlluminationAcquisitionErrors::new().missing_frames(vec![1, 1]),
+            )
+            .simulate()
+            .is_err()
+    );
+    assert!(
+        Simulator::new(common::direct_model().unwrap())
+            .object(object())
+            .illumination_acquisition_errors(
+                IlluminationAcquisitionErrors::new().source_permutation(vec![0, 1, 2, 3, 3]),
+            )
+            .simulate()
+            .is_err()
+    );
 }
 
 #[test]
@@ -216,7 +505,6 @@ fn camera_applies_dark_current_and_fixed_bad_pixels() {
                 .bad_pixels(vec![0, 5], 123.0)
                 .bit_depth(16),
         )
-        .noise(NoiseModel::None)
         .simulate()
         .unwrap();
     for frame in 0..simulation.measurements.frame_count() {
@@ -225,6 +513,43 @@ fn camera_applies_dark_current_and_fixed_bad_pixels() {
         assert_eq!(values[5], 123.0);
         assert_eq!(values[1], 17.0);
     }
+}
+
+#[test]
+fn optical_background_remains_in_the_model_and_detector_offset_stays_in_the_camera() {
+    let mut true_model = common::direct_model().unwrap();
+    true_model.background = Some(vec![2.0; 64]);
+    true_model.validate().unwrap();
+    let reconstruction_model = true_model.clone();
+    let object = SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap();
+    let optical = Simulator::ideal(true_model.clone())
+        .object(object.clone())
+        .simulate()
+        .unwrap();
+    let measured = Simulator::new(true_model.clone())
+        .reconstruction_model(reconstruction_model)
+        .object(object)
+        .camera(
+            CameraModel::ideal()
+                .dark_current_electrons(3.0)
+                .offset_counts(5.0),
+        )
+        .simulate()
+        .unwrap();
+
+    for (&counts, &intensity) in measured
+        .measurements
+        .as_slice()
+        .iter()
+        .zip(optical.measurements.as_slice())
+    {
+        assert!((counts - intensity - 8.0).abs() < 1e-12);
+    }
+    assert_eq!(measured.true_model.background, Some(vec![2.0; 64]));
+    assert_eq!(
+        measured.reconstruction_model.background,
+        Some(vec![10.0; 64])
+    );
 }
 
 #[test]
