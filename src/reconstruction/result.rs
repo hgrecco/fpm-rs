@@ -66,6 +66,14 @@ impl ReconstructionResult {
         if let Some(loss) = history.final_loss() {
             diagnostics.insert("final_loss".into(), loss);
         }
+        if let Some(record) = history.iterations.last() {
+            if let Some(residual) = record.admm_primal_residual_rms {
+                diagnostics.insert("final_admm_primal_residual_rms".into(), residual);
+            }
+            if let Some(residual) = record.admm_dual_residual_rms {
+                diagnostics.insert("final_admm_dual_residual_rms".into(), residual);
+            }
+        }
         Ok(Self {
             object,
             amplitude,
@@ -104,9 +112,21 @@ impl ReconstructionResult {
 
     pub fn save_loss_csv(&self, path: impl AsRef<Path>) -> Result<()> {
         let mut writer = csv::Writer::from_path(path)?;
-        writer.write_record(["iteration", "loss", "elapsed_seconds"])?;
+        writer.write_record([
+            "iteration",
+            "loss",
+            "elapsed_seconds",
+            "admm_primal_residual_rms",
+            "admm_dual_residual_rms",
+        ])?;
         for record in &self.history.iterations {
-            writer.serialize(record)?;
+            writer.serialize((
+                record.iteration,
+                record.loss,
+                record.elapsed_seconds,
+                record.admm_primal_residual_rms,
+                record.admm_dual_residual_rms,
+            ))?;
         }
         writer.flush()?;
         Ok(())
@@ -212,6 +232,12 @@ impl ReconstructionResult {
                         || !record.loss.is_finite()
                         || !record.elapsed_seconds.is_finite()
                         || record.elapsed_seconds < 0.0
+                        || record
+                            .admm_primal_residual_rms
+                            .is_some_and(|value| !value.is_finite() || value < 0.0)
+                        || record
+                            .admm_dual_residual_rms
+                            .is_some_and(|value| !value.is_finite() || value < 0.0)
                 })
             || self
                 .history

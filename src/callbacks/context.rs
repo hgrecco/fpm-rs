@@ -30,7 +30,7 @@ pub struct StepContext<'a> {
     pub problem_name: Option<&'a str>,
 }
 
-pub trait Callback {
+pub trait Callback: Send {
     fn requires(&self) -> Vec<DiagnosticRequest> {
         Vec::new()
     }

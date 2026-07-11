@@ -11,12 +11,40 @@ use super::{
     common::{ObjectDenominator, UpdateConfiguration, projection_update},
 };
 
+/// Alternating-projection reconstruction for Fourier ptychographic microscopy.
+///
+/// # Method
+///
+/// For each measured frame, the algorithm extracts the corresponding patch of
+/// the current high-resolution object spectrum, multiplies it by the pupil, and
+/// propagates the resulting field to the detector plane. It replaces the
+/// predicted detector amplitude with the measured amplitude while retaining
+/// the predicted phase, propagates the corrected field back to Fourier space,
+/// and inserts the resulting correction into the object spectrum. Repeating
+/// this operation over overlapping Fourier patches makes them converge toward
+/// a mutually consistent complex object.
+///
+/// For incoherently multiplexed frames, one measured-to-predicted amplitude
+/// ratio is applied jointly to every source mode before their corrections are
+/// back-projected.
+///
+/// # Reference
+///
+/// G. Zheng, R. Horstmeyer, and C. Yang, “Wide-field, high-resolution Fourier
+/// ptychographic microscopy,” *Nature Photonics* **7**, 739–745 (2013),
+/// [doi:10.1038/nphoton.2013.187](https://doi.org/10.1038/nphoton.2013.187).
 #[derive(Clone, Debug)]
 pub struct AlternatingProjection {
+    /// Number of complete passes through the acquisition schedule.
     pub iterations: usize,
+    /// Relaxation factor applied to each object-spectrum correction.
     pub object_step: f64,
+    /// Number of measured frames supplied to each reconstruction step.
     pub batch_size: usize,
+    /// Positive numerical floor used in divisions and dark-field handling.
     pub epsilon: f64,
+    /// Loss used for diagnostics; the projection itself always enforces the
+    /// measured amplitude.
     pub loss_type: LossType,
 }
 

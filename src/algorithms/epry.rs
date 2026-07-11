@@ -11,23 +11,61 @@ use super::{
     common::{ObjectDenominator, UpdateConfiguration, projection_update},
 };
 
+/// Embedded pupil-recovery reconstruction for Fourier ptychographic microscopy.
+///
+/// # Method
+///
+/// EPRY alternates detector-amplitude projection with two normalized updates:
+/// the exit-wave error is divided by pupil power to update the overlapping
+/// object-spectrum patch and by object-patch power to update the pupil. Jointly
+/// recovering these two complex functions lets the pupil absorb aberrations
+/// that would otherwise be imprinted on the reconstructed object. The pupil
+/// can be projected back onto the known aperture support after every update.
+///
+/// This implementation also optionally estimates a relative gain and an
+/// additive, spatially uniform background for each frame. Those calibration
+/// updates and incoherent multiplexing support are crate extensions to the
+/// reference EPRY method.
+///
+/// # Reference
+///
+/// X. Ou, G. Zheng, and C. Yang, “Embedded pupil function recovery for Fourier
+/// ptychographic microscopy,” *Optics Express* **22**(5), 4960–4972 (2014),
+/// [doi:10.1364/OE.22.004960](https://doi.org/10.1364/OE.22.004960).
 #[derive(Clone, Debug)]
 pub struct Epry {
+    /// Number of complete passes through the acquisition schedule.
     pub iterations: usize,
+    /// Relaxation factor applied to each object-spectrum correction.
     pub object_step: f64,
+    /// Relaxation factor applied to each pupil correction.
     pub pupil_step: f64,
+    /// Number of measured frames supplied to each reconstruction step.
     pub batch_size: usize,
+    /// Whether to update the complex pupil alongside the object.
     pub recover_pupil: bool,
+    /// Whether to zero recovered pupil values outside the compiled aperture.
     pub constrain_pupil_support: bool,
+    /// Whether to estimate one multiplicative intensity gain per frame.
     pub recover_frame_gains: bool,
+    /// Fraction of each least-squares frame-gain estimate applied per update.
     pub gain_step: f64,
+    /// Lower bound for recovered frame gains; must be positive.
     pub minimum_gain: f64,
+    /// Upper bound for recovered frame gains.
     pub maximum_gain: f64,
+    /// Whether to estimate one additive, spatially uniform background per frame.
     pub recover_background: bool,
+    /// Fraction of the mean frame residual added to the background per update.
     pub background_step: f64,
+    /// Lower bound for recovered background intensities.
     pub minimum_background: f64,
+    /// Upper bound for recovered background intensities.
     pub maximum_background: f64,
+    /// Positive numerical floor used in normalized updates.
     pub epsilon: f64,
+    /// Loss used for diagnostics; the projection itself always enforces the
+    /// measured amplitude.
     pub loss_type: LossType,
 }
 

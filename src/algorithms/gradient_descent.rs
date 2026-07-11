@@ -16,31 +16,65 @@ use super::{
     regularization::{apply_complex_tv_step, apply_quadratic_smoothing_step},
 };
 
-/// CPU loss-gradient updates supporting ordinary and incoherently multiplexed
-/// image-plane FPM frames.
+/// Wirtinger-style loss-gradient reconstruction for Fourier ptychography.
 ///
-/// Losses are evaluated after removing known linear gain and background so the
-/// update scale is independent of detector count units.
-/// Per-source illumination-position recovery is optional because its finite-
-/// difference derivatives require four additional source evaluations.
-/// Complex-object TV and pupil smoothing are disabled by default.
+/// # Method
+///
+/// The solver differentiates a selected real-valued data loss through the
+/// complex FPM forward model, accumulates gradients from a mini-batch, and
+/// applies a pupil-power-preconditioned update to the shared object spectrum.
+/// This is the Fourier-ptychographic Wirtinger-flow viewpoint: phase retrieval
+/// is treated as direct optimization rather than alternating hard projections.
+/// Losses are evaluated after accounting for known linear gain and background,
+/// so detector count scaling does not change the intrinsic update scale.
+///
+/// Optional extensions recover the pupil with an analogous normalized
+/// gradient, estimate illumination offsets with finite-difference derivatives
+/// and diagonal Gauss–Newton scaling, and regularize the complex object or
+/// pupil. Incoherent multiplexing, these calibration updates, and the selectable
+/// losses extend the reference formulation.
+///
+/// # Reference
+///
+/// L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, “Fourier
+/// ptychographic reconstruction using Wirtinger flow optimization,” *Optics
+/// Express* **23**(4), 4856–4866 (2015),
+/// [doi:10.1364/OE.23.004856](https://doi.org/10.1364/OE.23.004856).
 #[derive(Clone, Debug)]
 pub struct GradientDescent {
+    /// Number of complete passes through the acquisition schedule.
     pub iterations: usize,
+    /// Step size of the pupil-power-preconditioned object update.
     pub object_step: f64,
+    /// Number of frame gradients averaged into one update.
     pub batch_size: usize,
+    /// Positive numerical floor used by losses and preconditioners.
     pub epsilon: f64,
+    /// Data-fidelity objective to differentiate and report.
     pub loss_type: LossType,
+    /// Whether to estimate a Fourier-grid offset for every illumination source.
     pub recover_illumination: bool,
+    /// Step size of the diagonally scaled illumination-offset update.
     pub illumination_step: f64,
+    /// Central finite-difference spacing in Fourier-grid pixels.
     pub illumination_finite_difference: f64,
+    /// Maximum absolute row or column correction, in Fourier-grid pixels.
     pub maximum_illumination_correction: f64,
+    /// Whether to update the complex pupil alongside the object.
     pub recover_pupil: bool,
+    /// Step size of the normalized pupil update.
     pub pupil_step: f64,
+    /// Whether to zero recovered pupil values outside the compiled aperture.
     pub constrain_pupil_support: bool,
+    /// Weight of the isotropic total-variation step on the complex object;
+    /// `0` disables it.
     pub object_tv_weight: f64,
+    /// Positive smoothing constant in the differentiable TV norm.
     pub object_tv_epsilon: f64,
+    /// Weight of quadratic nearest-neighbor pupil smoothing; `0` disables it
+    /// and positive values require pupil recovery.
     pub pupil_smoothing_weight: f64,
+    /// Maximum number of frame-gradient worker threads.
     pub parallel_workers: usize,
 }
 
@@ -327,6 +361,9 @@ impl ReconstructionAlgorithm for GradientDescent {
                     "frame {frame} has no unmasked pixels"
                 )));
             }
+            // The FFT adjoint contributes a 1/image_len normalization. Match
+            // the reported per-frame mean when masked pixels reduce its divisor.
+            let valid_pixel_scale = image_len as f64 / valid_pixels as f64;
             diagnostics.push_frame(frame, frame_loss / valid_pixels as f64, frame_weight);
 
             for &(source, source_weight) in sources {
@@ -367,6 +404,7 @@ impl ReconstructionAlgorithm for GradientDescent {
                         .max(self.epsilon);
                     for pixel in 0..image_len {
                         state.scratch.pupil_gradient[pixel] += frame_weight
+                            * valid_pixel_scale
                             * state.scratch.patch[pixel].conj()
                             * state.scratch.projected_spectrum[pixel]
                             / (maximum_object_power + self.epsilon);
@@ -381,7 +419,7 @@ impl ReconstructionAlgorithm for GradientDescent {
                     &mut state.scratch.object_gradient,
                     source,
                     &state.scratch.difference,
-                    frame_weight,
+                    frame_weight * valid_pixel_scale,
                     offset,
                 )?;
                 if self.recover_illumination {
@@ -608,9 +646,11 @@ impl GradientDescent {
                 .collect();
             let mut output = Vec::with_capacity(handles.len());
             for handle in handles {
-                output.push(handle.join().map_err(|_| {
-                    Error::Numerical("parallel gradient worker panicked".into())
-                })??);
+                output.push(
+                    handle.join().map_err(|_| {
+                        Error::Numerical("parallel gradient worker panicked".into())
+                    })??,
+                );
             }
             Ok(output)
         })?;

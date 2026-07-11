@@ -8,6 +8,7 @@ use crate::{
     complex,
     diagnostics::{
         DiagnosticRequest, Diagnostics, IterationRecord, ReconstructionHistory, StepDiagnostics,
+        compute_frame_diagnostics_with_mask, compute_raw_frame_stats,
     },
     error::Error,
     measurements::MeasurementRead,
@@ -110,8 +111,14 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
             .map_or(0.0, |record| record.elapsed_seconds);
         let start_requests =
             callback_requests(&self.callbacks, CallbackHook::Start, starting_iteration);
-        let start_diagnostics =
-            build_diagnostics(problem, &mut state, &start_requests, None, None)?;
+        let start_diagnostics = build_diagnostics(
+            problem,
+            &mut state,
+            &start_requests,
+            None,
+            None,
+            starting_iteration,
+        )?;
         let start_context = StepContext {
             iteration: starting_iteration,
             frame_index: None,
@@ -152,6 +159,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                             &frame_requests,
                             batch_loss,
                             Some(&batch_step),
+                            current_iteration,
                         )?;
                         // A batch update completes every frame in the batch at
                         // once. Emit one frame hook per completed frame, with
@@ -191,6 +199,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     iteration: current_iteration,
                     loss,
                     elapsed_seconds: previous_elapsed + started.elapsed().as_secs_f64(),
+                    admm_primal_residual_rms: iteration_step.admm_primal_residual_rms(),
+                    admm_dual_residual_rms: iteration_step.admm_dual_residual_rms(),
                 });
                 let iteration_requests = callback_requests(
                     &self.callbacks,
@@ -203,6 +213,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     &iteration_requests,
                     Some(loss),
                     Some(&iteration_step),
+                    current_iteration,
                 )?;
                 let context = StepContext {
                     iteration: current_iteration,
@@ -262,35 +273,66 @@ fn build_diagnostics<M: MeasurementRead>(
     requests: &BTreeSet<DiagnosticRequest>,
     natural_loss: Option<f64>,
     step: Option<&StepDiagnostics>,
+    iteration: usize,
 ) -> Result<Diagnostics> {
     let mut diagnostics = Diagnostics::default();
     if requests.contains(&DiagnosticRequest::Loss) {
         diagnostics.loss = natural_loss;
     }
-    if requests.contains(&DiagnosticRequest::PerFrameError) {
-        if let Some(step) = step {
-            let mut values = vec![f64::NAN; problem.model.frame_count()];
-            for (&frame, &loss) in &step.per_frame_loss {
-                values[frame] = loss;
-            }
-            diagnostics.per_frame_error = Some(values);
+    if requests.contains(&DiagnosticRequest::RawFrameStats) {
+        let mut values = Vec::with_capacity(problem.model.frame_count());
+        for frame in 0..problem.model.frame_count() {
+            let measured = problem.measurements.frame(frame)?;
+            values.push(compute_raw_frame_stats(frame, &measured, None)?);
+        }
+        diagnostics.raw_frame_stats = Some(values);
+    }
+    if requests.contains(&DiagnosticRequest::PerFrameError)
+        && let Some(step) = step
+    {
+        let mut values = vec![f64::NAN; problem.model.frame_count()];
+        for (&frame, &loss) in &step.per_frame_loss {
+            values[frame] = loss;
+        }
+        diagnostics.per_frame_error = Some(values);
+    }
+    if requests.contains(&DiagnosticRequest::FrameSummaries)
+        || requests.contains(&DiagnosticRequest::ResidualImages)
+        || (requests.contains(&DiagnosticRequest::PerFrameError) && step.is_none())
+    {
+        let diagnostic_model = model_with_state_calibration(problem, state)?;
+        let forward = ForwardModel::with_backend(&diagnostic_model, state.backend.clone())?;
+        let mut workspace = forward.workspace();
+        let mut predicted = vec![0.0; problem.model.image_shape.0 * problem.model.image_shape.1];
+        let mut frame_diagnostics = Vec::with_capacity(problem.model.frame_count());
+        let mut residual_images = if requests.contains(&DiagnosticRequest::ResidualImages) {
+            Some(Vec::with_capacity(problem.model.frame_count()))
         } else {
-            let diagnostic_model = model_with_state_calibration(problem, state)?;
-            let forward = ForwardModel::with_backend(&diagnostic_model, state.backend.clone())?;
-            let mut workspace = forward.workspace();
-            let mut predicted =
-                vec![0.0; problem.model.image_shape.0 * problem.model.image_shape.1];
-            let mut values = Vec::with_capacity(problem.model.frame_count());
-            for frame in 0..problem.model.frame_count() {
-                forward.forward_intensity_into(
-                    &state.object_spectrum,
-                    &state.pupil,
-                    frame,
-                    &mut workspace,
-                    &mut predicted,
-                )?;
-                let measured = problem.measurements.frame(frame)?;
-                let mask = problem.measurements.frame_mask(frame)?;
+            None
+        };
+        let mut per_frame_error =
+            if requests.contains(&DiagnosticRequest::PerFrameError) && step.is_none() {
+                Some(Vec::with_capacity(problem.model.frame_count()))
+            } else {
+                None
+            };
+        for frame in 0..problem.model.frame_count() {
+            forward.forward_intensity_into(
+                &state.object_spectrum,
+                &state.pupil,
+                frame,
+                &mut workspace,
+                &mut predicted,
+            )?;
+            let measured = problem.measurements.frame(frame)?;
+            let mask = problem.measurements.frame_mask(frame)?;
+            let metadata = problem
+                .measurements
+                .frame_metadata()
+                .get(frame)
+                .cloned()
+                .unwrap_or_else(|| crate::measurements::FrameMetadata::new(frame));
+            if let Some(values) = per_frame_error.as_mut() {
                 let mut loss_sum = 0.0;
                 let mut valid_pixels = 0;
                 for pixel in 0..predicted.len() {
@@ -307,7 +349,43 @@ fn build_diagnostics<M: MeasurementRead>(
                     loss_sum / valid_pixels as f64
                 });
             }
-            diagnostics.per_frame_error = Some(values);
+            if let Some(images) = residual_images.as_mut() {
+                let mut residual: Vec<_> = predicted
+                    .iter()
+                    .zip(measured.iter())
+                    .map(|(&predicted, &measured)| predicted - measured)
+                    .collect();
+                if let Some(mask) = mask {
+                    for (value, &valid) in residual.iter_mut().zip(mask) {
+                        if valid == 0 {
+                            *value = 0.0;
+                        }
+                    }
+                }
+                images.push(crate::Array2::from_vec(
+                    problem.model.image_shape,
+                    residual,
+                )?);
+            }
+            if requests.contains(&DiagnosticRequest::FrameSummaries) {
+                let mut summary = compute_frame_diagnostics_with_mask(
+                    frame,
+                    metadata.illumination_index.unwrap_or(frame),
+                    &measured,
+                    &predicted,
+                    mask,
+                    None,
+                )?;
+                summary.iteration = Some(iteration);
+                frame_diagnostics.push(summary);
+            }
+        }
+        if diagnostics.per_frame_error.is_none() {
+            diagnostics.per_frame_error = per_frame_error;
+        }
+        diagnostics.frame_diagnostics = Some(frame_diagnostics);
+        if let Some(images) = residual_images {
+            diagnostics.residual_images = Some(images);
         }
     }
     if requests.contains(&DiagnosticRequest::ObjectAmplitude)
@@ -324,40 +402,6 @@ fn build_diagnostics<M: MeasurementRead>(
     if requests.contains(&DiagnosticRequest::Pupil) {
         diagnostics.pupil_amplitude = Some(complex::amplitude(&state.pupil.values));
         diagnostics.pupil_phase = Some(complex::phase(&state.pupil.values));
-    }
-    if requests.contains(&DiagnosticRequest::ResidualImages) {
-        let diagnostic_model = model_with_state_calibration(problem, state)?;
-        let forward = ForwardModel::with_backend(&diagnostic_model, state.backend.clone())?;
-        let mut workspace = forward.workspace();
-        let mut predicted = vec![0.0; problem.model.image_shape.0 * problem.model.image_shape.1];
-        let mut images = Vec::with_capacity(problem.model.frame_count());
-        for frame in 0..problem.model.frame_count() {
-            forward.forward_intensity_into(
-                &state.object_spectrum,
-                &state.pupil,
-                frame,
-                &mut workspace,
-                &mut predicted,
-            )?;
-            let measured = problem.measurements.frame(frame)?;
-            let mut residual: Vec<_> = predicted
-                .iter()
-                .zip(measured.iter())
-                .map(|(&predicted, &measured)| predicted - measured)
-                .collect();
-            if let Some(mask) = problem.measurements.frame_mask(frame)? {
-                for (value, &valid) in residual.iter_mut().zip(mask) {
-                    if valid == 0 {
-                        *value = 0.0;
-                    }
-                }
-            }
-            images.push(crate::Array2::from_vec(
-                problem.model.image_shape,
-                residual,
-            )?);
-        }
-        diagnostics.residual_images = Some(images);
     }
     Ok(diagnostics)
 }

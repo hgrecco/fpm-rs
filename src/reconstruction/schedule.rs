@@ -1,9 +1,7 @@
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    Result, experiment::KVector, measurements::MeasurementRead, model::ImagePlaneModel,
-};
+use crate::{Result, experiment::KVector, measurements::MeasurementRead, model::ImagePlaneModel};
 
 use super::ReconstructionProblem;
 

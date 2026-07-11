@@ -7,17 +7,17 @@ use fpm_rs::{
         Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
     },
     callbacks::CheckpointEvery,
-    diagnostics::{LossType, ReconstructionHistory},
-    experiment::{LEDArray, Optics},
-    measurements::LazyMeasurementStack,
-    model::{FourierOffset, ImagePlaneModel},
+    diagnostics::{LossType, ReconstructionHistory, loss},
+    experiment::{LEDArray, Optics, PupilAberration},
+    measurements::{LazyMeasurementStack, MeasurementRead},
+    model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil},
     reconstruction::{
         Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionState, RunOptions,
         Runner,
     },
     simulation::{
-        AberrationModel, CameraModel, Simulator, NoiseModel, SyntheticObject,
-        compare_to_ground_truth, compare_with_problem, compare_with_true_model,
+        CameraModel, Simulator, SyntheticObject, compare_to_ground_truth, compare_with_problem,
+        compare_with_true_model,
     },
 };
 use image::{ImageBuffer, Luma};
@@ -27,10 +27,7 @@ use std::sync::atomic::Ordering;
 fn ap_reconstructs_and_reports_history() {
     let model = common::direct_model().unwrap();
     let object = SyntheticObject::resolution_target((16, 16)).unwrap();
-    let simulation = Simulator::ideal(model)
-        .object(object)
-        .simulate()
-        .unwrap();
+    let simulation = Simulator::ideal(model).object(object).simulate().unwrap();
     let truth = simulation.ground_truth_object.clone();
     let problem =
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
@@ -85,19 +82,13 @@ fn reconstruction_runs_directly_from_lazy_measurements() {
     }
     let lazy = LazyMeasurementStack::from_image_files(&paths, Vec::new()).unwrap();
     let problem = ReconstructionProblem::new(lazy, simulation.reconstruction_model).unwrap();
-    assert_eq!(
-        problem.measurements.cached_frame_count(),
-        0
-    );
+    assert_eq!(problem.measurements.cached_frame_count(), 0);
     let result = AlternatingProjection::default()
         .iterations(1)
         .run(&problem)
         .unwrap();
     assert_eq!(result.runtime.completed_iterations, 1);
-    assert_eq!(
-        problem.measurements.cached_frame_count(),
-        1
-    );
+    assert_eq!(problem.measurements.cached_frame_count(), 1);
 }
 
 #[test]
@@ -221,6 +212,37 @@ fn fpie_loss_decreases_on_noiseless_data() {
 }
 
 #[test]
+fn multiplexed_admm_reports_finite_consensus_residuals() {
+    let model = common::direct_model()
+        .unwrap()
+        .with_multiplexing(vec![
+            vec![(0, 0.65), (1, 0.35)],
+            vec![(2, 0.25), (3, 0.30), (4, 0.45)],
+        ])
+        .unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let result = Admm::default()
+        .iterations(16)
+        .object_step(0.5)
+        .run(&problem)
+        .unwrap();
+    for record in &result.history.iterations {
+        assert!(record.admm_primal_residual_rms.is_some_and(f64::is_finite));
+        assert!(record.admm_dual_residual_rms.is_some_and(f64::is_finite));
+    }
+    let first = result.history.iterations.first().unwrap();
+    let last = result.history.iterations.last().unwrap();
+    assert!(last.admm_primal_residual_rms.unwrap() < first.admm_primal_residual_rms.unwrap());
+    assert!(last.admm_dual_residual_rms.unwrap() < first.admm_dual_residual_rms.unwrap());
+}
+
+#[test]
 fn admm_loss_decreases_on_noiseless_data() {
     let model = common::direct_model().unwrap();
     let simulation = Simulator::ideal(model)
@@ -239,6 +261,24 @@ fn admm_loss_decreases_on_noiseless_data() {
     assert!(
         result.history.iterations.last().unwrap().loss
             < result.history.iterations.first().unwrap().loss
+    );
+    let first = result.history.iterations.first().unwrap();
+    let last = result.history.iterations.last().unwrap();
+    assert!(
+        last.admm_primal_residual_rms.unwrap() < first.admm_primal_residual_rms.unwrap(),
+        "expected ADMM primal residual to decrease: {:?} -> {:?}",
+        first.admm_primal_residual_rms,
+        last.admm_primal_residual_rms
+    );
+    assert!(
+        last.admm_dual_residual_rms.unwrap() < first.admm_dual_residual_rms.unwrap(),
+        "expected ADMM dual residual to decrease: {:?} -> {:?}",
+        first.admm_dual_residual_rms,
+        last.admm_dual_residual_rms
+    );
+    assert_eq!(
+        result.diagnostics["final_admm_primal_residual_rms"],
+        last.admm_primal_residual_rms.unwrap()
     );
 }
 
@@ -364,10 +404,7 @@ fn admm_honors_masks_and_known_sensor_calibration() {
         ReconstructionProblem::new(clean, simulation.reconstruction_model.clone()).unwrap();
     let corrupted_problem =
         ReconstructionProblem::new(corrupted, simulation.reconstruction_model).unwrap();
-    let clean_result = Admm::default()
-        .iterations(4)
-        .run(&clean_problem)
-        .unwrap();
+    let clean_result = Admm::default().iterations(4).run(&clean_problem).unwrap();
     let corrupted_result = Admm::default()
         .iterations(4)
         .run(&corrupted_problem)
@@ -655,15 +692,31 @@ fn gradient_jointly_recovers_pupil_and_multiplexed_source_offsets() {
         FourierOffset::new(-0.13, -0.09),
         FourierOffset::new(0.08, -0.12),
     ];
-    let true_model = reconstruction_model
+    let mut true_model = reconstruction_model
         .clone()
         .with_subpixel_offsets(true_offsets.clone())
         .unwrap();
+    let shape = true_model.image_shape;
+    let radius_scale = (shape.0.min(shape.1) as f64 / 2.0).max(1.0);
+    for row in 0..shape.0 {
+        for column in 0..shape.1 {
+            let pixel = row * shape.1 + column;
+            if !true_model.pupil.support[pixel] {
+                continue;
+            }
+            let y = (row as f64 - shape.0 as f64 / 2.0) / radius_scale;
+            let x = (column as f64 - shape.1 as f64 / 2.0) / radius_scale;
+            let rho = x.hypot(y).min(1.0);
+            let theta = y.atan2(x);
+            let phase = 0.5 * rho * rho + 0.15 * rho * rho * (2.0 * theta).cos();
+            true_model.pupil.values.as_mut_slice()[pixel] *= Complex64::from_polar(1.0, phase);
+        }
+    }
+    true_model.validate().unwrap();
     let initial_pupil = reconstruction_model.pupil.clone();
     let simulation = Simulator::new(true_model)
         .reconstruction_model(reconstruction_model)
         .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
-        .aberration(AberrationModel::new().defocus(0.5).astigmatism(0.15))
         .simulate()
         .unwrap();
     let true_pupil = simulation.true_model.pupil.clone();
@@ -1107,6 +1160,335 @@ fn gradient_solver_supports_configurable_losses() {
 }
 
 #[test]
+fn object_and_pupil_gradients_match_finite_differences_for_all_losses_and_masks() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let mut mask = vec![1; simulation.measurements.frame_len()];
+    for pixel in (0..mask.len()).step_by(5) {
+        mask[pixel] = 0;
+    }
+    let measurements = simulation.measurements.with_masks(mask).unwrap();
+    let problem =
+        ReconstructionProblem::new(measurements, simulation.reconstruction_model).unwrap();
+    let mut initial_object = simulation.ground_truth_object;
+    for (index, value) in initial_object.as_mut_slice().iter_mut().enumerate() {
+        let amplitude = 0.78 + 0.03 * (index % 7) as f64 / 7.0;
+        let phase = 0.08 * ((index % 11) as f64 / 11.0 - 0.5);
+        *value *= Complex64::from_polar(amplitude, phase);
+    }
+    let initial = ReconstructionState::from_object(&problem, initial_object).unwrap();
+    let frame = 2;
+    let object_direction = complex_test_direction(initial.object_spectrum.len(), 0.07);
+    let pupil_direction = complex_test_direction(initial.pupil.values.len(), 0.05);
+
+    for loss_type in [
+        LossType::AmplitudeMse,
+        LossType::IntensityMse,
+        LossType::PoissonNegativeLogLikelihood,
+        LossType::HuberAmplitude,
+    ] {
+        let mut state = initial.clone();
+        let object_before = state.object_spectrum.clone();
+        let pupil_before = state.pupil.clone();
+        let mut algorithm = GradientDescent::default()
+            .object_step(1.0)
+            .loss_type(loss_type)
+            .recover_pupil(true)
+            .pupil_step(1.0)
+            .constrain_pupil_support(false)
+            .parallel_workers(1);
+        algorithm
+            .step(&problem, &mut state, &Batch::single(frame), 0)
+            .unwrap();
+
+        let object_denominator = pupil_before
+            .values
+            .as_slice()
+            .iter()
+            .map(|value| value.norm_sqr())
+            .fold(0.0, f64::max)
+            .max(algorithm.epsilon)
+            + algorithm.epsilon;
+        let object_gradient: Vec<_> = object_before
+            .as_slice()
+            .iter()
+            .zip(state.object_spectrum.as_slice())
+            .map(|(&before, &after)| (before - after) * object_denominator)
+            .collect();
+        let analytical_object = complex_directional_derivative(&object_gradient, &object_direction);
+        let numerical_object = finite_difference_object_loss(
+            &problem,
+            &object_before,
+            &pupil_before,
+            frame,
+            loss_type,
+            &object_direction,
+            1e-6,
+        );
+        assert_derivative_close(
+            &format!("{loss_type:?} object"),
+            analytical_object,
+            numerical_object,
+            2e-5,
+        );
+
+        let mut patch = vec![Complex64::default(); pupil_before.values.len()];
+        problem
+            .model
+            .extract_patch(&object_before, frame, &mut patch)
+            .unwrap();
+        let pupil_denominator = patch
+            .iter()
+            .map(|value| value.norm_sqr())
+            .fold(0.0, f64::max)
+            .max(algorithm.epsilon)
+            + algorithm.epsilon;
+        let pupil_gradient: Vec<_> = pupil_before
+            .values
+            .as_slice()
+            .iter()
+            .zip(state.pupil.values.as_slice())
+            .map(|(&before, &after)| (before - after) * pupil_denominator)
+            .collect();
+        let analytical_pupil = complex_directional_derivative(&pupil_gradient, &pupil_direction);
+        let numerical_pupil = finite_difference_pupil_loss(
+            &problem,
+            &object_before,
+            &pupil_before,
+            frame,
+            loss_type,
+            &pupil_direction,
+            1e-6,
+        );
+        assert_derivative_close(
+            &format!("{loss_type:?} pupil"),
+            analytical_pupil,
+            numerical_pupil,
+            2e-5,
+        );
+    }
+}
+
+#[test]
+fn illumination_gradients_match_direct_loss_differences_for_all_losses_and_masks() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let mut mask = vec![1; simulation.measurements.frame_len()];
+    for pixel in (1..mask.len()).step_by(6) {
+        mask[pixel] = 0;
+    }
+    let measurements = simulation.measurements.with_masks(mask).unwrap();
+    let problem =
+        ReconstructionProblem::new(measurements, simulation.reconstruction_model).unwrap();
+    let mut initial_object = simulation.ground_truth_object;
+    for (index, value) in initial_object.as_mut_slice().iter_mut().enumerate() {
+        *value *= Complex64::from_polar(0.82, 0.04 * (index % 9) as f64 / 9.0);
+    }
+    let initial = ReconstructionState::from_object(&problem, initial_object).unwrap();
+    let frame = 2;
+    let distance = 1e-4;
+
+    for loss_type in [
+        LossType::AmplitudeMse,
+        LossType::IntensityMse,
+        LossType::PoissonNegativeLogLikelihood,
+        LossType::HuberAmplitude,
+    ] {
+        let mut state = initial.clone();
+        let object = state.object_spectrum.clone();
+        let pupil = state.pupil.clone();
+        let mut algorithm = GradientDescent::default()
+            .object_step(1e-12)
+            .loss_type(loss_type)
+            .recover_illumination(true)
+            .illumination_step(1e-12)
+            .illumination_finite_difference(distance)
+            .parallel_workers(1);
+        algorithm
+            .step(&problem, &mut state, &Batch::single(frame), 0)
+            .unwrap();
+        let analytical = state.scratch.illumination_gradient[frame];
+        let numerical_row = finite_difference_illumination_loss(
+            &problem,
+            &object,
+            &pupil,
+            frame,
+            loss_type,
+            FourierOffset::new(distance, 0.0),
+        );
+        let numerical_column = finite_difference_illumination_loss(
+            &problem,
+            &object,
+            &pupil,
+            frame,
+            loss_type,
+            FourierOffset::new(0.0, distance),
+        );
+        assert_derivative_close(
+            &format!("{loss_type:?} illumination row"),
+            analytical.0,
+            numerical_row,
+            5e-3,
+        );
+        assert_derivative_close(
+            &format!("{loss_type:?} illumination column"),
+            analytical.1,
+            numerical_column,
+            5e-3,
+        );
+    }
+}
+
+fn complex_test_direction(len: usize, scale: f64) -> Vec<Complex64> {
+    (0..len)
+        .map(|index| {
+            let real = (index % 13) as f64 / 13.0 - 0.5;
+            let imaginary = (index % 17) as f64 / 17.0 - 0.5;
+            Complex64::new(scale * real, scale * imaginary)
+        })
+        .collect()
+}
+
+fn complex_directional_derivative(gradient: &[Complex64], direction: &[Complex64]) -> f64 {
+    2.0 * gradient
+        .iter()
+        .zip(direction)
+        .map(|(&gradient, &direction)| (gradient.conj() * direction).re)
+        .sum::<f64>()
+}
+
+fn finite_difference_object_loss<M: MeasurementRead>(
+    problem: &ReconstructionProblem<M>,
+    object: &Array2<Complex64>,
+    pupil: &Pupil,
+    frame: usize,
+    loss_type: LossType,
+    direction: &[Complex64],
+    distance: f64,
+) -> f64 {
+    let mut plus = object.clone();
+    let mut minus = object.clone();
+    for ((plus, minus), &direction) in plus
+        .as_mut_slice()
+        .iter_mut()
+        .zip(minus.as_mut_slice())
+        .zip(direction)
+    {
+        *plus += distance * direction;
+        *minus -= distance * direction;
+    }
+    (masked_frame_loss(problem, &plus, pupil, frame, loss_type)
+        - masked_frame_loss(problem, &minus, pupil, frame, loss_type))
+        / (2.0 * distance)
+}
+
+fn finite_difference_pupil_loss<M: MeasurementRead>(
+    problem: &ReconstructionProblem<M>,
+    object: &Array2<Complex64>,
+    pupil: &Pupil,
+    frame: usize,
+    loss_type: LossType,
+    direction: &[Complex64],
+    distance: f64,
+) -> f64 {
+    let mut plus = pupil.clone();
+    let mut minus = pupil.clone();
+    for ((plus, minus), &direction) in plus
+        .values
+        .as_mut_slice()
+        .iter_mut()
+        .zip(minus.values.as_mut_slice())
+        .zip(direction)
+    {
+        *plus += distance * direction;
+        *minus -= distance * direction;
+    }
+    (masked_frame_loss(problem, object, &plus, frame, loss_type)
+        - masked_frame_loss(problem, object, &minus, frame, loss_type))
+        / (2.0 * distance)
+}
+
+fn finite_difference_illumination_loss(
+    problem: &ReconstructionProblem<fpm_rs::measurements::MeasurementStack>,
+    object: &Array2<Complex64>,
+    pupil: &Pupil,
+    source: usize,
+    loss_type: LossType,
+    displacement: FourierOffset,
+) -> f64 {
+    let offsets: Vec<_> = (0..problem.model.source_count())
+        .map(|index| problem.model.source_offset(index).unwrap())
+        .collect();
+    let mut plus_offsets = offsets.clone();
+    let mut minus_offsets = offsets;
+    plus_offsets[source].row += displacement.row;
+    plus_offsets[source].column += displacement.column;
+    minus_offsets[source].row -= displacement.row;
+    minus_offsets[source].column -= displacement.column;
+    let plus_problem = ReconstructionProblem::new(
+        problem.measurements.clone(),
+        problem
+            .model
+            .clone()
+            .with_subpixel_offsets(plus_offsets)
+            .unwrap(),
+    )
+    .unwrap();
+    let minus_problem = ReconstructionProblem::new(
+        problem.measurements.clone(),
+        problem
+            .model
+            .clone()
+            .with_subpixel_offsets(minus_offsets)
+            .unwrap(),
+    )
+    .unwrap();
+    let distance = displacement.row.abs() + displacement.column.abs();
+    (masked_frame_loss(&plus_problem, object, pupil, source, loss_type)
+        - masked_frame_loss(&minus_problem, object, pupil, source, loss_type))
+        / (2.0 * distance)
+}
+
+fn masked_frame_loss<M: MeasurementRead>(
+    problem: &ReconstructionProblem<M>,
+    object: &Array2<Complex64>,
+    pupil: &Pupil,
+    frame: usize,
+    loss_type: LossType,
+) -> f64 {
+    let predicted = ForwardModel::new(&problem.model)
+        .unwrap()
+        .forward_intensity(object, pupil, frame)
+        .unwrap();
+    let measured = problem.measurements.frame(frame).unwrap();
+    let mask = problem.measurements.frame_mask(frame).unwrap();
+    let mut valid_prediction = Vec::new();
+    let mut valid_measurement = Vec::new();
+    for pixel in 0..predicted.len() {
+        if mask.is_some_and(|mask| mask[pixel] == 0) {
+            continue;
+        }
+        valid_prediction.push(predicted.as_slice()[pixel]);
+        valid_measurement.push(measured[pixel]);
+    }
+    loss(&valid_prediction, &valid_measurement, loss_type).unwrap()
+}
+
+fn assert_derivative_close(label: &str, analytical: f64, numerical: f64, relative: f64) {
+    let scale = analytical.abs().max(numerical.abs()).max(1e-10);
+    assert!(
+        (analytical - numerical).abs() <= relative * scale,
+        "{label} derivative mismatch: analytical={analytical:.12e}, numerical={numerical:.12e}"
+    );
+}
+
+#[test]
 fn object_tv_regularization_reduces_complex_variation_across_batch_sizes() {
     let model = common::direct_model().unwrap();
     let simulation = Simulator::ideal(model)
@@ -1249,10 +1631,7 @@ fn gradient_loss_is_invariant_to_known_linear_camera_response() {
 fn epry_runs_joint_object_pupil_updates() {
     let model = common::direct_model().unwrap();
     let object = SyntheticObject::phase_disk((16, 16), 4.5, 0.8).unwrap();
-    let simulation = Simulator::ideal(model)
-        .object(object)
-        .simulate()
-        .unwrap();
+    let simulation = Simulator::ideal(model).object(object).simulate().unwrap();
     let truth = simulation.ground_truth_object.clone();
     let problem =
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
@@ -1302,7 +1681,6 @@ fn camera_counts_reconstruct_in_compiled_sensor_units() {
                 .offset_counts(5.0)
                 .quantize(false),
         )
-        .noise(NoiseModel::None)
         .simulate()
         .unwrap();
     assert_eq!(
@@ -1469,30 +1847,39 @@ fn invalid_algorithm_options_fail_before_iteration() {
 
 #[test]
 fn epry_reduces_known_pupil_phase_error() {
-    let optics = Optics {
+    let assumed_optics = Optics {
         wavelength: 532e-9,
         objective_na: 0.10,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
         medium_index: 1.0,
-        defocus: None,
-        initial_pupil_aberration: None,
+        defocus_distance: None,
+        pupil_aberration: None,
+    };
+    let true_optics = Optics {
+        defocus_distance: Some(-24e-6),
+        pupil_aberration: Some(PupilAberration {
+            astigmatism: 0.2,
+            ..PupilAberration::default()
+        }),
+        ..assumed_optics.clone()
     };
     let leds = LEDArray::new()
         .grid_shape((3, 3))
         .pitch(4e-3)
         .distance(90e-3)
         .center((1.0, 1.0));
-    let initial_model =
-        ImagePlaneModel::from_experiment(&optics, &leds, (16, 16), (32, 32)).unwrap();
-    let simulation = Simulator::new(initial_model.clone())
+    let reconstruction_model =
+        ImagePlaneModel::from_experiment(&assumed_optics, &leds, (16, 16), (32, 32)).unwrap();
+    let true_model =
+        ImagePlaneModel::from_experiment(&true_optics, &leds, (16, 16), (32, 32)).unwrap();
+    let simulation = Simulator::new(true_model)
         .object(SyntheticObject::phase_disk((32, 32), 8.0, 0.9).unwrap())
-        .aberration(AberrationModel::new().defocus(0.7).astigmatism(0.2))
-        .reconstruction_model(initial_model.clone())
+        .reconstruction_model(reconstruction_model.clone())
         .simulate()
         .unwrap();
     let initial_error = pupil_phase_rmse(
-        initial_model.pupil.values.as_slice(),
+        reconstruction_model.pupil.values.as_slice(),
         simulation.true_model.pupil.values.as_slice(),
         &simulation.true_model.pupil.support,
     );

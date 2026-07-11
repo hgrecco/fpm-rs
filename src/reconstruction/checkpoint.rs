@@ -159,6 +159,12 @@ impl ReconstructionCheckpoint {
                     || !record.loss.is_finite()
                     || !record.elapsed_seconds.is_finite()
                     || record.elapsed_seconds < 0.0
+                    || record
+                        .admm_primal_residual_rms
+                        .is_some_and(|value| !value.is_finite() || value < 0.0)
+                    || record
+                        .admm_dual_residual_rms
+                        .is_some_and(|value| !value.is_finite() || value < 0.0)
             })
             || records
                 .windows(2)
@@ -231,9 +237,9 @@ impl ReconstructionCheckpoint {
                 })
             },
         )?;
-        let auxiliary_len = image_len.checked_mul(mode_count).ok_or_else(|| {
-            Error::InvalidShape("checkpoint auxiliary length overflows".into())
-        })?;
+        let auxiliary_len = image_len
+            .checked_mul(mode_count)
+            .ok_or_else(|| Error::InvalidShape("checkpoint auxiliary length overflows".into()))?;
         if self
             .algorithm_auxiliary
             .as_ref()

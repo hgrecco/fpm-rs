@@ -15,18 +15,53 @@ use crate::{
 
 use super::ReconstructionAlgorithm;
 
-/// Linearized ADMM with a joint amplitude proximal for ordinary or
-/// incoherently multiplexed image-plane FPM data.
+/// Linearized ADMM reconstruction for Fourier ptychographic microscopy.
 ///
-/// Auxiliary and scaled-dual fields are stored per measured-frame source mode
-/// and retained in [`ReconstructionState`] for exact checkpoint resumption.
+/// # Method
+///
+/// The algorithm splits each predicted detector field from the shared object
+/// by introducing an auxiliary field and a scaled dual variable. Each step
+/// alternates among a measurement-amplitude proximal update of the auxiliary
+/// fields, a pupil-preconditioned linearized update of the common object
+/// spectrum, and a scaled-dual update that drives the auxiliary and predicted
+/// fields toward consensus. This separates the nonlinear measurement
+/// constraint from the overlapping Fourier-patch consistency constraint.
+///
+/// For incoherently multiplexed data, the amplitude proximal is joint across
+/// all source modes in a frame. Auxiliary and scaled-dual fields are stored per
+/// frame-source mode in [`ReconstructionState`] for exact checkpoint resumption.
+/// The fixed-pupil linearization and multiplexed proximal used here are crate
+/// adaptations of the reference ADMM-FPM formulation.
+///
+/// Each iteration reports detector-field RMS residuals. The primal residual is
+/// `r_k = A x_k - z_k`, evaluated after the linearized object update, and the
+/// dual residual is `s_k = rho (z_k - z_{k-1})`. Here `A x` denotes the
+/// concatenated per-mode detector fields, including each mode of a multiplexed
+/// frame. Masked pixels and zero-weight frames are excluded. These residuals
+/// diagnose consensus and auxiliary-field motion; the solver does not use them
+/// as stopping criteria.
+///
+/// # Reference
+///
+/// A. Wang, Z. Zhang, S. Wang, A. Pan, C. Ma, and B. Yao, “Fourier
+/// Ptychographic Microscopy via Alternating Direction Method of Multipliers,”
+/// *Cells* **11**(9), 1512 (2022),
+/// [doi:10.3390/cells11091512](https://doi.org/10.3390/cells11091512).
 #[derive(Clone, Debug)]
 pub struct Admm {
+    /// Number of complete passes through the acquisition schedule.
     pub iterations: usize,
+    /// Step size of the linearized, pupil-preconditioned object update.
     pub object_step: f64,
+    /// Positive augmented-Lagrangian penalty tying auxiliary fields to the
+    /// fields predicted by the shared object.
     pub penalty: f64,
+    /// Scaled-dual update relaxation in the inclusive range `0..=2`.
     pub dual_relaxation: f64,
+    /// Number of measured frames supplied to each reconstruction step; the
+    /// default processes every frame together.
     pub batch_size: usize,
+    /// Positive numerical floor used in normalizations and dark-field handling.
     pub epsilon: f64,
 }
 
@@ -252,6 +287,10 @@ impl Admm {
                     };
                     let auxiliary_value = (self.penalty * consensus + frame_weight * projected)
                         / (self.penalty + frame_weight);
+                    diagnostics.push_admm_dual_change(
+                        auxiliary_value - auxiliary.auxiliary_fields[index],
+                        self.penalty,
+                    );
                     auxiliary.auxiliary_fields[index] = auxiliary_value;
                     state.scratch.difference[pixel] =
                         auxiliary_value - auxiliary.dual_fields[index] - state.scratch.field[pixel];
@@ -312,8 +351,10 @@ impl Admm {
                         auxiliary.auxiliary_fields[index] = state.scratch.field[pixel];
                         auxiliary.dual_fields[index] = Complex64::default();
                     } else {
-                        auxiliary.dual_fields[index] += self.dual_relaxation
-                            * (state.scratch.field[pixel] - auxiliary.auxiliary_fields[index]);
+                        let primal_residual =
+                            state.scratch.field[pixel] - auxiliary.auxiliary_fields[index];
+                        diagnostics.push_admm_primal_residual(primal_residual);
+                        auxiliary.dual_fields[index] += self.dual_relaxation * primal_residual;
                     }
                 }
             }
@@ -327,9 +368,9 @@ pub(crate) fn admm_auxiliary_len(model: &ImagePlaneModel) -> Result<usize> {
         || Ok(model.frame_count()),
         |matrix| {
             matrix.iter().try_fold(0_usize, |count, row| {
-                count.checked_add(row.len()).ok_or_else(|| {
-                    Error::InvalidShape("ADMM source mode count overflows".into())
-                })
+                count
+                    .checked_add(row.len())
+                    .ok_or_else(|| Error::InvalidShape("ADMM source mode count overflows".into()))
             })
         },
     )?;

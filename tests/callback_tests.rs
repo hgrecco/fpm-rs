@@ -78,7 +78,10 @@ impl Callback for FrameRecorder {
 impl Callback for StartResidualProbe {
     fn requires_for(&self, hook: CallbackHook, _iteration: usize) -> Vec<DiagnosticRequest> {
         if hook == CallbackHook::Start {
-            vec![DiagnosticRequest::ResidualImages]
+            vec![
+                DiagnosticRequest::ResidualImages,
+                DiagnosticRequest::PerFrameError,
+            ]
         } else {
             Vec::new()
         }
@@ -87,6 +90,10 @@ impl Callback for StartResidualProbe {
     fn on_start(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
         assert_eq!(
             context.diagnostics.residual_images.as_ref().map(Vec::len),
+            Some(context.model.frame_count())
+        );
+        assert_eq!(
+            context.diagnostics.per_frame_error.as_ref().map(Vec::len),
             Some(context.model.frame_count())
         );
         Ok(CallbackAction::Stop)
@@ -219,7 +226,7 @@ fn callback_forward_diagnostics_use_the_injected_backend() {
     assert!(result.runtime.stopped_early);
     assert_eq!(result.runtime.completed_iterations, 0);
     // Initialization and result construction each transform the high-resolution
-    // object; every requested residual contributes one low-resolution transform.
+    // object. Residual images and per-frame errors share one prediction pass.
     assert_eq!(calls.load(Ordering::Relaxed), frame_count + 2);
 }
 
