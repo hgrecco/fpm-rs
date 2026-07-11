@@ -29,7 +29,19 @@ class FpmIoError(FpmError): ...
 class SerializationError(FpmError): ...
 
 class PupilAberration:
-    def __init__(self, *, astigmatism: float = ..., coma: float = ..., spherical: float = ..., edge_apodization: float = ...) -> None: ...
+    """Direct radian weights for sampled pupil-polynomial terms.
+
+    All four coefficients default to zero. ``edge_apodization`` controls the
+    radial amplitude decay and is not a normalized Zernike coefficient.
+    """
+    def __init__(
+        self,
+        *,
+        astigmatism: float = 0.0,
+        coma: float = 0.0,
+        spherical: float = 0.0,
+        edge_apodization: float = 0.0,
+    ) -> None: ...
     @property
     def astigmatism(self) -> float: ...
     @property
@@ -40,7 +52,23 @@ class PupilAberration:
     def edge_apodization(self) -> float: ...
 
 class Optics:
-    def __init__(self, wavelength: float, objective_na: float, magnification: float, camera_pixel_size: float, *, medium_index: float = ..., defocus_distance: float | None = ..., pupil_aberration: PupilAberration | None = ...) -> None: ...
+    """Physical microscope parameters used to compile an image-plane model.
+
+    Wavelength, camera pixel size, and optional defocus distance are metres.
+    Numerical aperture, magnification, and medium index are dimensionless.
+    Invalid non-positive values raise ``InvalidParameterError``.
+    """
+    def __init__(
+        self,
+        wavelength: float,
+        objective_na: float,
+        magnification: float,
+        camera_pixel_size: float,
+        *,
+        medium_index: float = 1.0,
+        defocus_distance: float | None = None,
+        pupil_aberration: PupilAberration | None = None,
+    ) -> None: ...
     @property
     def wavelength(self) -> float: ...
     @property
@@ -57,24 +85,82 @@ class Optics:
     def object_pixel_size(self) -> float: ...
 
 class LEDArray:
-    def __init__(self, grid_shape: Shape2D, pitch: float, distance: float, center: tuple[float, float], *, wavelength_override: float | None = ..., illumination_order: Sequence[int] | None = ..., intensity_weights: Sequence[float] | None = ..., rotation_degrees: float = ...) -> None: ...
+    """Planar LED grid geometry.
+
+    ``pitch`` and ``distance`` are metres. ``center`` is expressed in grid
+    coordinates, and source order must match acquisition frame order.
+    """
+    def __init__(
+        self,
+        grid_shape: Shape2D,
+        pitch: float,
+        distance: float,
+        center: tuple[float, float],
+        *,
+        wavelength_override: float | None = None,
+        illumination_order: Sequence[int] | None = None,
+        intensity_weights: Sequence[float] | None = None,
+        rotation_degrees: float = 0.0,
+    ) -> None: ...
     @property
     def grid_shape(self) -> Shape2D: ...
     @property
     def source_count(self) -> int: ...
 
 class LEDSphere:
-    def __init__(self, angles: FloatArray, radius: float, *, center_offset: tuple[float, float, float] = ..., orientation_degrees: tuple[float, float, float] = ..., angular_corrections: FloatArray | None = ..., wavelength_override: float | None = ..., illumination_order: Sequence[int] | None = ..., intensity_weights: Sequence[float] | None = ...) -> None: ...
+    def __init__(
+        self,
+        angles: FloatArray,
+        radius: float,
+        *,
+        center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        orientation_degrees: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        angular_corrections: FloatArray | None = None,
+        wavelength_override: float | None = None,
+        illumination_order: Sequence[int] | None = None,
+        intensity_weights: Sequence[float] | None = None,
+    ) -> None: ...
     @property
     def source_count(self) -> int: ...
 
 class SphericalLEDArm:
-    def __init__(self, commanded_angles: FloatArray, arm_length: float, *, pivot_offset: tuple[float, float, float] = ..., orientation_degrees: tuple[float, float, float] = ..., theta_zero_degrees: float = ..., phi_zero_degrees: float = ..., theta_scale: float = ..., phi_scale: float = ..., elevation_axis_tilt_degrees: float = ..., theta_backlash_degrees: float = ..., phi_backlash_degrees: float = ..., wavelength_override: float | None = ..., intensity_weights: Sequence[float] | None = ...) -> None: ...
+    def __init__(
+        self,
+        commanded_angles: FloatArray,
+        arm_length: float,
+        *,
+        pivot_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        orientation_degrees: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        theta_zero_degrees: float = 0.0,
+        phi_zero_degrees: float = 0.0,
+        theta_scale: float = 1.0,
+        phi_scale: float = 1.0,
+        elevation_axis_tilt_degrees: float = 0.0,
+        theta_backlash_degrees: float = 0.0,
+        phi_backlash_degrees: float = 0.0,
+        wavelength_override: float | None = None,
+        intensity_weights: Sequence[float] | None = None,
+    ) -> None: ...
     @property
     def source_count(self) -> int: ...
 
 class RotatingLEDArc:
-    def __init__(self, led_thetas: Sequence[float], rotation_angles: Sequence[float], radius: float, *, axis_origin_offset: tuple[float, float, float] = ..., axis_tilt_degrees: tuple[float, float] = ..., led_angular_corrections: FloatArray | None = ..., led_radial_offsets: Sequence[float] | None = ..., rotation_zero_degrees: float = ..., rotation_scale: float = ..., rotation_backlash_degrees: float = ..., wavelength_override: float | None = ..., led_intensity_weights: Sequence[float] | None = ...) -> None: ...
+    def __init__(
+        self,
+        led_thetas: Sequence[float],
+        rotation_angles: Sequence[float],
+        radius: float,
+        *,
+        axis_origin_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        axis_tilt_degrees: tuple[float, float] = (0.0, 0.0),
+        led_angular_corrections: FloatArray | None = None,
+        led_radial_offsets: Sequence[float] | None = None,
+        rotation_zero_degrees: float = 0.0,
+        rotation_scale: float = 1.0,
+        rotation_backlash_degrees: float = 0.0,
+        wavelength_override: float | None = None,
+        led_intensity_weights: Sequence[float] | None = None,
+    ) -> None: ...
     @property
     def led_count(self) -> int: ...
     @property
@@ -100,41 +186,83 @@ class CodedIllumination:
     def frame_count(self) -> int: ...
 
 class CameraModel:
-    def __init__(self, *, photons_per_pixel: float = ..., gain_counts_per_electron: float = ..., offset_counts: float = ..., read_noise_electrons: float = ..., dark_current_electrons: float = ..., shot_noise: bool = ..., pixel_sensitivity: FloatArray | None = ..., bit_depth: int | None = ..., saturation_counts: float | None = ..., quantize: bool = ..., bad_pixels: Sequence[int] = ..., bad_pixel_value_counts: float | None = ...) -> None: ...
+    """Detector response and acquisition-noise model.
+
+    Sensitivity maps are float64 arrays with detector ``(height, width)``.
+    Counts and electron quantities use the units stated by their names. The
+    default bit depth is 16; detector simulation runs in Rust without the GIL.
+    """
+    def __init__(
+        self,
+        *,
+        photons_per_pixel: float = 1000.0,
+        gain_counts_per_electron: float = 1.0,
+        offset_counts: float = 0.0,
+        read_noise_electrons: float = 0.0,
+        dark_current_electrons: float = 0.0,
+        shot_noise: bool = False,
+        pixel_sensitivity: FloatArray | None = None,
+        bit_depth: int | None = 16,
+        saturation_counts: float | None = None,
+        quantize: bool = True,
+        bad_pixels: Sequence[int] = (),
+        bad_pixel_value_counts: float | None = None,
+    ) -> None: ...
     @staticmethod
     def ideal() -> CameraModel: ...
 
 class IlluminationAcquisitionErrors:
-    def __init__(self, *, frame_gain_relative_std: float = ..., missing_frames: Sequence[int] = ..., source_permutation: Sequence[int] | None = ...) -> None: ...
+    def __init__(
+        self,
+        *,
+        frame_gain_relative_std: float = 0.0,
+        missing_frames: Sequence[int] = (),
+        source_permutation: Sequence[int] | None = None,
+    ) -> None: ...
 
 class SyntheticObject:
+    """Rust-owned complex128 object field shaped ``(height, width)``."""
     def __init__(self, field: ComplexArray) -> None: ...
     @staticmethod
-    def constant(shape: Shape2D, amplitude: float = ..., phase: float = ...) -> SyntheticObject: ...
+    def constant(
+        shape: Shape2D, amplitude: float = 1.0, phase: float = 0.0
+    ) -> SyntheticObject: ...
     @staticmethod
     def amplitude_only(amplitude: FloatArray) -> SyntheticObject: ...
     @staticmethod
     def phase_only(phase: FloatArray) -> SyntheticObject: ...
     @staticmethod
-    def from_amplitude_phase(amplitude: FloatArray, phase: FloatArray) -> SyntheticObject: ...
+    def from_amplitude_phase(
+        amplitude: FloatArray, phase: FloatArray
+    ) -> SyntheticObject: ...
     @staticmethod
     def from_amplitude_image(path: Path) -> SyntheticObject: ...
     @staticmethod
-    def from_amplitude_phase_images(amplitude_path: Path, phase_path: Path, phase_extent: float) -> SyntheticObject: ...
+    def from_amplitude_phase_images(
+        amplitude_path: Path, phase_path: Path, phase_extent: float
+    ) -> SyntheticObject: ...
     @staticmethod
-    def phase_disk(shape: Shape2D, radius_pixels: float, phase_shift: float) -> SyntheticObject: ...
+    def phase_disk(
+        shape: Shape2D, radius_pixels: float, phase_shift: float
+    ) -> SyntheticObject: ...
     @staticmethod
     def siemens_star(shape: Shape2D, spokes: int) -> SyntheticObject: ...
     @staticmethod
     def resolution_target(shape: Shape2D) -> SyntheticObject: ...
     @staticmethod
-    def random_phase(shape: Shape2D, standard_deviation: float, seed: int) -> SyntheticObject: ...
+    def random_phase(
+        shape: Shape2D, standard_deviation: float, seed: int
+    ) -> SyntheticObject: ...
     @staticmethod
-    def particle_field(shape: Shape2D, particles: int, seed: int) -> SyntheticObject: ...
+    def particle_field(
+        shape: Shape2D, particles: int, seed: int
+    ) -> SyntheticObject: ...
     @staticmethod
     def mixed_test_pattern(shape: Shape2D) -> SyntheticObject: ...
     @staticmethod
-    def biological_like(shape: Shape2D, features: int, seed: int) -> SyntheticObject: ...
+    def biological_like(
+        shape: Shape2D, features: int, seed: int
+    ) -> SyntheticObject: ...
     @property
     def field(self) -> ComplexArray: ...
     @property
@@ -143,6 +271,11 @@ class SyntheticObject:
     def label(self) -> str | None: ...
 
 class ImagePlaneModel:
+    """Compiled pupil, Fourier crops, sampling, and frame/source weights.
+
+    Returned arrays are NumPy copies/views of immutable compiled model data.
+    Shapes use ``(height, width)`` and k-vectors use radians per metre.
+    """
     @property
     def image_shape(self) -> Shape2D: ...
     @property
@@ -162,12 +295,40 @@ class ImagePlaneModel:
     @property
     def frame_gains(self) -> FloatArray | None: ...
 
-Illumination: TypeAlias = LEDArray | LEDSphere | SphericalLEDArm | RotatingLEDArc | AngleList | KVectorList | CodedIllumination
-def compile_model(optics: Optics, illumination: Illumination, image_shape: Shape2D, reconstruction_shape: Shape2D) -> ImagePlaneModel: ...
-def compile_camera_model(model: ImagePlaneModel, camera: CameraModel) -> ImagePlaneModel: ...
+Illumination: TypeAlias = (
+    LEDArray
+    | LEDSphere
+    | SphericalLEDArm
+    | RotatingLEDArc
+    | AngleList
+    | KVectorList
+    | CodedIllumination
+)
+
+def compile_model(
+    optics: Optics,
+    illumination: Illumination,
+    image_shape: Shape2D,
+    reconstruction_shape: Shape2D,
+) -> ImagePlaneModel: ...
+def compile_camera_model(
+    model: ImagePlaneModel, camera: CameraModel
+) -> ImagePlaneModel: ...
 
 class MeasurementStack:
-    def __init__(self, measurements: FloatArray, *, frame_weights: Sequence[float] | None = ..., masks: MaskArray | None = ...) -> None: ...
+    """Resident float64 intensity stack shaped ``(frames, height, width)``.
+
+    Python-owned input is copied once during construction. Optional masks use
+    uint8 values, and frame weights are float64. Invalid dimensions or
+    non-finite values raise a typed ``FpmError`` subclass.
+    """
+    def __init__(
+        self,
+        measurements: FloatArray,
+        *,
+        frame_weights: Sequence[float] | None = None,
+        masks: MaskArray | None = None,
+    ) -> None: ...
     @property
     def shape(self) -> tuple[int, int, int]: ...
     @property
@@ -195,10 +356,27 @@ class SimulationResult:
     @property
     def random_seed(self) -> int: ...
 
-def simulate(true_model: ImagePlaneModel, object: ComplexArray | SyntheticObject, *, reconstruction_model: ImagePlaneModel | None = ..., camera: CameraModel | None = ..., illumination_errors: IlluminationAcquisitionErrors | None = ..., seed: int = ...) -> SimulationResult: ...
+def simulate(
+    true_model: ImagePlaneModel,
+    object: ComplexArray | SyntheticObject,
+    *,
+    reconstruction_model: ImagePlaneModel | None = None,
+    camera: CameraModel | None = None,
+    illumination_errors: IlluminationAcquisitionErrors | None = None,
+    seed: int = 0,
+) -> SimulationResult: ...
 
 class ReconstructionProblem:
-    def __init__(self, measurements: FloatArray | MeasurementStack, model: ImagePlaneModel, *, frame_weights: Sequence[float] | None = ..., masks: MaskArray | None = ..., name: str | None = ...) -> None: ...
+    """Validated pairing of measurements and a compiled image-plane model."""
+    def __init__(
+        self,
+        measurements: FloatArray | MeasurementStack,
+        model: ImagePlaneModel,
+        *,
+        frame_weights: Sequence[float] | None = None,
+        masks: MaskArray | None = None,
+        name: str | None = None,
+    ) -> None: ...
     @property
     def name(self) -> str | None: ...
     @property
@@ -241,24 +419,34 @@ class ReconstructionResult:
     final_loss: float | None
 
 class ProgressLogger:
-    def __init__(self, *, every: int = ...) -> None: ...
+    def __init__(self, *, every: int = 1) -> None: ...
+
 class CheckpointEvery:
     def __init__(self, every: int, directory: Path) -> None: ...
+
 class CsvLogger:
     def __init__(self, path: Path) -> None: ...
+
 class StopOnPlateau:
-    def __init__(self, patience: int, *, minimum_improvement: float = ...) -> None: ...
+    def __init__(self, patience: int, *, minimum_improvement: float = 0.0) -> None: ...
+
 class SaveImageEvery:
     def __init__(self, every: int, directory: Path) -> None: ...
+
 class SavePupilEvery:
     def __init__(self, every: int, directory: Path) -> None: ...
+
 class SaveResidualsEvery:
     def __init__(self, every: int, directory: Path) -> None: ...
+
 class IterationCallback:
-    def __init__(self, callable: Callable[[Mapping[str, Any]], object], *, every: int = ...) -> None: ...
+    """Python iteration callback that reacquires the GIL for each invocation."""
+    def __init__(
+        self, callable: Callable[[Mapping[str, Any]], object], *, every: int = 1
+    ) -> None: ...
 
 class DiagnosticRecorder:
-    def __init__(self, mode: str = ..., *, every: int = ...) -> None: ...
+    def __init__(self, mode: str = "basic", *, every: int = 1) -> None: ...
     @property
     def mode(self) -> str: ...
     @property
@@ -266,10 +454,28 @@ class DiagnosticRecorder:
     def diagnostics(self) -> dict[str, Any]: ...
     def to_json(self, path: Path) -> None: ...
 
-Callback: TypeAlias = ProgressLogger | CheckpointEvery | CsvLogger | StopOnPlateau | SaveImageEvery | SavePupilEvery | SaveResidualsEvery | IterationCallback | DiagnosticRecorder
+Callback: TypeAlias = (
+    ProgressLogger
+    | CheckpointEvery
+    | CsvLogger
+    | StopOnPlateau
+    | SaveImageEvery
+    | SavePupilEvery
+    | SaveResidualsEvery
+    | IterationCallback
+    | DiagnosticRecorder
+)
 
 class _Algorithm:
-    def run(self, problem: ReconstructionProblem, *, callbacks: Iterable[Callback] | None = ..., resume_from: ReconstructionCheckpoint | None = ..., schedule: str = ..., schedule_seed: int = ...) -> ReconstructionResult: ...
+    def run(
+        self,
+        problem: ReconstructionProblem,
+        *,
+        callbacks: Iterable[Callback] | None = None,
+        resume_from: ReconstructionCheckpoint | None = None,
+        schedule: str = "sequential",
+        schedule_seed: int = 0,
+    ) -> ReconstructionResult: ...
 
 class AlternatingProjection(_Algorithm):
     """Alternating-projection FPM reconstruction.
@@ -289,7 +495,16 @@ class AlternatingProjection(_Algorithm):
     high-resolution Fourier ptychographic microscopy," Nature Photonics 7,
     739-745 (2013), doi:10.1038/nphoton.2013.187.
     """
-    def __init__(self, *, iterations: int = ..., object_step: float = ..., batch_size: int = ..., epsilon: float = ..., loss_type: str = ...) -> None: ...
+    def __init__(
+        self,
+        *,
+        iterations: int = 50,
+        object_step: float = 1.0,
+        batch_size: int = 1,
+        epsilon: float = 1e-10,
+        loss_type: str = "amplitude_mse",
+    ) -> None: ...
+
 class Fpie(_Algorithm):
     """Regularized ptychographic iterative engine adapted to FPM.
 
@@ -309,7 +524,17 @@ class Fpie(_Algorithm):
     ptychographical iterative engine," Optica 4(7), 736-745 (2017),
     doi:10.1364/OPTICA.4.000736.
     """
-    def __init__(self, *, iterations: int = ..., object_step: float = ..., stability: float = ..., batch_size: int = ..., epsilon: float = ..., loss_type: str = ...) -> None: ...
+    def __init__(
+        self,
+        *,
+        iterations: int = 50,
+        object_step: float = 0.8,
+        stability: float = 0.1,
+        batch_size: int = 1,
+        epsilon: float = 1e-10,
+        loss_type: str = "amplitude_mse",
+    ) -> None: ...
+
 class Epry(_Algorithm):
     """Embedded pupil-recovery reconstruction for FPM.
 
@@ -337,7 +562,25 @@ class Epry(_Algorithm):
     for Fourier ptychographic microscopy," Optics Express 22(5), 4960-4972
     (2014), doi:10.1364/OE.22.004960.
     """
-    def __init__(self, **kwargs: Any) -> None: ...
+    def __init__(
+        self,
+        *,
+        iterations: int = 100,
+        object_step: float = 0.8,
+        pupil_step: float = 0.1,
+        batch_size: int = 1,
+        recover_pupil: bool = True,
+        constrain_pupil_support: bool = True,
+        recover_frame_gains: bool = False,
+        gain_step: float = 0.2,
+        gain_bounds: tuple[float, float] = (1e-6, 1e6),
+        recover_background: bool = False,
+        background_step: float = 0.2,
+        background_bounds: tuple[float, float] = (0.0, 1e12),
+        epsilon: float = 1e-10,
+        loss_type: str = "amplitude_mse",
+    ) -> None: ...
+
 class Admm(_Algorithm):
     """Linearized ADMM reconstruction for FPM.
 
@@ -357,7 +600,17 @@ class Admm(_Algorithm):
     "Fourier Ptychographic Microscopy via Alternating Direction Method of
     Multipliers," Cells 11(9), 1512 (2022), doi:10.3390/cells11091512.
     """
-    def __init__(self, *, iterations: int = ..., object_step: float = ..., penalty: float = ..., dual_relaxation: float = ..., batch_size: int | None = ..., epsilon: float = ...) -> None: ...
+    def __init__(
+        self,
+        *,
+        iterations: int = 100,
+        object_step: float = 0.8,
+        penalty: float = 1.0,
+        dual_relaxation: float = 1.0,
+        batch_size: int | None = None,
+        epsilon: float = 1e-10,
+    ) -> None: ...
+
 class GradientDescent(_Algorithm):
     """Wirtinger-style loss-gradient reconstruction for Fourier ptychography.
 
@@ -388,4 +641,23 @@ class GradientDescent(_Algorithm):
     "Fourier ptychographic reconstruction using Wirtinger flow optimization,"
     Optics Express 23(4), 4856-4866 (2015), doi:10.1364/OE.23.004856.
     """
-    def __init__(self, **kwargs: Any) -> None: ...
+    def __init__(
+        self,
+        *,
+        iterations: int = 100,
+        object_step: float = 0.5,
+        batch_size: int = 1,
+        epsilon: float = 1e-10,
+        loss_type: str = "amplitude_mse",
+        recover_illumination: bool = False,
+        illumination_step: float = 0.1,
+        illumination_finite_difference: float = 0.05,
+        illumination_bounds: float = 1.0,
+        recover_pupil: bool = False,
+        pupil_step: float = 0.05,
+        constrain_pupil_support: bool = True,
+        object_tv: float = 0.0,
+        object_tv_epsilon: float = 1e-6,
+        pupil_smoothing: float = 0.0,
+        parallel_workers: int = 0,
+    ) -> None: ...
