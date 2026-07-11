@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Result, error::Error};
 
-use super::{LEDArray, Optics};
+use super::{LEDArray, LEDSphere, Optics, RotatingLEDArc, SphericalLEDArm};
 
 pub type SourceWeight = (usize, f64);
 pub type MultiplexingMatrix = Vec<Vec<SourceWeight>>;
@@ -91,7 +91,17 @@ pub enum Illumination {
     KVectors(Vec<KVector>),
     Angles(AngleList),
     LEDArray(LEDArray),
+    LEDSphere(LEDSphere),
+    SphericalLEDArm(SphericalLEDArm),
+    RotatingLEDArc(RotatingLEDArc),
     Coded(CodedIllumination),
+    /// Imported/calibrated source vectors with optional per-frame gains and
+    /// optional incoherent multiplexing rows.
+    Calibrated {
+        k_vectors: Vec<KVector>,
+        frame_gains: Option<Vec<f64>>,
+        frame_weights: Option<MultiplexingMatrix>,
+    },
 }
 
 impl IlluminationSource for Illumination {
@@ -103,13 +113,41 @@ impl IlluminationSource for Illumination {
             }
             Self::Angles(angles) => angles.k_vectors(optics),
             Self::LEDArray(array) => array.k_vectors(optics),
+            Self::LEDSphere(sphere) => sphere.k_vectors(optics),
+            Self::SphericalLEDArm(arm) => arm.k_vectors(optics),
+            Self::RotatingLEDArc(arc) => arc.k_vectors(optics),
             Self::Coded(coded) => coded.k_vectors(optics),
+            Self::Calibrated {
+                k_vectors,
+                frame_gains,
+                frame_weights,
+            } => {
+                validate_calibrated(
+                    k_vectors,
+                    frame_gains.as_deref(),
+                    frame_weights.as_deref(),
+                    optics,
+                )?;
+                Ok(k_vectors.clone())
+            }
         }
     }
 
     fn frame_gains(&self) -> Result<Option<Vec<f64>>> {
         match self {
             Self::LEDArray(array) => array.frame_gains(),
+            Self::LEDSphere(sphere) => sphere.frame_gains(),
+            Self::SphericalLEDArm(arm) => arm.frame_gains(),
+            Self::RotatingLEDArc(arc) => arc.frame_gains(),
+            Self::Calibrated {
+                k_vectors,
+                frame_gains,
+                frame_weights,
+            } => {
+                let frame_count = frame_weights.as_ref().map_or(k_vectors.len(), Vec::len);
+                validate_frame_gains(frame_gains.as_deref(), frame_count)?;
+                Ok(frame_gains.clone())
+            }
             Self::KVectors(_) | Self::Angles(_) | Self::Coded(_) => Ok(None),
         }
     }
@@ -117,7 +155,24 @@ impl IlluminationSource for Illumination {
     fn multiplexing_matrix(&self) -> Result<Option<MultiplexingMatrix>> {
         match self {
             Self::Coded(coded) => coded.multiplexing_matrix(),
-            Self::KVectors(_) | Self::Angles(_) | Self::LEDArray(_) => Ok(None),
+            Self::Calibrated {
+                k_vectors,
+                frame_gains,
+                frame_weights,
+            } => {
+                let frame_count = frame_weights.as_ref().map_or(k_vectors.len(), Vec::len);
+                validate_frame_gains(frame_gains.as_deref(), frame_count)?;
+                if let Some(matrix) = frame_weights {
+                    validate_multiplexing_matrix(matrix, k_vectors.len())?;
+                }
+                Ok(frame_weights.clone())
+            }
+            Self::KVectors(_)
+            | Self::Angles(_)
+            | Self::LEDArray(_)
+            | Self::LEDSphere(_)
+            | Self::SphericalLEDArm(_)
+            | Self::RotatingLEDArc(_) => Ok(None),
         }
     }
 }
@@ -164,7 +219,7 @@ fn validate_k_vectors(vectors: &[KVector], optics: &Optics) -> Result<()> {
     Ok(())
 }
 
-fn validate_multiplexing_matrix(matrix: &MultiplexingMatrix, source_count: usize) -> Result<()> {
+fn validate_multiplexing_matrix(matrix: &[Vec<SourceWeight>], source_count: usize) -> Result<()> {
     if matrix.is_empty() {
         return Err(Error::InvalidParameter {
             name: "frame_weights",
@@ -189,6 +244,37 @@ fn validate_multiplexing_matrix(matrix: &MultiplexingMatrix, source_count: usize
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_calibrated(
+    k_vectors: &[KVector],
+    frame_gains: Option<&[f64]>,
+    frame_weights: Option<&[Vec<SourceWeight>]>,
+    optics: &Optics,
+) -> Result<()> {
+    validate_k_vectors(k_vectors, optics)?;
+    if let Some(matrix) = frame_weights {
+        validate_multiplexing_matrix(matrix, k_vectors.len())?;
+    }
+    validate_frame_gains(
+        frame_gains,
+        frame_weights.map_or(k_vectors.len(), |matrix| matrix.len()),
+    )
+}
+
+fn validate_frame_gains(frame_gains: Option<&[f64]>, frame_count: usize) -> Result<()> {
+    if frame_gains.is_some_and(|gains| {
+        gains.len() != frame_count
+            || gains
+                .iter()
+                .any(|value| !value.is_finite() || *value <= 0.0)
+    }) {
+        return Err(Error::InvalidParameter {
+            name: "frame_gains",
+            reason: format!("must contain {frame_count} finite positive values"),
+        });
     }
     Ok(())
 }

@@ -7,4 +7,6 @@ pub use illumination::{
     SourceWeight,
 };
 pub use led_array::LEDArray;
-pub use optics::{Optics, PupilAberration};
+pub use optics::Optics;
+mod spherical;
+pub use spherical::{LEDSphere, RotatingLEDArc, SphericalLEDArm};
