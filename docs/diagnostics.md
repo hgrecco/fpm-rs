@@ -1,0 +1,128 @@
+# Python diagnostics workflow
+
+Reconstruction diagnostics are collected by a Rust callback and returned to
+Python as a dictionary shaped like the Rust `ReconstructionDiagnostics` model.
+Recording does not invoke Python or acquire the GIL inside the reconstruction
+loop.
+
+## End-to-end report
+
+```python
+import fpm_rs as fpm
+
+recorder = fpm.DiagnosticRecorder("basic")
+result = algorithm.run(problem, callbacks=[recorder])
+
+diagnostics = recorder.diagnostics()
+fpm.diagnostics.make_diagnostic_report(
+    diagnostics,
+    output_dir="diagnostic_report",
+)
+```
+
+`result.diagnostics` remains the reconstruction result's small scalar summary.
+The structured recorder output is retrieved with `recorder.diagnostics()`.
+
+ADMM results additionally expose `result.admm_residual_history` as
+`(iteration, primal_rms, dual_rms)` tuples. The primal value is the RMS
+detector-field consensus residual `A x - z`; the dual value is the RMS auxiliary
+change `rho (z_k - z_{k-1})`. The final values are also available in
+`result.diagnostics` under `final_admm_primal_residual_rms` and
+`final_admm_dual_residual_rms`. Other algorithms return an empty residual
+history.
+
+The report writer creates plots only for sections present in the diagnostics.
+It always writes `summary.txt`. No intermediate JSON file is required.
+
+## Recorder modes
+
+| Mode | Iteration history | Fourier coverage | Frame summaries | Raw-stack statistics |
+| --- | --- | --- | --- | --- |
+| `minimal` | yes | no | no | no |
+| `basic` | yes | yes | no | no |
+| `debug` | yes | yes | yes | yes |
+| `simulation` | yes | yes | no | no |
+
+`basic` is the default. Frame summaries require an additional calibrated
+forward pass over the measurement stack at each recording interval, so they
+are restricted to `debug`. Object and pupil snapshots are disabled in every
+Python preset.
+
+Use `every` to reduce the recording cadence:
+
+```python
+recorder = fpm.DiagnosticRecorder("debug", every=5)
+```
+
+The recorder clears its previous values when a new reconstruction starts, so
+reusing an object produces diagnostics for the latest run rather than combining
+unrelated runs. Clones share that state: retain one clone for reading while one
+runner owns another, but do not install clones in simultaneous runs. The
+recorder deliberately recovers a poisoned internal lock as best-effort
+diagnostic state; the next run resets it before recording.
+
+## Individual plots
+
+The dictionary returned by the recorder can be passed directly to every plot.
+All plotting entry points now live under `fpm.plot`. Like
+`plot_reconstruction`, each function returns its Matplotlib figure and a
+dictionary of named axes:
+
+```python
+diagnostics = recorder.diagnostics()
+
+figure, axes = fpm.plot.plot_convergence(diagnostics)
+axes["loss"].set_title("Experiment convergence")
+```
+
+Reconstruction plots live in the same namespace:
+
+```python
+figure, axes = fpm.plot.plot_fourier_coverage(diagnostics)
+figure, axes = fpm.plot.plot_reconstruction(truth, result)
+```
+
+The plotting helpers only build figures. Save them explicitly when needed:
+
+```python
+figure, axes = fpm.plot.plot_frame_residuals(diagnostics)
+figure.savefig("diagnostic_report/frame_residuals.png", dpi=180, bbox_inches="tight")
+```
+
+Unavailable sections are skipped without error. Matplotlib is imported only
+when plotting is requested; install the `plot` optional dependency when using
+these functions. Direct callers own returned figures and should close them when
+finished. `make_diagnostic_report` saves and closes its figures automatically.
+
+## Optional JSON persistence
+
+JSON is optional and contains the same structured diagnostic model:
+
+```python
+recorder.to_json("diagnostics.json")
+
+diagnostics = fpm.diagnostics.load_diagnostics("diagnostics.json")
+fpm.diagnostics.make_diagnostic_report(
+    diagnostics,
+    output_dir="diagnostic_report_from_json",
+)
+```
+
+The report function also accepts the JSON path directly. Object and pupil
+snapshots are not exported.
+
+One maintained site tutorial and two focused repository notebooks provide the
+same workflow with inline plot display:
+
+- [`diagnostics_quickstart.ipynb`](tutorials/notebooks/diagnostics_quickstart.ipynb)
+  is the published tutorial for the lightweight `basic` recorder and overview plots.
+- `python/examples/diagnostics_debug.ipynb` focuses on debug-only frame and
+  raw-stack inspection.
+- `python/examples/diagnostics_plots.ipynb` demonstrates the individual
+  plotting helpers and axes customization.
+
+Each notebook displays figures inline and includes commented `savefig(...)`
+calls that can be uncommented when file export is desired.
+
+Launch the focused examples from the repository environment with
+`pixi run jupyter lab`.

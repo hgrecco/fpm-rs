@@ -53,4 +53,7 @@ descriptions.
 Known uniform camera response is deliberately not baked into
 `compiled_models.reconstruction_model`. Call
 `reconstruction_model_for_counts()` when constructing a problem directly from
-detector counts. `Simulator` applies the same camera compilation automatically.
+detector counts loaded from a serialized configuration. In contrast,
+`Simulator::simulate` returns a `SimulationResult.reconstruction_model` that has
+already been adjusted for the known linear camera response, so simulated detector
+counts can be used directly.

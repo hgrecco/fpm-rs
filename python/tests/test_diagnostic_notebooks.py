@@ -9,6 +9,15 @@ pytest.importorskip("IPython")
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
 
+ROOT = Path(__file__).parents[2]
+
+
+def notebook_path(name: str) -> Path:
+    tutorial = ROOT / "docs" / "tutorials" / "notebooks" / name
+    if tutorial.exists():
+        return tutorial
+    return ROOT / "python" / "examples" / name
+
 
 @pytest.mark.parametrize(
     ("notebook_name", "expected_plot_keys"),
@@ -45,8 +54,8 @@ def test_diagnostic_notebook_executes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    notebook_path = Path(__file__).parents[1] / "examples" / notebook_name
-    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    path = notebook_path(notebook_name)
+    notebook = json.loads(path.read_text(encoding="utf-8"))
     namespace = {"__name__": "__diagnostic_notebook_test__"}
     monkeypatch.chdir(tmp_path)
 
@@ -54,7 +63,7 @@ def test_diagnostic_notebook_executes(
         if cell["cell_type"] != "code":
             continue
         code = "".join(cell["source"])
-        exec(compile(code, f"{notebook_path}#cell-{index}", "exec"), namespace)
+        exec(compile(code, f"{path}#cell-{index}", "exec"), namespace)
 
     plot_results = namespace["plot_results"]
     assert expected_plot_keys <= set(plot_results)
@@ -76,8 +85,8 @@ def test_general_notebook_executes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    notebook_path = Path(__file__).parents[1] / "examples" / notebook_name
-    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    path = notebook_path(notebook_name)
+    notebook = json.loads(path.read_text(encoding="utf-8"))
     namespace = {"__name__": "__general_notebook_test__"}
     monkeypatch.chdir(tmp_path)
 
@@ -85,6 +94,6 @@ def test_general_notebook_executes(
         if cell["cell_type"] != "code":
             continue
         code = "".join(cell["source"])
-        exec(compile(code, f"{notebook_path}#cell-{index}", "exec"), namespace)
+        exec(compile(code, f"{path}#cell-{index}", "exec"), namespace)
 
     assert expected_variables <= set(namespace)

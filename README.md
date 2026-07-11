@@ -5,6 +5,10 @@ ptychographic microscopy**. Measurements are real-space intensity images acquire
 under different illumination angles; diffraction-plane ptychography is outside
 the crate's scope.
 
+**[Read the documentation](docs/index.md)** for installation, a Python-first
+quickstart, maintained tutorials, task guides, concepts, and generated Python
+and Rust API references.
+
 The main architectural boundary is:
 
 ```text
@@ -61,8 +65,8 @@ let optics = Optics {
     magnification: 4.0,
     camera_pixel_size: 6.5e-6,
     medium_index: 1.0,
-    defocus: None,
-    initial_pupil_aberration: None,
+    defocus_distance: None,
+    pupil_aberration: None,
 };
 let leds = LEDArray::new()
     .grid_shape((3, 3))
@@ -94,6 +98,37 @@ Run the complete example with:
 cargo run --example simulate_and_reconstruct
 ```
 
+### Python diagnostics
+
+Python diagnostics use the same Rust callback system as the reconstruction
+runner. The recorder remains accessible after the run because the Python object
+and runner callback share the underlying Rust state:
+
+```python
+recorder = fpm_rs.DiagnosticRecorder("basic")
+result = algorithm.run(problem, callbacks=[recorder])
+
+diagnostics = recorder.diagnostics()
+fpm_rs.diagnostics.make_diagnostic_report(
+    diagnostics,
+    output_dir="diagnostic_report",
+)
+```
+
+`minimal` records convergence history, `basic` adds Fourier coverage, and
+`debug` additionally records raw-stack and per-frame summaries. `simulation`
+currently matches `basic` because reconstruction problems do not retain ground
+truth. Plot rendering lives under `fpm_rs.plot`, while `fpm_rs.diagnostics`
+handles loading and report generation. JSON persistence is optional through
+`recorder.to_json(path)`. See the [diagnostics workflow](docs/diagnostics.md).
+[`diagnostics_quickstart.ipynb`](docs/tutorials/notebooks/diagnostics_quickstart.ipynb)
+teaches the lightweight `basic` recorder and the two overview plots.
+[`diagnostics_debug.ipynb`](python/examples/diagnostics_debug.ipynb) focuses on
+debug-only frame and raw-stack inspection. [`diagnostics_plots.ipynb`](python/examples/diagnostics_plots.ipynb)
+demonstrates calling the plotting helpers directly and customizing the returned
+Matplotlib axes. The notebooks show figures inline by default and include
+commented `savefig(...)` examples when you want to export them.
+
 ## Coordinate and normalization conventions
 
 - Arrays are row-major and shapes are `(height, width)`.
@@ -114,12 +149,17 @@ cargo run --example simulate_and_reconstruct
   to `[-π/2, π/2]`, and their combined transverse direction is validated.
 - An LED at lateral position `(x, y)` and axial distance `z` produces
   `k0 * (x, y) / sqrt(x² + y² + z²)`, where `k0 = 2πn/λ`.
+- Spherical coordinates use polar angle `theta` from positive `z` and azimuth
+  `phi` from positive `x` toward positive `y`.
 - `dkx = 2π / (width * object-plane pixel size)` and similarly for `dky`.
 - CPU FFTs normalize the forward transform by `1/N`; inverse transforms are
   unnormalized. This preserves constant-object amplitude when a high-resolution
   spectrum is cropped and inverse-transformed on a smaller grid.
 - The ideal pupil includes samples with transverse frequency
   `sqrt(kx² + ky²) <= 2π NA / λ`.
+- `PupilAberration` coefficients are direct radian weights for the sampled
+  radial-polynomial terms documented on `Optics` and `Pupil::circular`; they
+  are not normalized Zernike coefficients.
 
 `CoordinateConvention::CenteredPositiveK` records these choices in compiled
 models. Low-level model construction remains available for imported k-vectors,
@@ -127,21 +167,42 @@ simulations, and algorithm tests. `ImagePlaneModel::new` defaults to integer
 crops; use `with_subpixel_offsets` when low-level inputs include calibrated
 fractional source positions.
 
+`Illumination::Calibrated` represents imported k-vectors with optional
+per-frame gains and optional multiplexing rows. Dataset subsets use this variant
+to preserve calibrated model effects without inventing LED geometry.
+
 ## Modules
 
-- `experiment`: optional `Optics`, `LEDArray`, angle and direct-k descriptions.
+- `experiment`: optional `Optics`, planar `LEDArray`, fixed `LEDSphere`, moving
+  `SphericalLEDArm`, rotating `RotatingLEDArc`, angle, and direct-k descriptions.
 - `model`: sampling, pupil, Fourier crops, compiled model, shared forward model.
 - `measurements`: image-plane intensity stacks and preprocessing.
 - `algorithms`: alternating projection, Fpie, Epry, linearized ADMM, and
   loss-gradient reconstruction.
 - `reconstruction`: problem/state/result, schedules, batches, and runner.
 - `callbacks`: image output, CSV logging, checkpoints, progress, early stopping.
-- `simulation`: synthetic objects, aberrations, source mismatch, camera/noise,
+- `simulation`: synthetic objects, source mismatch, concrete camera response,
   and ground-truth metrics.
+- `datasets`: strict local bundle loading, registry discovery, verified
+  downloads, managed caching, and deterministic frame/pixel subsets.
 - `backend`: a small backend boundary and cached-plan `rustfft` CPU backend.
+- `benchmark`: generic single-case execution plus versioned CSV/JSON benchmark
+  records and reconstruction artifacts.
 
 The flat-buffer core and backend boundary allow later GPU-resident state and PyO3
 bindings without putting experimental metadata into algorithm update rules.
+
+Source-specific conversion lives outside this repository. The dataset registry
+can discover and download already-converted archives into a managed cache;
+local and registered acquisitions then use the same `DatasetLoader`. The
+format, registry, CLI, cache, and subset APIs are documented in
+[Datasets](docs/datasets.md) and specified by [dataset_spec.md](dataset_spec.md).
+
+Deterministic simulator presets and named benchmark profiles are documented in
+[Reconstruction benchmarks](docs/benchmarks.md). Run
+`cargo run --example benchmark_algorithms` for the offline smoke profile.
+Native manifests may include optional ground truth, valid-object masks,
+provenance, and measurement units.
 
 `Admm` uses an amplitude proximal operator, a preconditioned linearized object
 consensus update, and scaled dual variables. It honors masks, frame weights, known
@@ -223,8 +284,8 @@ parallel. FFT plans and backend objects remain shareable.
 For complete stacks, `ForwardModel::forward_intensity_stack_into` evaluates
 frames with scoped CPU workers while preserving `[frame][row][column]` output
 order and using one workspace per worker. `Simulator` uses the machine's
-available parallelism for optical prediction, then applies camera effects and
-seeded noise serially so reproducibility does not depend on worker count.
+available parallelism for optical prediction, then asks `CameraModel` to convert
+frames to counts serially so seeded detector noise is independent of worker count.
 
 Run the dependency-free forward benchmark with:
 
@@ -291,26 +352,40 @@ background. Its score is a measured-intensity proxy rather than a calibrated
 camera-noise model. `Runner` supplies the required measurements automatically;
 model-only calls to `FrameSchedule::order` retain sequential order for this mode.
 
-Simulation mismatch options include array shift/rotation/scale, per-source jitter,
-gain variation, missing sources, and source-order permutations. Missing sources
-remain in the stack as dark frames with zero reconstruction weight, preserving
-frame/model indexing. Camera simulation supports photon conversion, read noise,
-dark current, gain, offset, quantization, saturation, and deterministic bad pixels.
-`AberrationModel` supports defocus, astigmatism, coma, spherical aberration,
-pupil-edge apodization, and illumination-angle vignetting. Vignetting attenuates
-ordinary frame gains or individual multiplexed source weights, leaving the
-reconstruction model unchanged for calibration experiments.
-`SimulationResult` retains all of these configuration objects. Use
-`compare_with_problem` to add masked, normalized per-frame intensity residuals to
-the amplitude, phase, complex-field, Fourier, and pupil ground-truth metrics. When
-a true model is supplied, it also reports source-position RMSE in Fourier-grid
-pixels using the recovered illumination corrections.
+Geometric simulation mismatch is represented with separate concrete source
+descriptions. Compile the actual source geometry into the model passed to
+`Simulator::new`, compile the assumed geometry into the model passed to
+`reconstruction_model`, and let each `IlluminationSource` apply its own physical
+parameters. `IlluminationAcquisitionErrors` is limited to acquisition effects:
+relative frame-gain variation, failed frames, and source permutations. Failed
+frames remain in the stack as dark frames with zero reconstruction weight,
+preserving frame/model indexing. `CameraModel` owns pixel sensitivity, photon and
+electron conversion, shot and read noise, dark current, gain, offset, quantization,
+saturation, and deterministic bad pixels. Defocus distance, pupil aberration, and
+edge apodization are compiled through `Optics` into the model pupil. Aberration
+mismatch is represented by compiling separate true and reconstruction models.
+Illumination-angle transmission belongs in source intensity weights, ordinary
+frame gains, or multiplexed source weights rather than in the pupil model.
+The fixed-sphere placement/pose model and moving-arm kinematic error model are
+documented in [Spherical illumination geometries](docs/spherical-geometries.md).
+`SimulationResult` retains both compiled optical models and the acquisition
+configuration. Use `compare_with_problem` to add masked, normalized per-frame
+intensity residuals to the amplitude, phase, complex-field, Fourier, and pupil
+ground-truth metrics. When a true model is supplied, it also reports
+source-position RMSE in Fourier-grid pixels using the recovered illumination
+corrections.
 
-Known linear camera response is compiled into the returned reconstruction model:
-frame gains include photon conversion and electronic gain, while background
-includes dark current and offset. Digitized counts can therefore be passed
-directly to `ReconstructionProblem`; clipping, quantization, noise, flat-field
-errors, and bad pixels remain deliberate non-linear/model-mismatch effects.
+`Simulator::simulate` compiles known linear camera response into the returned
+reconstruction model: frame gains include photon conversion and electronic gain,
+while background includes dark current and offset. Digitized simulated counts can
+therefore be passed directly to `ReconstructionProblem`; clipping, quantization,
+noise, pixel-response variation, and bad pixels remain deliberate
+non-linear/model-mismatch effects. Serialized `SimulationConfiguration` keeps
+`compiled_models.reconstruction_model` as the strict optical model; use
+`reconstruction_model_for_counts()` when constructing a problem from detector
+counts loaded through that configuration path.
+Optical background belongs in the true and reconstruction models; detector dark
+current and electronic offset belong in `CameraModel`.
 
 Pupil metrics remove the best global complex scale because object and pupil share
 that ambiguity. Synthetic objects include amplitude-only and phase-only arrays,
@@ -348,11 +423,13 @@ with `materialize`. `with_cache_capacity` limits retained frame count;
 Correction images, masks, and metadata remain resident, and byte accounting does
 not include frame handles retained by callers after cache eviction.
 
-`MeasurementStack::from_manifest` loads a strict JSON manifest with ordered frame
-paths, illumination indices, exposures, weights, labels, and optional dark, flat,
-background, and mask images. Relative paths resolve against the manifest file.
+`MeasurementSpec` represents the strict JSON manifest. Its ordered `FrameSpec`
+entries contain paths, illumination indices, exposures, weights, and labels;
+optional dark, flat, background, and mask images use `ImageSet` where applicable.
+`PreprocessingConfig` holds the preprocessing flags. `MeasurementStack::from_manifest`
+loads the specification, resolving relative paths against the manifest file.
 Backgrounds and masks may be a single broadcast path or an array containing one
-path per frame. The manifest's preprocessing flags configure the returned stack;
+path per frame. The preprocessing flags configure the returned stack;
 call `apply_preprocessing()` explicitly to transform detector counts.
 See `cargo run --example load_measurement_manifest -- measurements.json` for the
 minimal loading workflow.
@@ -361,3 +438,74 @@ minimal loading workflow.
 `from_amplitude_phase_images` instead normalize grayscale values to physical
 amplitude and a user-selected phase range. Empty stacks, color images, mismatched
 dimensions, and invalid phase ranges return typed errors.
+
+## Supported toolchains
+
+The MSRV is Rust 1.97. Stable Rust is tested on Linux, macOS, and Windows;
+Python bindings support CPython 3.13 and 3.14. See the
+[configuration schema](docs/configuration-schema.md) and
+[API reference](docs/reference/index.md).
+
+## Python bindings
+
+The `fpm_rs` Python package requires Python 3.13 or newer and is built with
+PyO3/maturin. The Python layer exposes concrete configuration classes and NumPy
+arrays; simulation and reconstruction continue to execute in the Rust core and
+release the GIL. Image-backed synthetic-object loading, model compilation,
+checkpoint loading/saving, and diagnostic JSON export also detach while their
+Rust-owned work runs. NumPy measurement input is copied once while holding the
+GIL because the source buffer remains Python-owned; result arrays are likewise
+created with the GIL held, then reused by subsequent property access. Python
+iteration callbacks reacquire it only for the callback invocation.
+
+Create the Python 3.13 development environment and run its tests with:
+
+```sh
+pixi install -e py313
+pixi run -e py313 python-test
+```
+
+Launch Python or run a script through the build-aware task:
+
+```sh
+pixi run -e py313 python
+pixi run -e py313 python path/to/script.py
+```
+
+The task builds the native extension in place before starting Python. The pixi
+activation environment also places the in-tree `python/` package on
+`PYTHONPATH`, including for Jupyter.
+
+Python 3.14 has a separate validation environment:
+
+```sh
+pixi install -e py314
+pixi run -e py314 python-test
+```
+
+A minimal API flow is:
+
+```python
+import numpy as np
+import fpm_rs as fpm
+
+optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
+leds = fpm.LEDArray((3, 3), 4e-3, 90e-3, (1.0, 1.0))
+model = fpm.compile_model(optics, leds, (32, 32), (64, 64))
+simulation = fpm.simulate(model, np.ones((64, 64), dtype=np.complex128))
+problem = fpm.ReconstructionProblem(
+    simulation.measurements,
+    simulation.reconstruction_model,
+)
+result = fpm.AlternatingProjection(iterations=20).run(problem)
+```
+
+See `docs/tutorials/notebooks/quickstart.ipynb` for a notebook workflow,
+`docs/tutorials/notebooks/synthetic_objects_quickstart.ipynb` for a gallery of the
+Rust-backed synthetic object constructors, and `python/fpm_rs/__init__.pyi`
+for the typed public surface.
+
+## License
+
+Licensed under either the [Apache License 2.0](LICENSE-APACHE) or
+[MIT License](LICENSE-MIT), at your option.

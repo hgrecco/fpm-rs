@@ -1,0 +1,117 @@
+site_name: fpm-rs documentation
+site_description: Image-plane Fourier ptychographic microscopy reconstruction and simulation
+site_dir: site
+site_url: !ENV [MKDOCS_SITE_URL, ""]
+repo_url: !ENV [MKDOCS_REPO_URL, ""]
+repo_name: fpm-rs
+edit_uri: !ENV [MKDOCS_EDIT_URI, ""]
+hooks:
+  - scripts/mkdocs_hooks.py
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.tracking
+    - content.code.copy
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocs-jupyter:
+      include:
+        - docs/tutorials/notebooks/quickstart.ipynb
+        - docs/tutorials/notebooks/synthetic_objects_quickstart.ipynb
+        - docs/tutorials/notebooks/diagnostics_quickstart.ipynb
+      execute: false
+      include_source: true
+      allow_errors: false
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [target/docs-python-api]
+          inventories: []
+          options:
+            allow_inspection: false
+            docstring_style: numpy
+            docstring_options:
+              warn_unknown_params: false
+            heading_level: 2
+            filters: public
+            inherited_members: true
+            merge_init_into_class: true
+            members: true
+            show_attribute_values: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: false
+            show_signature_annotations: true
+            signature_crossrefs: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+watch:
+  - python/fpm_rs
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Concepts and conventions: concepts/core-concepts.md
+  - User guide:
+      - Reconstruction workflow: guides/reconstruction.md
+      - Measurements and acquisitions: guides/measurements.md
+      - Simulation: guides/simulation.md
+      - Diagnostics and callbacks: diagnostics.md
+      - Datasets: datasets.md
+      - Configuration schema: configuration-schema.md
+      - Spherical illumination geometries: spherical-geometries.md
+      - Troubleshooting: troubleshooting.md
+  - Examples:
+      - Overview: tutorials/index.md
+      - First reconstruction: tutorials/notebooks/quickstart.ipynb
+      - Synthetic objects: tutorials/notebooks/synthetic_objects_quickstart.ipynb
+      - Reconstruction diagnostics: tutorials/notebooks/diagnostics_quickstart.ipynb
+  - API reference:
+      - Overview: reference/index.md
+      - Python API:
+          - Package overview: reference/python/index.md
+          - Models, measurements, and simulation: reference/python/model-and-simulation.md
+          - Reconstruction and callbacks: reference/python/reconstruction.md
+          - Plotting and reports: reference/python/diagnostics.md
+      - Rust API: reference/rust.md
+  - Development:
+      - Contributor guide: development/index.md
+      - Benchmarks: benchmarks.md
+  - Project:
+      - Citation, license, and roadmap: project.md
