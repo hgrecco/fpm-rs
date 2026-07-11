@@ -1,29 +1,81 @@
 [package]
 name = "fpm-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Image-plane Fourier ptychographic microscopy reconstruction and simulation"
+license.workspace = true
+documentation = "https://docs.rs/fpm-rs"
+include = [
+    "/src/**",
+    "/benches/**",
+    "/examples/**",
+    "/tests/**",
+    "/docs/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/ROADMAP.md",
+]
+
+[workspace]
+members = ["python"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Image-plane Fourier ptychographic microscopy reconstruction and simulation"
+rust-version = "1.97"
 license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+approx = "0.5"
+csv = "1.3"
+flate2 = "1.1"
+fpm-rs = { path = "." }
+image = { version = "0.25", default-features = false, features = ["png", "tiff"] }
+md-5 = "0.10"
+num-complex = { version = "0.4", features = ["serde"] }
+numpy = "0.27"
+pyo3 = { version = "0.27", features = ["extension-module"] }
+rand = "0.9"
+rand_distr = "0.5"
+rustfft = "6.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }
+tempfile = "3"
+thiserror = "2"
+tiff = "0.11"
+ureq = { version = "3.3", default-features = false, features = ["rustls"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [lib]
 name = "fpm_rs"
 path = "src/lib.rs"
 
 [dependencies]
-csv = "1.3"
-image = { version = "0.25", default-features = false, features = ["png", "tiff"] }
-num-complex = { version = "0.4", features = ["serde"] }
-rand = "0.9"
-rand_distr = "0.5"
-rustfft = "6.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tiff = "0.11"
+csv.workspace = true
+flate2.workspace = true
+image.workspace = true
+md-5.workspace = true
+num-complex.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+rustfft.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tiff.workspace = true
+ureq.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-approx = "0.5"
-tempfile = "3"
+approx.workspace = true
+tempfile.workspace = true
 
 [[bench]]
 name = "forward_model"
@@ -32,3 +84,6 @@ harness = false
 [[bench]]
 name = "gradient_parallel"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

@@ -1,0 +1,15 @@
+[package]
+name = "fpm-rs-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+name = "_core"
+
+[dependencies]
+fpm-rs.workspace = true
+numpy.workspace = true
+pyo3.workspace = true
