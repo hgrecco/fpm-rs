@@ -1,0 +1,64 @@
+[workspace]
+name = "fpm-rs"
+version = "0.1.0"
+description = "Development and test environments for the fpm-rs Python bindings"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
+
+[environments]
+default = ["rust", "python", "pytest", "py313", "lint"]
+py313 = ["rust", "python", "pytest", "py313"]
+py314 = ["rust", "python", "pytest", "py314"]
+lint = ["rust", "lint"]
+
+[feature.rust.dependencies]
+rust = "==1.97"
+rust-src = "==1.97"
+
+[feature.rust.tasks]
+dataset = { cmd = "cargo run --example download_dataset --", env = { FPM_DATASETS_DIR = "target/public-datasets" } }
+regression-data = { cmd = "cargo run --example download_dataset -- download caltech_fpm_inr_siemens_r", env = { FPM_DATASETS_DIR = "target/public-datasets" } }
+regression-test = { cmd = "cargo test --test regression_tests -- --ignored", depends-on = ["regression-data"], env = { FPM_DATASETS_DIR = "target/public-datasets" } }
+
+[feature.python.dependencies]
+maturin = ">=1.9,<2"
+numpy = ">=2.1"
+pip = ">=24"
+jupyter = "*"
+matplotlib = "*"
+
+[feature.python.tasks]
+python-develop = "maturin develop --skip-install"
+python = { cmd = "python", depends-on = ["python-develop"] }
+jupyter = { cmd = "jupyter", depends-on = ["python-develop"] }
+python-wheel = "maturin build --release --out dist"
+
+[feature.pytest.dependencies]
+pytest = ">=8.3"
+
+[feature.pytest.tasks]
+python-test = { cmd = "pytest python/tests", depends-on = ["python-develop"] }
+
+[feature.py313.dependencies]
+python = "3.13.*"
+
+[feature.py314.dependencies]
+python = "3.14.*"
+
+[feature.lint.dependencies]
+prek = "*"
+ripgrep = "*"
+ruff = "*"
+tombi = ">=0.9.1"
+typos = "*"
+
+[feature.lint.tasks]
+lint = { cmd = "prek --all-files", description = "Run all configured pre-commit checks" }
+lint-toml = { cmd = "tombi lint", description = "Lint TOML files" }
+format-python = { cmd = "ruff format python", description = "Format Python files" }
+format-rust = { cmd = "cargo fmt --all", description = "Format Rust source files" }
+format-toml = { cmd = "tombi format", description = "Format TOML files" }
+typos = { cmd = "typos", description = "Check spelling" }
+
+[activation.env]
+PYTHONPATH = "$PIXI_PROJECT_ROOT/python"
