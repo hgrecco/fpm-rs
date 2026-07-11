@@ -1,6 +1,7 @@
 mod camera;
 mod illumination_acquisition_errors;
 mod metrics;
+pub mod presets;
 mod result;
 mod simulator;
 mod synthetic_object;
