@@ -3,16 +3,28 @@ mod support;
 use fpm_rs::{
     Result,
     algorithms::{Epry, ReconstructionAlgorithm},
+    experiment::PupilAberration,
+    model::ImagePlaneModel,
     reconstruction::ReconstructionProblem,
-    simulation::{AberrationModel, Simulator, SyntheticObject, compare_with_true_model},
+    simulation::{Simulator, SyntheticObject, compare_with_true_model},
 };
 
 fn main() -> Result<()> {
-    let initial_model = support::experimental_model()?;
-    let simulation = Simulator::new(initial_model.clone())
+    let (assumed_optics, illumination) = support::experimental_setup();
+    let true_optics = fpm_rs::experiment::Optics {
+        defocus_distance: Some(-24e-6),
+        pupil_aberration: Some(PupilAberration {
+            astigmatism: 0.2,
+            ..PupilAberration::default()
+        }),
+        ..assumed_optics.clone()
+    };
+    let true_model =
+        ImagePlaneModel::from_experiment(&true_optics, &illumination, (32, 32), (64, 64))?;
+    let reconstruction_model = support::experimental_model()?;
+    let simulation = Simulator::new(true_model)
         .object(SyntheticObject::phase_disk((64, 64), 16.0, 0.9)?)
-        .aberration(AberrationModel::new().defocus(0.7).astigmatism(0.2))
-        .reconstruction_model(initial_model)
+        .reconstruction_model(reconstruction_model)
         .simulate()?;
     let truth = simulation.ground_truth_object.clone();
     let true_model = simulation.true_model.clone();

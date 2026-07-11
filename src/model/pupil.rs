@@ -32,6 +32,19 @@ impl Pupil {
         Ok(Self { values, support })
     }
 
+    /// Builds a sampled circular pupil from microscope optics.
+    ///
+    /// Samples outside `sqrt(kx^2 + ky^2) <= 2 pi NA / lambda` are set to zero.
+    /// Inside the support, optional defocus contributes the paraxial phase
+    /// `-z * (kx^2 + ky^2) / (2 k0)`, where `k0 = 2 pi n / lambda`.
+    ///
+    /// If [`crate::experiment::PupilAberration`] is present, this method adds
+    /// crate-specific phase terms
+    /// `astigmatism * rho^2 * cos(2 theta)`,
+    /// `coma * (3 rho^3 - 2 rho) * cos(theta)`, and
+    /// `spherical * (6 rho^4 - 6 rho^2 + 1)`, with amplitude
+    /// `exp(-edge_apodization * rho^2)`. These coefficients are direct radian
+    /// weights, not normalized Zernike coefficients.
     pub fn circular(shape: (usize, usize), sampling: &Sampling, optics: &Optics) -> Result<Self> {
         sampling.validate()?;
         optics.validate()?;
@@ -39,7 +52,7 @@ impl Pupil {
         let medium_k = optics.medium_wavenumber();
         let mut values = Vec::with_capacity(shape.0 * shape.1);
         let mut support = Vec::with_capacity(shape.0 * shape.1);
-        let aberration = optics.initial_pupil_aberration.as_ref();
+        let aberration = optics.pupil_aberration.as_ref();
         for row in 0..shape.0 {
             let ky = (row as f64 - (shape.0 / 2) as f64) * sampling.dky;
             for column in 0..shape.1 {
@@ -54,16 +67,17 @@ impl Pupil {
                 let rho = if cutoff > 0.0 { radius / cutoff } else { 0.0 };
                 let theta = ky.atan2(kx);
                 let mut phase = 0.0;
-                if let Some(defocus) = optics.defocus {
+                if let Some(defocus) = optics.defocus_distance {
                     phase -= defocus * (kx * kx + ky * ky) / (2.0 * medium_k);
                 }
+                let mut amplitude = 1.0;
                 if let Some(aberration) = aberration {
-                    phase += aberration.defocus * (2.0 * rho * rho - 1.0);
                     phase += aberration.astigmatism * rho * rho * (2.0 * theta).cos();
                     phase += aberration.coma * (3.0 * rho.powi(3) - 2.0 * rho) * theta.cos();
                     phase += aberration.spherical * (6.0 * rho.powi(4) - 6.0 * rho * rho + 1.0);
+                    amplitude = (-aberration.edge_apodization * rho * rho).exp();
                 }
-                values.push(Complex64::from_polar(1.0, phase));
+                values.push(Complex64::from_polar(amplitude, phase));
             }
         }
         Self::new(Array2::from_vec(shape, values)?, support)
