@@ -11,10 +11,18 @@ use fpm_rs::diagnostics::{
     loss,
 };
 use fpm_rs::{
-    Array2, Complex64,
+    Array2, Complex64, Error, Result,
     reconstruction::{ReconstructionProblem, ReconstructionState},
     simulation::{Simulator, SyntheticObject},
 };
+
+struct FailingIterationCallback;
+
+impl Callback for FailingIterationCallback {
+    fn on_iteration_end(&mut self, _context: &StepContext<'_>) -> Result<CallbackAction> {
+        Err(Error::Unsupported("intentional callback failure".into()))
+    }
+}
 
 #[test]
 fn loss_modes_match_known_scalar_values() {
@@ -345,6 +353,36 @@ fn diagnostic_recorder_output_remains_accessible_after_runner_consumes_clone() {
             .iter()
             .all(|summary| summary.iteration.is_some())
     );
+}
+
+#[test]
+fn diagnostic_recorder_reuse_discards_state_from_a_failed_run() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::resolution_target((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let recorder = DiagnosticRecorder::new(DiagnosticRecorderConfig::default());
+
+    let failed = AlternatingProjection::default()
+        .iterations(2)
+        .run_with_callbacks(
+            &problem,
+            vec![
+                Box::new(recorder.clone()),
+                Box::new(FailingIterationCallback),
+            ],
+        );
+    assert!(matches!(failed, Err(Error::Unsupported(message)) if message.contains("intentional")));
+
+    AlternatingProjection::default()
+        .iterations(1)
+        .run_with_callbacks(&problem, vec![Box::new(recorder.clone())])
+        .unwrap();
+    assert_eq!(recorder.diagnostics().iteration_history.len(), 1);
 }
 
 #[test]

@@ -63,6 +63,12 @@ struct DiagnosticRecorderState {
 /// # let _ = callback;
 /// // Run with `callback`, then read `recorder.diagnostics()`.
 /// ```
+///
+/// Clones share one recorder state and may be read from another thread while a
+/// run is active, but they must not be installed in multiple concurrent runs:
+/// each run resets the shared state at its start. Recorder state is
+/// best-effort diagnostics, so a poisoned mutex is recovered and reset on the
+/// next run rather than preventing later diagnostic reads or reuse.
 #[derive(Clone)]
 pub struct DiagnosticRecorder {
     config: DiagnosticRecorderConfig,
@@ -273,4 +279,27 @@ fn median(values: &[f64]) -> Option<f64> {
     } else {
         sorted[mid]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::*;
+
+    #[test]
+    fn poisoned_recorder_state_remains_resettable_and_readable() {
+        let recorder = DiagnosticRecorder::new(DiagnosticRecorderConfig::default());
+        let state = recorder.state.clone();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = state.lock().unwrap();
+            panic!("intentional recorder-lock poison for test");
+        }));
+        assert!(result.is_err());
+
+        recorder.reset();
+        assert!(recorder.diagnostics().iteration_history.is_empty());
+        assert!(recorder.object_snapshots().is_empty());
+        assert!(recorder.pupil_snapshots().is_empty());
+    }
 }
