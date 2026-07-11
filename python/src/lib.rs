@@ -3,6 +3,7 @@ mod config;
 mod errors;
 mod measurements;
 mod model;
+mod reconstruction;
 mod simulation;
 
 use pyo3::prelude::*;
@@ -15,5 +16,6 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     model::register(module)?;
     measurements::register(module)?;
     simulation::register(module)?;
+    reconstruction::register(module)?;
     Ok(())
 }
