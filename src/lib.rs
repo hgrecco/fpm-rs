@@ -10,6 +10,7 @@ pub mod benchmark;
 pub mod callbacks;
 pub mod complex;
 pub mod configuration;
+pub mod datasets;
 pub mod diagnostics;
 pub mod error;
 pub mod experiment;

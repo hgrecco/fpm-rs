@@ -24,6 +24,8 @@ pub enum Error {
     Numerical(String),
     #[error("unsupported operation: {0}")]
     Unsupported(String),
+    #[error("dataset error: {0}")]
+    Dataset(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("CSV error: {0}")]
