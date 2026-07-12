@@ -7,6 +7,7 @@ platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 
 [environments]
 default = ["rust", "python", "pytest", "py313", "lint"]
+docs = ["rust", "py313", "docs"]
 py313 = ["rust", "python", "pytest", "py313"]
 py314 = ["rust", "python", "pytest", "py314"]
 lint = ["rust", "lint"]
@@ -16,9 +17,7 @@ rust = "==1.97"
 rust-src = "==1.97"
 
 [feature.rust.tasks]
-dataset = { cmd = "cargo run --example download_dataset --", env = { FPM_DATASETS_DIR = "target/public-datasets" } }
-regression-data = { cmd = "cargo run --example download_dataset -- download caltech_fpm_inr_siemens_r", env = { FPM_DATASETS_DIR = "target/public-datasets" } }
-regression-test = { cmd = "cargo test --test regression_tests -- --ignored", depends-on = ["regression-data"], env = { FPM_DATASETS_DIR = "target/public-datasets" } }
+datasets = "cargo run --bin fpm-datasets --"
 
 [feature.python.dependencies]
 maturin = ">=1.9,<2"
@@ -44,6 +43,26 @@ python = "3.13.*"
 
 [feature.py314.dependencies]
 python = "3.14.*"
+
+[feature.docs.dependencies]
+ipykernel = ">=6.29"
+maturin = ">=1.9,<2"
+matplotlib = ">=3.9"
+numpy = ">=2.1"
+
+[feature.docs.pypi-dependencies]
+mkdocs = ">=1.6,<2"
+mkdocs-jupyter = ">=0.25,<1"
+mkdocs-material = ">=9.6,<10"
+mkdocstrings = { version = ">=0.29,<1", extras = ["python"] }
+nbclient = ">=0.10,<1"
+pymdown-extensions = ">=10.14,<11"
+
+[feature.docs.tasks]
+docs-build = { cmd = "python scripts/build_docs.py", description = "Build the complete MkDocs, Python, notebook, and Rust API site" }
+docs-notebooks-check = { cmd = "python scripts/check_notebooks.py", description = "Execute the curated documentation notebooks without modifying their sources" }
+docs-preview = { cmd = "python scripts/preview_docs.py", description = "Build and serve the exact combined site at http://127.0.0.1:8000/" }
+docs-serve = { cmd = "python scripts/serve_docs.py", description = "Serve Markdown, notebooks, and Python API docs with live reload" }
 
 [feature.lint.dependencies]
 prek = "*"
