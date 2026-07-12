@@ -4,23 +4,26 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Image-plane Fourier ptychographic microscopy reconstruction and simulation"
-license.workspace = true
 documentation = "https://docs.rs/fpm-rs"
+license.workspace = true
 include = [
-    "/src/**",
-    "/benches/**",
-    "/examples/**",
-    "/tests/**",
-    "/docs/**",
-    "/Cargo.toml",
-    "/Cargo.lock",
-    "/README.md",
-    "/ROADMAP.md",
+  "/Cargo.lock",
+  "/Cargo.toml",
+  "/LICENSE-APACHE",
+  "/LICENSE-MIT",
+  "/README.md",
+  "/dataset_registry.json",
+  "/dataset_spec.md",
+  "/examples/**",
+  "/src/**",
 ]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [workspace]
-members = ["python"]
 resolver = "3"
+members = ["python"]
 
 [workspace.package]
 version = "0.1.0"
@@ -30,11 +33,16 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 approx = "0.5"
+clap = { version = "4.5", features = ["derive"] }
 csv = "1.3"
-flate2 = "1.1"
+dirs = "6"
 fpm-rs = { path = "." }
-image = { version = "0.25", default-features = false, features = ["png", "tiff"] }
-md-5 = "0.10"
+fs2 = "0.4"
+image = {
+  version = "0.25",
+  default-features = false,
+  features = ["png", "tiff"]
+}
 num-complex = { version = "0.4", features = ["serde"] }
 numpy = "0.27"
 pyo3 = { version = "0.27", features = ["extension-module"] }
@@ -44,22 +52,31 @@ rustfft = "6.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tar = { version = "0.4", default-features = false }
+tar = "0.4"
 tempfile = "3"
 thiserror = "2"
 tiff = "0.11"
 ureq = { version = "3.3", default-features = false, features = ["rustls"] }
-zip = { version = "2.4", default-features = false, features = ["deflate"] }
+zstd = "0.13"
 
 [lib]
 name = "fpm_rs"
 path = "src/lib.rs"
 
+[[bench]]
+harness = false
+name = "forward_model"
+
+[[bench]]
+harness = false
+name = "gradient_parallel"
+
 [dependencies]
+clap.workspace = true
 csv.workspace = true
-flate2.workspace = true
+dirs.workspace = true
+fs2.workspace = true
 image.workspace = true
-md-5.workspace = true
 num-complex.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
@@ -71,19 +88,8 @@ tar.workspace = true
 thiserror.workspace = true
 tiff.workspace = true
 ureq.workspace = true
-zip.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
 tempfile.workspace = true
-
-[[bench]]
-name = "forward_model"
-harness = false
-
-[[bench]]
-name = "gradient_parallel"
-harness = false
-
-[package.metadata.docs.rs]
-all-features = true

@@ -6,7 +6,13 @@
 //! access, verified downloads, and managed caching for callers that opt in.
 
 mod loader;
+mod registry;
 mod subset;
 
 pub use loader::{DATASET_FORMAT_VERSION, Dataset, DatasetLoader, DatasetManifest};
+pub use registry::{
+    DATASET_CACHE_DIR_ENV, DATASET_REGISTRY_URL_ENV, DATASET_REGISTRY_VERSION,
+    DEFAULT_DATASET_REGISTRY_URL, DatasetArchive, DatasetCitation, DatasetLicense, DatasetListing,
+    DatasetRegistry, DatasetRegistryDocument, DatasetRegistryEntry, DatasetSource, open_dataset,
+};
 pub use subset::{DatasetSubset, DatasetSubsetBuilder, FrameSelector, Rect};
