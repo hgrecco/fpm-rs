@@ -507,5 +507,4 @@ for the typed public surface.
 
 ## License
 
-Licensed under either the [Apache License 2.0](LICENSE-APACHE) or
-[MIT License](LICENSE-MIT), at your option.
+Licensed under the [MIT License](LICENSE-MIT).

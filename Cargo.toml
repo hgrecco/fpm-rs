@@ -9,7 +9,6 @@ license.workspace = true
 include = [
   "/Cargo.lock",
   "/Cargo.toml",
-  "/LICENSE-APACHE",
   "/LICENSE-MIT",
   "/README.md",
   "/dataset_registry.json",
@@ -29,7 +28,7 @@ members = ["python"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
 approx = "0.5"

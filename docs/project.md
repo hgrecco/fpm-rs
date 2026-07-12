@@ -8,9 +8,8 @@ scientific methods through the references in their API documentation.
 
 ## License
 
-`fpm-rs` is available under either the MIT License or Apache License 2.0, at
-your option. The complete terms are in `LICENSE-MIT` and `LICENSE-APACHE` at the
-repository root.
+`fpm-rs` is available under the MIT License. The complete terms are in
+`LICENSE-MIT` at the repository root.
 
 ## Roadmap
 
