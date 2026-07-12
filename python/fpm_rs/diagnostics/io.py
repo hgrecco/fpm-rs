@@ -14,7 +14,9 @@ def load_diagnostics(path: str | Path) -> dict[str, Any]:
         with diagnostics_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except json.JSONDecodeError as error:
-        raise ValueError(f"invalid diagnostics JSON in {diagnostics_path}: {error}") from error
+        raise ValueError(
+            f"invalid diagnostics JSON in {diagnostics_path}: {error}"
+        ) from error
     if not isinstance(payload, dict):
         raise ValueError(
             f"diagnostics JSON must contain an object at the top level, got {type(payload).__name__}"

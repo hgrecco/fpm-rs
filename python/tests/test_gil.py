@@ -26,6 +26,7 @@ def _assert_worker_runs_before_return(
 
     assert observed_before_return
 
+
 def test_simulation_releases_the_gil(optics: fpm.Optics) -> None:
     leds = fpm.LEDArray((7, 7), 4e-3, 90e-3, (3.0, 3.0))
     model = fpm.compile_model(optics, leds, (64, 64), (128, 128))

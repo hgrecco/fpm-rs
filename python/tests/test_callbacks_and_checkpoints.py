@@ -63,7 +63,9 @@ def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> N
     assert result.runtime.completed_iterations == 1
 
 
-def test_python_callback_exception_propagates(problem: fpm.ReconstructionProblem) -> None:
+def test_python_callback_exception_propagates(
+    problem: fpm.ReconstructionProblem,
+) -> None:
     def fail(_context: object) -> None:
         raise LookupError("callback failed")
 

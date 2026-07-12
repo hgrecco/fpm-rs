@@ -1,6 +1,7 @@
 """Python interface for the fpm-rs reconstruction and simulation core."""
 
 from . import diagnostics
+from . import datasets
 from . import plot
 from ._core import (
     Admm,
@@ -11,6 +12,9 @@ from ._core import (
     CodedIllumination,
     CsvLogger,
     DatasetError,
+    Dataset,
+    DatasetRegistry,
+    DatasetRegistryEntry,
     DiagnosticRecorder,
     Epry,
     Fpie,
@@ -51,6 +55,7 @@ from ._core import (
     __version__,
     compile_camera_model,
     compile_model,
+    open_dataset,
     simulate,
 )
 

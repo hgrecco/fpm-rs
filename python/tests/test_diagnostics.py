@@ -25,7 +25,9 @@ def test_load_diagnostics_reads_json(tmp_path: Path) -> None:
     assert diagnostics["iteration_history"][0]["iteration"] == 1
 
 
-def test_make_diagnostic_report_handles_minimal_iteration_history(tmp_path: Path) -> None:
+def test_make_diagnostic_report_handles_minimal_iteration_history(
+    tmp_path: Path,
+) -> None:
     diagnostics_path = tmp_path / "diagnostics.json"
     diagnostics_path.write_text(
         json.dumps(

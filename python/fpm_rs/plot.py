@@ -26,9 +26,7 @@ _RECONSTRUCTION_IMAGE_AXES = (
     "reconstructed_amplitude",
     "reconstructed_phase",
 )
-_RECONSTRUCTION_REQUIRED_AXES = frozenset(
-    (*_RECONSTRUCTION_IMAGE_AXES, "loss")
-)
+_RECONSTRUCTION_REQUIRED_AXES = frozenset((*_RECONSTRUCTION_IMAGE_AXES, "loss"))
 
 
 def plot_reconstruction(
@@ -45,7 +43,9 @@ def plot_reconstruction(
     amplitude = np.asarray(result.amplitude)
     phase = np.asarray(result.phase)
     if truth_array.ndim != 2:
-        raise ValueError(f"truth must be two-dimensional, got shape {truth_array.shape}")
+        raise ValueError(
+            f"truth must be two-dimensional, got shape {truth_array.shape}"
+        )
     if truth_array.size == 0:
         raise ValueError("truth must not be empty")
     if amplitude.shape != truth_array.shape or phase.shape != truth_array.shape:
@@ -63,7 +63,9 @@ def plot_reconstruction(
     missing = _RECONSTRUCTION_REQUIRED_AXES.difference(axes)
     if missing:
         plt.close(figure)
-        raise ValueError(f"layout is missing required axes: {', '.join(sorted(missing))}")
+        raise ValueError(
+            f"layout is missing required axes: {', '.join(sorted(missing))}"
+        )
 
     amplitude_max = max(float(np.abs(truth_array).max()), float(amplitude.max()))
     axes["true_amplitude"].imshow(
@@ -79,9 +81,7 @@ def plot_reconstruction(
         np.angle(truth_array), cmap="twilight", vmin=-np.pi, vmax=np.pi
     )
     axes["true_phase"].set_title("Original phase")
-    axes["reconstructed_phase"].imshow(
-        phase, cmap="twilight", vmin=-np.pi, vmax=np.pi
-    )
+    axes["reconstructed_phase"].imshow(phase, cmap="twilight", vmin=-np.pi, vmax=np.pi)
     axes["reconstructed_phase"].set_title("Reconstructed phase")
 
     iterations = [record[0] for record in result.history]
@@ -248,10 +248,14 @@ def plot_frame_residuals(
             edgecolor="none",
         )
         minimum = float(
-            np.nanmin([measured_sum[finite_mask].min(), predicted_sum[finite_mask].min()])
+            np.nanmin(
+                [measured_sum[finite_mask].min(), predicted_sum[finite_mask].min()]
+            )
         )
         maximum = float(
-            np.nanmax([measured_sum[finite_mask].max(), predicted_sum[finite_mask].max()])
+            np.nanmax(
+                [measured_sum[finite_mask].max(), predicted_sum[finite_mask].max()]
+            )
         )
         axes["measured_vs_predicted"].plot(
             [minimum, maximum],

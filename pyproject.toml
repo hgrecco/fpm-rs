@@ -1,39 +1,46 @@
+[project]
+name = "fpm-rs"
+version = "0.1.0"
+description = "High-performance Fourier ptychography reconstruction, simulation, and diagnostics for Python, powered by Rust."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Hernán E. Grecco", email = "hernan.grecco@gmail.com" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Rust",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = ["numpy>=2.1"]
+
+[project.urls]
+Documentation = "https://hgrecco.github.io/fpm-rs"
+Homepage = "https://github.com/hgrecco/fpm-rs"
+Issues = "https://github.com/hgrecco/fpm-rs/issues"
+
+[project.scripts]
+fpm-datasets = "fpm_rs.datasets.cli:main"
+fpm-diagnostics = "fpm_rs.diagnostics.cli:main"
+
+[project.optional-dependencies]
+notebook = ["jupyterlab>=4.3", "matplotlib>=3.9"]
+plot = ["matplotlib>=3.9"]
+test = ["pytest>=8.3"]
+
 [build-system]
 requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
-[project]
-name = "fpm-rs"
-version = "0.1.0"
-description = "Python bindings for image-plane Fourier ptychographic microscopy"
-readme = "README.md"
-requires-python = ">=3.13"
-license = { text = "MIT OR Apache-2.0" }
-dependencies = ["numpy>=2.1"]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Programming Language :: Rust",
-    "Topic :: Scientific/Engineering :: Image Processing",
-]
-
-[project.optional-dependencies]
-test = ["pytest>=8.3"]
-plot = ["matplotlib>=3.9"]
-notebook = ["jupyterlab>=4.3", "matplotlib>=3.9"]
-
-[project.scripts]
-fpm-diagnostics = "fpm_rs.diagnostics.cli:main"
-
 [tool.maturin]
-manifest-path = "python/Cargo.toml"
-python-source = "python"
-module-name = "fpm_rs._core"
 features = ["pyo3/extension-module"]
+manifest-path = "python/Cargo.toml"
+module-name = "fpm_rs._core"
+python-source = "python"
 strip = true
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
-pythonpath = ["python"]
 addopts = "-ra"
+pythonpath = ["python"]
+testpaths = ["python/tests"]

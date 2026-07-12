@@ -80,6 +80,19 @@ pub(crate) struct PyReconstructionProblem {
     inner: ReconstructionProblem<SharedMeasurementStack>,
 }
 
+impl PyReconstructionProblem {
+    pub(crate) fn from_parts(
+        measurements: MeasurementStack,
+        model: fpm_rs::model::ImagePlaneModel,
+        name: Option<String>,
+    ) -> fpm_rs::Result<Self> {
+        let mut inner =
+            ReconstructionProblem::new(SharedMeasurementStack(Arc::new(measurements)), model)?;
+        inner.name = name;
+        Ok(Self { inner })
+    }
+}
+
 #[pymethods]
 impl PyReconstructionProblem {
     #[new]

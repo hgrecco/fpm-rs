@@ -43,7 +43,9 @@ def test_simulation_uses_distinct_true_and_reconstruction_models(
     np.testing.assert_allclose(result.reconstruction_model.frame_gains, [20.0])
 
 
-def test_acquisition_errors_are_concrete_configuration(model: fpm.ImagePlaneModel) -> None:
+def test_acquisition_errors_are_concrete_configuration(
+    model: fpm.ImagePlaneModel,
+) -> None:
     errors = fpm.IlluminationAcquisitionErrors(missing_frames=[0])
     result = fpm.simulate(
         model,
