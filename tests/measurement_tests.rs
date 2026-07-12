@@ -470,7 +470,7 @@ fn manifest_rejects_unknown_fields() {
     let manifest_path = directory.path().join("invalid.json");
     std::fs::write(
         &manifest_path,
-        r#"{"frames":[],"preprocesing":{"normalize_exposure":true}}"#,
+        r#"{"frames":[],"unknown":{"normalize_exposure":true}}"#,
     )
     .unwrap();
     assert!(MeasurementSpec::load(manifest_path).is_err());
