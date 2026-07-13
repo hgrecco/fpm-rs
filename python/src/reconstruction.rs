@@ -74,7 +74,12 @@ impl MeasurementRead for SharedMeasurementStack {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "ReconstructionProblem", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "ReconstructionProblem",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyReconstructionProblem {
     inner: ReconstructionProblem<SharedMeasurementStack>,
@@ -137,7 +142,12 @@ impl PyReconstructionProblem {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "ReconstructionCheckpoint", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "ReconstructionCheckpoint",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyReconstructionCheckpoint {
     // Checkpoints can hold large object spectra. Shared immutable ownership
@@ -173,7 +183,7 @@ impl PyReconstructionCheckpoint {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "RuntimeInfo", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "RuntimeInfo", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyRuntimeInfo {
     #[pyo3(get)]

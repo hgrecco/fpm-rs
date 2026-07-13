@@ -14,7 +14,12 @@ use crate::{
     model::PyImagePlaneModel,
 };
 
-#[pyclass(module = "fpm_rs._core", name = "SyntheticObject", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "SyntheticObject",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PySyntheticObject {
     inner: SyntheticObject,

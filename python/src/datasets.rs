@@ -21,7 +21,12 @@ fn to_dataset_py_err(error: fpm_rs::Error) -> PyErr {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "DatasetRegistryEntry", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "DatasetRegistryEntry",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyDatasetRegistryEntry {
     listing: DatasetListing,
@@ -124,7 +129,7 @@ impl PyDatasetRegistryEntry {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "Dataset", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "Dataset", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyDataset {
     inner: Arc<Dataset>,
@@ -236,7 +241,12 @@ impl PyDataset {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "DatasetRegistry", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "DatasetRegistry",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyDatasetRegistry {
     inner: DatasetRegistry,

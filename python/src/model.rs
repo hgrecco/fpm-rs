@@ -9,7 +9,12 @@ use crate::{
     errors::to_py_err,
 };
 
-#[pyclass(module = "fpm_rs._core", name = "ImagePlaneModel", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "ImagePlaneModel",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyImagePlaneModel {
     pub(crate) inner: Arc<ImagePlaneModel>,

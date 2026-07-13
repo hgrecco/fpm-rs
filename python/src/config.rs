@@ -10,7 +10,12 @@ use pyo3::prelude::*;
 
 use crate::{arrays::copy_array2, errors::to_py_err};
 
-#[pyclass(module = "fpm_rs._core", name = "PupilAberration", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "PupilAberration",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyPupilAberration {
     pub(crate) inner: PupilAberration,
@@ -52,7 +57,7 @@ impl PyPupilAberration {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "Optics", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "Optics", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyOptics {
     pub(crate) inner: Optics,
@@ -120,7 +125,7 @@ impl PyOptics {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "LEDArray", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "LEDArray", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyLedArray {
     pub(crate) inner: LEDArray,
@@ -166,7 +171,7 @@ impl PyLedArray {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "LEDSphere", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "LEDSphere", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyLedSphere {
     pub(crate) inner: LEDSphere,
@@ -216,7 +221,12 @@ impl PyLedSphere {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "SphericalLEDArm", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "SphericalLEDArm",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PySphericalLedArm {
     pub(crate) inner: SphericalLEDArm,
@@ -271,7 +281,12 @@ impl PySphericalLedArm {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "RotatingLEDArc", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "RotatingLEDArc",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyRotatingLedArc {
     pub(crate) inner: RotatingLEDArc,
@@ -337,7 +352,7 @@ impl PyRotatingLedArc {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "AngleList", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "AngleList", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyAngleList {
     pub(crate) inner: AngleList,
@@ -384,7 +399,7 @@ fn copy_angle_pairs(
         .collect())
 }
 
-#[pyclass(module = "fpm_rs._core", name = "KVectorList", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "KVectorList", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyKVectorList {
     pub(crate) inner: Vec<KVector>,
@@ -413,7 +428,12 @@ impl PyKVectorList {
     }
 }
 
-#[pyclass(module = "fpm_rs._core", name = "CodedIllumination", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "CodedIllumination",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyCodedIllumination {
     pub(crate) inner: CodedIllumination,
@@ -499,7 +519,7 @@ pub(crate) fn extract_illumination(value: &Bound<'_, PyAny>) -> PyResult<Illumin
     ))
 }
 
-#[pyclass(module = "fpm_rs._core", name = "CameraModel", frozen)]
+#[pyclass(module = "fpm_rs._core", name = "CameraModel", frozen, from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyCameraModel {
     pub(crate) inner: CameraModel,
@@ -553,7 +573,8 @@ impl PyCameraModel {
 #[pyclass(
     module = "fpm_rs._core",
     name = "IlluminationAcquisitionErrors",
-    frozen
+    frozen,
+    from_py_object
 )]
 #[derive(Clone)]
 pub(crate) struct PyIlluminationAcquisitionErrors {

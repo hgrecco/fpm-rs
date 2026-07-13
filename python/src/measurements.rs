@@ -8,7 +8,12 @@ use crate::{
     errors::to_py_err,
 };
 
-#[pyclass(module = "fpm_rs._core", name = "MeasurementStack", frozen)]
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "MeasurementStack",
+    frozen,
+    from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PyMeasurementStack {
     pub(crate) inner: Arc<MeasurementStack>,
