@@ -68,6 +68,15 @@ share one implementation. Generated `site/` and isolated rustdoc output under
 
 ## Release checks
 
-Before publishing, run the Rust and Python matrices, notebook validation,
-strict documentation build, package build, and the manual hardening workflow.
-Package upload and version tagging remain maintainer-controlled operations.
+Before pushing a release tag, run the Rust and Python matrices, notebook
+validation, strict documentation build, package build, and the manual hardening
+workflow. A push of `v<package-version>` starts the Python workflow, checks that
+the tag matches `pyproject.toml`, builds wheels plus an sdist, smoke-tests the
+wheels, and then publishes the verified artifacts to PyPI.
+
+The upload uses PyPI Trusted Publishing rather than a stored token. Before the
+first release, configure PyPI to trust the `hgrecco/fpm-rs` repository's
+`.github/workflows/python.yml` workflow and its `pypi` environment; PyPI supports
+a pending publisher for a project that does not yet exist. See the
+[PyPI Trusted Publishing guide](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
+for that one-time configuration.

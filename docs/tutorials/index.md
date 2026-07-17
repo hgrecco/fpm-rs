@@ -4,6 +4,13 @@ These notebooks are maintained as deterministic, self-contained tutorials. They
 use only public Python APIs, small generated arrays, and no network access or
 credentials.
 
+Before opening a notebook, install the published package and notebook tools in
+its kernel environment:
+
+```sh
+python -m pip install "fpm-rs[notebook]"
+```
+
 - [First reconstruction](notebooks/quickstart.ipynb) compiles a model, simulates
   an object, runs alternating projection, and plots the result.
 - [Synthetic objects](notebooks/synthetic_objects_quickstart.ipynb) previews the
@@ -14,7 +21,8 @@ credentials.
 Notebook execution is deliberately disabled during `mkdocs serve` and
 `docs-build`, keeping documentation builds fast and deterministic. The source
 notebooks have no stored large outputs. Their code cells are executed as tests
-by `python/tests/test_diagnostic_notebooks.py` in the Python test suite.
+by `python/tests/test_diagnostic_notebooks.py` in the Python test suite. Those
+offline checks build the in-tree package instead of downloading from PyPI.
 
 Two more focused examples, `python/examples/diagnostics_debug.ipynb` and
 `python/examples/diagnostics_plots.ipynb`, remain in the repository but are not

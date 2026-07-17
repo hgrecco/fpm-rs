@@ -12,16 +12,17 @@ microscopy researchers, algorithm developers, and applications that need a
 reusable FPM core. Diffraction-plane ptychography, multislice propagation, and
 GPU execution are outside the current scope.
 
-## Install from source
+## Install from PyPI
 
-From a repository checkout with Python 3.13+ and Rust 1.97+:
+With Python 3.13 or newer:
 
 ```sh
-python -m pip install .
+python -m pip install fpm-rs
 ```
 
-See [Installation](getting-started/installation.md) for supported platforms,
-Pixi setup, and troubleshooting.
+For notebook and plotting support, install `"fpm-rs[notebook]"`. See
+[Installation](getting-started/installation.md) for supported platforms, source
+builds, Pixi setup, and troubleshooting.
 
 ## Minimal example
 

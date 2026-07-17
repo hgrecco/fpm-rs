@@ -458,7 +458,26 @@ GIL because the source buffer remains Python-owned; result arrays are likewise
 created with the GIL held, then reused by subsequent property access. Python
 iteration callbacks reacquire it only for the callback invocation.
 
-Create the Python 3.13 development environment and run its tests with:
+Install the latest released package from [PyPI](https://pypi.org/project/fpm-rs/):
+
+```sh
+python -m pip install fpm-rs
+```
+
+For inline plotting and the tutorial notebooks, install the extra instead:
+
+```sh
+python -m pip install "fpm-rs[notebook]"
+```
+
+The PyPI wheels include the Rust extension, so a Rust toolchain is not needed
+when a compatible wheel is available. See the [installation guide](docs/getting-started/installation.md)
+for source builds and platform details.
+
+### Development from a checkout
+
+To contribute or run the in-tree test suite, create the Python 3.13 development
+environment and run its tests with:
 
 ```sh
 pixi install -e py313
@@ -503,7 +522,8 @@ result = fpm.AlternatingProjection(iterations=20).run(problem)
 See `docs/tutorials/notebooks/quickstart.ipynb` for a notebook workflow,
 `docs/tutorials/notebooks/synthetic_objects_quickstart.ipynb` for a gallery of the
 Rust-backed synthetic object constructors, and `python/fpm_rs/__init__.pyi`
-for the typed public surface.
+for the typed public surface. The notebooks use the released `fpm-rs` PyPI
+package; install the `notebook` extra before opening them outside a checkout.
 
 ## License
 

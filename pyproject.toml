@@ -19,6 +19,7 @@ dependencies = ["numpy>=2.1"]
 Documentation = "https://hgrecco.github.io/fpm-rs"
 Homepage = "https://github.com/hgrecco/fpm-rs"
 Issues = "https://github.com/hgrecco/fpm-rs/issues"
+PyPI = "https://pypi.org/project/fpm-rs/"
 
 [project.scripts]
 fpm-datasets = "fpm_rs.datasets.cli:main"
