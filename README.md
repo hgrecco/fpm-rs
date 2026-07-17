@@ -5,7 +5,7 @@ ptychographic microscopy**. Measurements are real-space intensity images acquire
 under different illumination angles; diffraction-plane ptychography is outside
 the crate's scope.
 
-**[Read the documentation](docs/index.md)** for installation, a Python-first
+**[Read the documentation](https://hgrecco.github.io/fpm-rs/)** for installation, a Python-first
 quickstart, maintained tutorials, task guides, concepts, and generated Python
 and Rust API references.
 
@@ -120,7 +120,7 @@ fpm_rs.diagnostics.make_diagnostic_report(
 currently matches `basic` because reconstruction problems do not retain ground
 truth. Plot rendering lives under `fpm_rs.plot`, while `fpm_rs.diagnostics`
 handles loading and report generation. JSON persistence is optional through
-`recorder.to_json(path)`. See the [diagnostics workflow](docs/diagnostics.md).
+`recorder.to_json(path)`. See the [diagnostics workflow](https://hgrecco.github.io/fpm-rs/diagnostics/).
 [`diagnostics_quickstart.ipynb`](docs/tutorials/notebooks/diagnostics_quickstart.ipynb)
 teaches the lightweight `basic` recorder and the two overview plots.
 [`diagnostics_debug.ipynb`](python/examples/diagnostics_debug.ipynb) focuses on
@@ -196,10 +196,10 @@ Source-specific conversion lives outside this repository. The dataset registry
 can discover and download already-converted archives into a managed cache;
 local and registered acquisitions then use the same `DatasetLoader`. The
 format, registry, CLI, cache, and subset APIs are documented in
-[Datasets](docs/datasets.md) and specified by [dataset_spec.md](dataset_spec.md).
+[Datasets](https://hgrecco.github.io/fpm-rs/datasets/) and specified by [dataset_spec.md](dataset_spec.md).
 
 Deterministic simulator presets and named benchmark profiles are documented in
-[Reconstruction benchmarks](docs/benchmarks.md). Run
+[Reconstruction benchmarks](https://hgrecco.github.io/fpm-rs/benchmarks/). Run
 `cargo run --example benchmark_algorithms` for the offline smoke profile.
 Native manifests may include optional ground truth, valid-object masks,
 provenance, and measurement units.
@@ -367,7 +367,7 @@ mismatch is represented by compiling separate true and reconstruction models.
 Illumination-angle transmission belongs in source intensity weights, ordinary
 frame gains, or multiplexed source weights rather than in the pupil model.
 The fixed-sphere placement/pose model and moving-arm kinematic error model are
-documented in [Spherical illumination geometries](docs/spherical-geometries.md).
+documented in [Spherical illumination geometries](https://hgrecco.github.io/fpm-rs/spherical-geometries/).
 `SimulationResult` retains both compiled optical models and the acquisition
 configuration. Use `compare_with_problem` to add masked, normalized per-frame
 intensity residuals to the amplitude, phase, complex-field, Fourier, and pupil
@@ -442,13 +442,13 @@ dimensions, and invalid phase ranges return typed errors.
 ## Supported toolchains
 
 The MSRV is Rust 1.97. Stable Rust is tested on Linux, macOS, and Windows;
-Python bindings support CPython 3.13 and 3.14. See the
-[configuration schema](docs/configuration-schema.md) and
-[API reference](docs/reference/index.md).
+Python bindings support CPython 3.12, 3.13, and 3.14. See the
+[configuration schema](https://hgrecco.github.io/fpm-rs/configuration-schema/) and
+[API reference](https://hgrecco.github.io/fpm-rs/reference/).
 
 ## Python bindings
 
-The `fpm_rs` Python package requires Python 3.13 or newer and is built with
+The `fpm_rs` Python package requires Python 3.12 or newer and is built with
 PyO3/maturin. The Python layer exposes concrete configuration classes and NumPy
 arrays; simulation and reconstruction continue to execute in the Rust core and
 release the GIL. Image-backed synthetic-object loading, model compilation,
@@ -471,24 +471,24 @@ python -m pip install "fpm-rs[notebook]"
 ```
 
 The PyPI wheels include the Rust extension, so a Rust toolchain is not needed
-when a compatible wheel is available. See the [installation guide](docs/getting-started/installation.md)
+when a compatible wheel is available. See the [installation guide](https://hgrecco.github.io/fpm-rs/getting-started/installation/)
 for source builds and platform details.
 
 ### Development from a checkout
 
-To contribute or run the in-tree test suite, create the Python 3.13 development
+To contribute or run the in-tree test suite, create the Python 3.12 development
 environment and run its tests with:
 
 ```sh
-pixi install -e py313
-pixi run -e py313 python-test
+pixi install -e py312
+pixi run -e py312 python-test
 ```
 
 Launch Python or run a script through the build-aware task:
 
 ```sh
-pixi run -e py313 python
-pixi run -e py313 python path/to/script.py
+pixi run -e py312 python
+pixi run -e py312 python path/to/script.py
 ```
 
 The task builds the native extension in place before starting Python. The pixi

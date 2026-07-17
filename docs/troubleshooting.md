@@ -18,9 +18,9 @@ adding pupil recovery, calibration, or regularization.
 ## Python import or plotting failures
 
 If `fpm_rs._core` is missing in a checkout, build the extension with
-`pixi run -e py313 python-develop` or install the package. Install the `plot`
-extra for Matplotlib helpers. The supported interpreters are CPython 3.13 and
-3.14.
+`pixi run -e py312 python-develop` or install the package. Install the `plot`
+extra for Matplotlib helpers. The supported interpreters are CPython 3.12,
+3.13, and 3.14.
 
 ## Documentation build failures
 

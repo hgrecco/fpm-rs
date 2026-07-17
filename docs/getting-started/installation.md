@@ -2,7 +2,7 @@
 
 ## Supported systems
 
-The project tests stable Rust and CPython 3.13/3.14 on Linux, macOS, and
+The project tests stable Rust and CPython 3.12/3.13/3.14 on Linux, macOS, and
 Windows. The minimum supported Rust version is 1.97. The implementation is
 CPU-only; there is no CUDA, ROCm, Metal, or other GPU backend to install.
 
@@ -13,7 +13,7 @@ install.
 
 ## Python package from PyPI
 
-Create and activate a Python 3.13 or 3.14 virtual environment, then run:
+Create and activate a Python 3.12, 3.13, or 3.14 virtual environment, then run:
 
 ```sh
 python -m pip install --upgrade pip
@@ -51,8 +51,8 @@ private `fpm_rs._core` extension, and installs the Python sources from
 Pixi provides the reproducible development toolchain:
 
 ```sh
-pixi install -e py313
-pixi run -e py313 python-test
+pixi install -e py312
+pixi run -e py312 python-test
 ```
 
 `python-develop` runs `maturin develop --skip-install`; the activation
@@ -87,12 +87,12 @@ For a functional smoke test, run the example on the [Quickstart](quickstart.md).
 
 ## Common installation problems
 
-- **Python is too old:** use CPython 3.13 or 3.14; `pyproject.toml` rejects older
+- **Python is too old:** use CPython 3.12, 3.13, or 3.14; `pyproject.toml` rejects older
   interpreters.
 - **Cargo or a linker is missing:** a supported PyPI wheel avoids a local build.
   Otherwise, install Rust and the platform's normal native build tools, then run
   `pip install .` from a checkout.
-- **An in-tree import finds no `_core` module:** run `pixi run -e py313
+- **An in-tree import finds no `_core` module:** run `pixi run -e py312
   python-develop` or install the package into the active environment.
 - **Plots fail to import:** install `"fpm-rs[plot]"` or `"fpm-rs[notebook]"`.
 - **A wheel is unavailable for the platform:** install Rust and build from

@@ -17,7 +17,7 @@
 cargo test
 cargo test --all-targets
 cargo doc --workspace --no-deps --all-features
-pixi run -e py313 python-test
+pixi run -e py312 python-test
 pixi run lint
 ```
 
@@ -32,7 +32,7 @@ Dataset tests use generated local bundles and never require network access.
 task is:
 
 ```sh
-pixi run -e py313 python-develop
+pixi run -e py312 python-develop
 ```
 
 Keep Python-visible signatures synchronized with

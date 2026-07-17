@@ -14,7 +14,7 @@ GPU execution are outside the current scope.
 
 ## Install from PyPI
 
-With Python 3.13 or newer:
+With Python 3.12 or newer:
 
 ```sh
 python -m pip install fpm-rs

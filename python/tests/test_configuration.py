@@ -6,10 +6,10 @@ import pytest
 import fpm_rs as fpm
 
 
-def test_python_313_is_the_minimum_runtime() -> None:
+def test_python_312_is_the_minimum_runtime() -> None:
     import sys
 
-    assert sys.version_info >= (3, 13)
+    assert sys.version_info >= (3, 12)
     assert fpm.__version__ == "0.1.0"
 
 

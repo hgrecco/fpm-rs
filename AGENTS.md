@@ -74,5 +74,5 @@ cargo test --all-targets
 cargo doc --workspace --no-deps --all-features
 cargo run --example simulate_and_reconstruct
 cargo run --example benchmark_algorithms
-pixi run -e py313 python-test
+pixi run -e py312 python-test
 ```
