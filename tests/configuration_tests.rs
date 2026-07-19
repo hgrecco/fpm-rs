@@ -4,6 +4,7 @@ use fpm_rs::{
         AngleList, CodedIllumination, Illumination, KVector, LEDArray, LEDSphere, Optics,
         RotatingLEDArc, SphericalLEDArm,
     },
+    model::ReconstructionShape,
     simulation::{CameraModel, IlluminationAcquisitionErrors},
 };
 use tempfile::tempdir;
@@ -64,9 +65,13 @@ fn illumination_variants() -> Vec<Illumination> {
 fn every_concrete_illumination_source_round_trips() {
     for illumination in illumination_variants() {
         let description = ExperimentDescription::new(optics(), illumination);
-        let configuration =
-            SimulationConfiguration::new(description.clone(), description, (8, 8), (16, 16))
-                .unwrap();
+        let configuration = SimulationConfiguration::new(
+            description.clone(),
+            description,
+            (8, 8),
+            ReconstructionShape::Exact((16, 16)),
+        )
+        .unwrap();
         let serialized = serde_json::to_string(&configuration).unwrap();
         let restored: SimulationConfiguration = serde_json::from_str(&serialized).unwrap();
         restored.validate().unwrap();
@@ -106,14 +111,18 @@ fn versioned_configuration_round_trips_models_camera_and_acquisition() {
     let acquisition = IlluminationAcquisitionErrors::new()
         .frame_gain_relative_std(0.02)
         .missing_frames(vec![3]);
-    let configuration =
-        SimulationConfiguration::new(true_experiment, reconstruction_experiment, (8, 8), (16, 16))
-            .unwrap()
-            .with_camera(camera)
-            .unwrap()
-            .with_illumination_acquisition_errors(acquisition)
-            .unwrap()
-            .with_random_seed(1234);
+    let configuration = SimulationConfiguration::new(
+        true_experiment,
+        reconstruction_experiment,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap()
+    .with_camera(camera)
+    .unwrap()
+    .with_illumination_acquisition_errors(acquisition)
+    .unwrap()
+    .with_random_seed(1234);
 
     let directory = tempdir().unwrap();
     let path = directory.path().join("experiment.json");
@@ -140,13 +149,43 @@ fn versioned_configuration_round_trips_models_camera_and_acquisition() {
 }
 
 #[test]
+fn automatic_configuration_shape_covers_true_and_assumed_geometry() {
+    let optics = optics();
+    let image_shape = (8, 8);
+    let dk = std::f64::consts::TAU / (image_shape.1 as f64 * optics.object_pixel_size());
+    let true_experiment = ExperimentDescription::new(
+        optics.clone(),
+        Illumination::KVectors(vec![KVector::new(2.25 * dk, 0.0)]),
+    );
+    let reconstruction_experiment = ExperimentDescription::new(
+        optics,
+        Illumination::KVectors(vec![KVector::new(-2.25 * dk, 0.0)]),
+    );
+    let configuration = SimulationConfiguration::new(
+        true_experiment,
+        reconstruction_experiment,
+        image_shape,
+        ReconstructionShape::Minimum,
+    )
+    .unwrap();
+
+    assert_eq!(configuration.reconstruction_shape, (14, 14));
+    configuration.compiled_models.validate().unwrap();
+}
+
+#[test]
 fn configuration_rejects_unknown_versions_fields_and_model_drift() {
     let description = ExperimentDescription::new(
         optics(),
         Illumination::KVectors(vec![KVector::new(0.0, 0.0)]),
     );
-    let configuration =
-        SimulationConfiguration::new(description.clone(), description, (8, 8), (16, 16)).unwrap();
+    let configuration = SimulationConfiguration::new(
+        description.clone(),
+        description,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
 
     let mut wrong_version = configuration.clone();
     wrong_version.format_version = 999;
@@ -173,7 +212,7 @@ fn configuration_rejects_unknown_versions_fields_and_model_drift() {
             invalid_calibrated.clone(),
             invalid_calibrated,
             (8, 8),
-            (16, 16),
+            ReconstructionShape::Exact((16, 16)),
         )
         .is_err()
     );

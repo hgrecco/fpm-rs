@@ -10,7 +10,7 @@ use fpm_rs::{
     diagnostics::{LossType, ReconstructionHistory, loss},
     experiment::{LEDArray, Optics, PupilAberration},
     measurements::{LazyMeasurementStack, MeasurementRead},
-    model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil},
+    model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape},
     reconstruction::{
         Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionState, RunOptions,
         Runner,
@@ -1869,10 +1869,20 @@ fn epry_reduces_known_pupil_phase_error() {
         .pitch(4e-3)
         .distance(90e-3)
         .center((1.0, 1.0));
-    let reconstruction_model =
-        ImagePlaneModel::from_experiment(&assumed_optics, &leds, (16, 16), (32, 32)).unwrap();
-    let true_model =
-        ImagePlaneModel::from_experiment(&true_optics, &leds, (16, 16), (32, 32)).unwrap();
+    let reconstruction_model = ImagePlaneModel::from_experiment(
+        &assumed_optics,
+        &leds,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
+    let true_model = ImagePlaneModel::from_experiment(
+        &true_optics,
+        &leds,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
     let simulation = Simulator::new(true_model)
         .object(SyntheticObject::phase_disk((32, 32), 8.0, 0.9).unwrap())
         .reconstruction_model(reconstruction_model.clone())

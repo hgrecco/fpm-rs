@@ -58,6 +58,14 @@ def test_model_compilation_releases_the_gil(optics: fpm.Optics) -> None:
     )
 
 
+def test_reconstruction_shape_suggestion_releases_the_gil(optics: fpm.Optics) -> None:
+    illumination = fpm.KVectorList(np.zeros((250_000, 2), dtype=np.float64))
+    _assert_worker_runs_before_return(
+        lambda: fpm.suggest_reconstruction_shape(optics, illumination, (64, 64)),
+        delay=0.005,
+    )
+
+
 def test_camera_model_compilation_releases_the_gil(optics: fpm.Optics) -> None:
     leds = fpm.LEDArray((1, 1), 4e-3, 90e-3, (0.0, 0.0))
     model = fpm.compile_model(optics, leds, (1024, 1024), (2048, 2048))

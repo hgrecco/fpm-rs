@@ -14,6 +14,7 @@ not listed here.
     options:
       members:
         - open_dataset
+        - suggest_reconstruction_shape
         - compile_model
         - compile_camera_model
         - simulate

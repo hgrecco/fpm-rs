@@ -35,6 +35,56 @@ def test_compile_led_model_and_numpy_properties(optics: fpm.Optics) -> None:
     assert model.pupil_support.dtype == np.uint8
 
 
+def test_reconstruction_shape_suggestion_and_automatic_compilation(
+    optics: fpm.Optics,
+) -> None:
+    image_shape = (8, 8)
+    dk = 2.0 * np.pi / (image_shape[1] * optics.object_pixel_size)
+    illumination = fpm.KVectorList(np.array([[2.25 * dk, -1.4 * dk]]))
+
+    assert fpm.suggest_reconstruction_shape(
+        optics, illumination, image_shape, "minimum"
+    ) == (13, 13)
+    assert fpm.suggest_reconstruction_shape(optics, illumination, image_shape) == (
+        14,
+        14,
+    )
+    assert fpm.suggest_reconstruction_shape(
+        optics, illumination, image_shape, "power_of_two"
+    ) == (16, 16)
+    assert fpm.suggest_reconstruction_shape(
+        optics, illumination, image_shape, (16, 16)
+    ) == (16, 16)
+
+    assert fpm.compile_model(
+        optics, illumination, image_shape
+    ).reconstruction_shape == (
+        14,
+        14,
+    )
+    assert fpm.compile_model(
+        optics, illumination, image_shape, "minimum"
+    ).reconstruction_shape == (13, 13)
+    assert fpm.compile_model(
+        optics, illumination, image_shape, (16, 16)
+    ).reconstruction_shape == (16, 16)
+
+
+def test_reconstruction_shape_argument_rejects_none_and_unknown_modes(
+    optics: fpm.Optics,
+) -> None:
+    illumination = fpm.KVectorList(np.array([[0.0, 0.0]]))
+
+    with pytest.raises(TypeError, match="reconstruction_shape must be"):
+        fpm.compile_model(optics, illumination, (8, 8), None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="reconstruction_shape must be"):
+        fpm.suggest_reconstruction_shape(  # type: ignore[arg-type]
+            optics, illumination, (8, 8), None
+        )
+    with pytest.raises(ValueError, match="reconstruction_shape must be"):
+        fpm.compile_model(optics, illumination, (8, 8), "fast")  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "illumination, expected_sources, expected_frames",
     [

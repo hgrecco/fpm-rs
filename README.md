@@ -53,7 +53,7 @@ back-project each mode using its normalized multiplex weight.
 use fpm_rs::{
     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
     experiment::{LEDArray, Optics},
-    model::ImagePlaneModel,
+    model::{ImagePlaneModel, ReconstructionShape},
     reconstruction::ReconstructionProblem,
     simulation::{Simulator, SyntheticObject},
 };
@@ -74,7 +74,10 @@ let leds = LEDArray::new()
     .distance(90e-3)
     .center((1.0, 1.0));
 let model = ImagePlaneModel::from_experiment(
-    &optics, &leds, (32, 32), (64, 64),
+    &optics,
+    &leds,
+    (32, 32),
+    ReconstructionShape::PowerOfTwo,
 )?;
 let simulation = Simulator::ideal(model)
     .object(SyntheticObject::resolution_target((64, 64))?)
@@ -510,8 +513,11 @@ import fpm_rs as fpm
 
 optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
 leds = fpm.LEDArray((3, 3), 4e-3, 90e-3, (1.0, 1.0))
-model = fpm.compile_model(optics, leds, (32, 32), (64, 64))
-simulation = fpm.simulate(model, np.ones((64, 64), dtype=np.complex128))
+model = fpm.compile_model(optics, leds, (32, 32))
+simulation = fpm.simulate(
+    model,
+    np.ones(model.reconstruction_shape, dtype=np.complex128),
+)
 problem = fpm.ReconstructionProblem(
     simulation.measurements,
     simulation.reconstruction_model,

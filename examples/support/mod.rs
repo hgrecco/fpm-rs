@@ -1,7 +1,7 @@
 use fpm_rs::{
     Result,
     experiment::{LEDArray, Optics},
-    model::ImagePlaneModel,
+    model::{ImagePlaneModel, ReconstructionShape},
 };
 
 pub fn experimental_setup() -> (Optics, LEDArray) {
@@ -24,5 +24,10 @@ pub fn experimental_setup() -> (Optics, LEDArray) {
 
 pub fn experimental_model() -> Result<ImagePlaneModel> {
     let (optics, illumination) = experimental_setup();
-    ImagePlaneModel::from_experiment(&optics, &illumination, (32, 32), (64, 64))
+    ImagePlaneModel::from_experiment(
+        &optics,
+        &illumination,
+        (32, 32),
+        ReconstructionShape::Exact((64, 64)),
+    )
 }

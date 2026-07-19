@@ -7,6 +7,26 @@ The measured `image_shape` and recovered `reconstruction_shape` are both
 `(height, width)`. Physical distances are metres and angles are radians unless
 a parameter explicitly says degrees.
 
+When `reconstruction_shape` is omitted, compilation selects `"smooth"`: the
+smallest fitting aspect-preserving grid whose shared size multiplier contains
+only factors 2, 3, 5, and 7. Other accepted values are an exact `(height,
+width)`, `"minimum"`, and `"power_of_two"`. Inspect the choice without compiling
+a pupil with `suggest_reconstruction_shape`:
+
+```python
+minimum = fpm.suggest_reconstruction_shape(
+    optics, illumination, image_shape, "minimum"
+)
+model = fpm.compile_model(optics, illumination, image_shape)
+print(minimum, model.reconstruction_shape)
+```
+
+Every positive dimension is supported by RustFFT. These modes choose a
+memory/performance tradeoff; they do not guarantee recoverable information or
+uniform Fourier coverage. Automatic sizing uses the actual illumination wave
+vectors and includes fractional interpolation stencils, so it need not equal a
+simple synthetic-NA/objective-NA estimate.
+
 Choose `LEDArray` for a planar grid, `AngleList` or `KVectorList` for calibrated
 directions, and `CodedIllumination` for multiplexed frames. Spherical source
 classes have additional identifiability constraints documented in

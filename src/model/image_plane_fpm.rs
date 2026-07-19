@@ -9,6 +9,42 @@ use crate::{
 
 use super::{CropIndices, FourierCrop, FourierOffset, Pupil, Sampling};
 
+/// Selects an explicit reconstruction grid or an automatic sizing strategy.
+///
+/// Automatic shapes preserve the low-resolution aspect ratio, so the recovered
+/// object has the same pixel size in both axes. [`Self::Smooth`] and
+/// [`Self::PowerOfTwo`] round the shared reduced-aspect-ratio multiplier rather
+/// than each dimension independently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconstructionShape {
+    /// Use the supplied concrete `(height, width)` after validating it.
+    Exact((usize, usize)),
+    /// Use the smallest grid containing every Fourier crop and interpolation
+    /// stencil.
+    Minimum,
+    /// Round the minimum shared multiplier up to a value whose prime factors
+    /// are limited to 2, 3, 5, and 7.
+    Smooth,
+    /// Round the minimum shared multiplier up to a power of two.
+    PowerOfTwo,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GridShift {
+    integer: isize,
+    offset: f64,
+    lower: isize,
+    upper: isize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CropDisplacementBounds {
+    minimum_row: isize,
+    maximum_row: isize,
+    minimum_column: isize,
+    maximum_column: isize,
+}
+
 /// Algorithm-facing image-plane FPM model. It contains no LED or camera geometry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImagePlaneModel {
@@ -53,43 +89,59 @@ impl ImagePlaneModel {
         Ok(model)
     }
 
+    /// Compiles an experiment using an explicit or automatically selected
+    /// reconstruction shape.
     pub fn from_experiment<I: IlluminationSource>(
         optics: &Optics,
         illumination: &I,
         image_shape: (usize, usize),
-        reconstruction_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
     ) -> Result<Self> {
         optics.validate()?;
-        if image_shape.0 == 0
-            || image_shape.1 == 0
-            || reconstruction_shape.0 < image_shape.0
-            || reconstruction_shape.1 < image_shape.1
-        {
-            return Err(Error::InvalidShape(format!(
-                "image shape {image_shape:?} must be non-zero and fit reconstruction shape {reconstruction_shape:?}"
-            )));
-        }
-        let scale_y = reconstruction_shape.0 as f64 / image_shape.0 as f64;
-        let scale_x = reconstruction_shape.1 as f64 / image_shape.1 as f64;
-        if (scale_x - scale_y).abs() > 1e-9 * scale_x.max(scale_y) {
-            return Err(Error::InvalidShape(
-                "reconstruction must use the same scale factor in both dimensions".into(),
-            ));
-        }
+        let k_vectors = illumination.k_vectors(optics)?;
+        Self::from_experiment_with_k_vectors(
+            optics,
+            illumination,
+            k_vectors,
+            image_shape,
+            reconstruction_shape,
+        )
+    }
+
+    /// Resolves an explicit shape or suggests an automatic reconstruction grid
+    /// from the actual illumination wave vectors.
+    pub fn suggest_reconstruction_shape<I: IlluminationSource>(
+        optics: &Optics,
+        illumination: &I,
+        image_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
+    ) -> Result<(usize, usize)> {
+        optics.validate()?;
+        let k_vectors = illumination.k_vectors(optics)?;
+        let bounds = Self::crop_displacement_bounds(optics, image_shape, &k_vectors)?;
+        Self::resolve_reconstruction_shape(image_shape, reconstruction_shape, &[bounds])
+    }
+
+    pub(crate) fn from_experiment_with_k_vectors<I: IlluminationSource>(
+        optics: &Optics,
+        illumination: &I,
+        k_vectors: Vec<KVector>,
+        image_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
+    ) -> Result<Self> {
+        optics.validate()?;
+        let bounds = Self::crop_displacement_bounds(optics, image_shape, &k_vectors)?;
+        let reconstruction_shape =
+            Self::resolve_reconstruction_shape(image_shape, reconstruction_shape, &[bounds])?;
+        let scale = reconstruction_shape.1 as f64 / image_shape.1 as f64;
         let low_res_pixel_size = optics.object_pixel_size();
         let mut sampling = Sampling::new(
             low_res_pixel_size,
-            low_res_pixel_size / scale_x,
+            low_res_pixel_size / scale,
             std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size),
             std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size),
         )?;
         sampling.wavelength = Some(optics.wavelength);
-        let k_vectors = illumination.k_vectors(optics)?;
-        if k_vectors.is_empty() {
-            return Err(Error::InvalidModel(
-                "illumination must contain at least one frame".into(),
-            ));
-        }
         let maximum_illumination_na = k_vectors
             .iter()
             .map(|vector| vector.kx.hypot(vector.ky) * optics.wavelength / std::f64::consts::TAU)
@@ -119,6 +171,97 @@ impl ImagePlaneModel {
         model.subpixel_offsets = Some(offsets);
         model.validate()?;
         Ok(model)
+    }
+
+    pub(crate) fn crop_displacement_bounds(
+        optics: &Optics,
+        image_shape: (usize, usize),
+        k_vectors: &[KVector],
+    ) -> Result<CropDisplacementBounds> {
+        optics.validate()?;
+        validate_image_shape(image_shape)?;
+        if k_vectors.is_empty() {
+            return Err(Error::InvalidModel(
+                "illumination must contain at least one frame".into(),
+            ));
+        }
+        let low_res_pixel_size = optics.object_pixel_size();
+        let dkx = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
+        let dky = std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size);
+        let mut bounds = CropDisplacementBounds {
+            minimum_row: isize::MAX,
+            maximum_row: isize::MIN,
+            minimum_column: isize::MAX,
+            maximum_column: isize::MIN,
+        };
+        for vector in k_vectors {
+            let row = checked_grid_shift(vector.ky / dky)?;
+            let column = checked_grid_shift(vector.kx / dkx)?;
+            bounds.minimum_row = bounds.minimum_row.min(row.lower);
+            bounds.maximum_row = bounds.maximum_row.max(row.upper);
+            bounds.minimum_column = bounds.minimum_column.min(column.lower);
+            bounds.maximum_column = bounds.maximum_column.max(column.upper);
+        }
+        Ok(bounds)
+    }
+
+    pub(crate) fn resolve_reconstruction_shape(
+        image_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
+        bounds: &[CropDisplacementBounds],
+    ) -> Result<(usize, usize)> {
+        validate_image_shape(image_shape)?;
+        if bounds.is_empty() {
+            return Err(Error::InvalidModel(
+                "at least one set of illumination crop bounds is required".into(),
+            ));
+        }
+        match reconstruction_shape {
+            ReconstructionShape::Exact(shape) => {
+                validate_reconstruction_aspect(image_shape, shape)?;
+                if !shape_contains_bounds(image_shape, shape, bounds)? {
+                    return Err(Error::InvalidShape(format!(
+                        "reconstruction shape {shape:?} does not contain every illumination crop and subpixel interpolation stencil"
+                    )));
+                }
+                Ok(shape)
+            }
+            policy => {
+                let divisor = greatest_common_divisor(image_shape.0, image_shape.1);
+                let aspect_height = image_shape.0 / divisor;
+                let aspect_width = image_shape.1 / divisor;
+                let maximum_multiplier =
+                    (isize::MAX as usize / aspect_height).min(isize::MAX as usize / aspect_width);
+                let minimum_multiplier = minimum_fitting_multiplier(
+                    image_shape,
+                    (aspect_height, aspect_width),
+                    divisor,
+                    maximum_multiplier,
+                    bounds,
+                )?;
+                let multiplier = match policy {
+                    ReconstructionShape::Minimum => minimum_multiplier,
+                    ReconstructionShape::Smooth => next_smooth_multiplier(minimum_multiplier)
+                        .filter(|&value| value <= maximum_multiplier)
+                        .ok_or_else(|| {
+                            Error::InvalidShape(
+                                "no supported 2/3/5/7-smooth reconstruction multiplier exists"
+                                    .into(),
+                            )
+                        })?,
+                    ReconstructionShape::PowerOfTwo => minimum_multiplier
+                        .checked_next_power_of_two()
+                        .filter(|&value| value <= maximum_multiplier)
+                        .ok_or_else(|| {
+                            Error::InvalidShape(
+                                "no supported power-of-two reconstruction multiplier exists".into(),
+                            )
+                        })?,
+                    ReconstructionShape::Exact(_) => unreachable!(),
+                };
+                candidate_shape((aspect_height, aspect_width), multiplier)
+            }
+        }
     }
 
     pub fn source_count(&self) -> usize {
@@ -256,8 +399,8 @@ impl ImagePlaneModel {
     ) -> Result<(FourierCrop, FourierOffset)> {
         let continuous_row = vector.ky / sampling.dky;
         let continuous_column = vector.kx / sampling.dkx;
-        let (shift_row, offset_row) = checked_grid_shift(continuous_row)?;
-        let (shift_column, offset_column) = checked_grid_shift(continuous_column)?;
+        let row_shift = checked_grid_shift(continuous_row)?;
+        let column_shift = checked_grid_shift(continuous_column)?;
         let reconstruction_center_row = isize::try_from(reconstruction_shape.0 / 2)
             .map_err(|_| Error::InvalidShape("reconstruction height is too large".into()))?;
         let reconstruction_center_column = isize::try_from(reconstruction_shape.1 / 2)
@@ -268,10 +411,10 @@ impl ImagePlaneModel {
             .map_err(|_| Error::InvalidShape("image width is too large".into()))?;
         let start_row = reconstruction_center_row
             .checked_sub(image_half_height)
-            .and_then(|value| value.checked_add(shift_row));
+            .and_then(|value| value.checked_add(row_shift.integer));
         let start_column = reconstruction_center_column
             .checked_sub(image_half_width)
-            .and_then(|value| value.checked_add(shift_column));
+            .and_then(|value| value.checked_add(column_shift.integer));
         let (Some(start_row), Some(start_column)) = (start_row, start_column) else {
             return Err(Error::InvalidModel(format!(
                 "illumination vector {vector:?} overflows the reconstruction grid"
@@ -292,7 +435,7 @@ impl ImagePlaneModel {
             image_shape.0,
             image_shape.1,
         );
-        let offset = FourierOffset::new(offset_row, offset_column);
+        let offset = FourierOffset::new(row_shift.offset, column_shift.offset);
         crop.validate_subpixel_inside(reconstruction_shape, offset)?;
         Ok((crop, offset))
     }
@@ -459,7 +602,7 @@ impl ImagePlaneModel {
     }
 }
 
-fn checked_grid_shift(value: f64) -> Result<(isize, f64)> {
+fn checked_grid_shift(value: f64) -> Result<GridShift> {
     if !value.is_finite() {
         return Err(Error::InvalidModel(
             "illumination shift must be finite".into(),
@@ -471,5 +614,215 @@ fn checked_grid_shift(value: f64) -> Result<(isize, f64)> {
             "illumination shift is outside the supported index range".into(),
         ));
     }
-    Ok((rounded as isize, value - rounded))
+    let integer = rounded as isize;
+    let offset = value - rounded;
+    let nearest_offset = offset.round();
+    let (lower, upper) = if (offset - nearest_offset).abs() <= 1e-12 {
+        let displacement = integer
+            .checked_add(nearest_offset as isize)
+            .ok_or_else(|| {
+                Error::InvalidModel(
+                    "illumination shift is outside the supported index range".into(),
+                )
+            })?;
+        (displacement, displacement)
+    } else if offset > 0.0 {
+        (
+            integer,
+            integer.checked_add(1).ok_or_else(|| {
+                Error::InvalidModel(
+                    "illumination shift is outside the supported index range".into(),
+                )
+            })?,
+        )
+    } else {
+        (
+            integer.checked_sub(1).ok_or_else(|| {
+                Error::InvalidModel(
+                    "illumination shift is outside the supported index range".into(),
+                )
+            })?,
+            integer,
+        )
+    };
+    Ok(GridShift {
+        integer,
+        offset,
+        lower,
+        upper,
+    })
+}
+
+fn validate_image_shape(image_shape: (usize, usize)) -> Result<()> {
+    if image_shape.0 == 0 || image_shape.1 == 0 {
+        return Err(Error::InvalidShape(format!(
+            "image shape {image_shape:?} must be non-zero"
+        )));
+    }
+    if image_shape.0 > isize::MAX as usize || image_shape.1 > isize::MAX as usize {
+        return Err(Error::InvalidShape(
+            "image shape is outside the supported index range".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reconstruction_aspect(
+    image_shape: (usize, usize),
+    reconstruction_shape: (usize, usize),
+) -> Result<()> {
+    if reconstruction_shape.0 < image_shape.0 || reconstruction_shape.1 < image_shape.1 {
+        return Err(Error::InvalidShape(format!(
+            "image shape {image_shape:?} must fit reconstruction shape {reconstruction_shape:?}"
+        )));
+    }
+    if reconstruction_shape.0 > isize::MAX as usize || reconstruction_shape.1 > isize::MAX as usize
+    {
+        return Err(Error::InvalidShape(
+            "reconstruction shape is outside the supported index range".into(),
+        ));
+    }
+    let left = reconstruction_shape.0 as u128 * image_shape.1 as u128;
+    let right = reconstruction_shape.1 as u128 * image_shape.0 as u128;
+    if left != right {
+        return Err(Error::InvalidShape(
+            "reconstruction must use the same scale factor in both dimensions".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn shape_contains_bounds(
+    image_shape: (usize, usize),
+    reconstruction_shape: (usize, usize),
+    bounds: &[CropDisplacementBounds],
+) -> Result<bool> {
+    validate_reconstruction_aspect(image_shape, reconstruction_shape)?;
+    for bound in bounds {
+        if !axis_contains_bounds(
+            image_shape.0,
+            reconstruction_shape.0,
+            bound.minimum_row,
+            bound.maximum_row,
+        )? || !axis_contains_bounds(
+            image_shape.1,
+            reconstruction_shape.1,
+            bound.minimum_column,
+            bound.maximum_column,
+        )? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn axis_contains_bounds(
+    image_length: usize,
+    reconstruction_length: usize,
+    minimum_displacement: isize,
+    maximum_displacement: isize,
+) -> Result<bool> {
+    let centre = i128::try_from(reconstruction_length / 2)
+        .map_err(|_| Error::InvalidShape("reconstruction dimension is too large".into()))?;
+    let image_half = i128::try_from(image_length / 2)
+        .map_err(|_| Error::InvalidShape("image dimension is too large".into()))?;
+    let base = centre.checked_sub(image_half).ok_or_else(|| {
+        Error::InvalidShape("reconstruction crop origin overflows the index range".into())
+    })?;
+    let lower = base
+        .checked_add(minimum_displacement as i128)
+        .ok_or_else(|| {
+            Error::InvalidShape("reconstruction crop origin overflows the index range".into())
+        })?;
+    let upper = base
+        .checked_add((image_length - 1) as i128)
+        .and_then(|value| value.checked_add(maximum_displacement as i128))
+        .ok_or_else(|| {
+            Error::InvalidShape("reconstruction crop extent overflows the index range".into())
+        })?;
+    Ok(lower >= 0 && upper < reconstruction_length as i128)
+}
+
+fn minimum_fitting_multiplier(
+    image_shape: (usize, usize),
+    aspect: (usize, usize),
+    initial_multiplier: usize,
+    maximum_multiplier: usize,
+    bounds: &[CropDisplacementBounds],
+) -> Result<usize> {
+    let fits = |multiplier| -> Result<bool> {
+        let shape = candidate_shape(aspect, multiplier)?;
+        shape_contains_bounds(image_shape, shape, bounds)
+    };
+    if fits(initial_multiplier)? {
+        return Ok(initial_multiplier);
+    }
+    let mut lower = initial_multiplier;
+    let mut upper = initial_multiplier;
+    loop {
+        let doubled = upper.checked_mul(2).unwrap_or(maximum_multiplier);
+        upper = doubled.min(maximum_multiplier);
+        if upper == lower {
+            return Err(Error::InvalidShape(
+                "illumination crops require a reconstruction shape outside the supported index range"
+                    .into(),
+            ));
+        }
+        if fits(upper)? {
+            break;
+        }
+        lower = upper;
+    }
+    while lower + 1 < upper {
+        let middle = lower + (upper - lower) / 2;
+        if fits(middle)? {
+            upper = middle;
+        } else {
+            lower = middle;
+        }
+    }
+    Ok(upper)
+}
+
+fn candidate_shape(aspect: (usize, usize), multiplier: usize) -> Result<(usize, usize)> {
+    let height = aspect.0.checked_mul(multiplier).ok_or_else(|| {
+        Error::InvalidShape("reconstruction height overflows the supported range".into())
+    })?;
+    let width = aspect.1.checked_mul(multiplier).ok_or_else(|| {
+        Error::InvalidShape("reconstruction width overflows the supported range".into())
+    })?;
+    Ok((height, width))
+}
+
+fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+fn next_smooth_multiplier(minimum: usize) -> Option<usize> {
+    fn visit(value: usize, prime_index: usize, minimum: usize, best: &mut Option<usize>) {
+        if value >= minimum {
+            if best.is_none_or(|current| value < current) {
+                *best = Some(value);
+            }
+            return;
+        }
+        const PRIMES: [usize; 4] = [2, 3, 5, 7];
+        for (index, &prime) in PRIMES.iter().enumerate().skip(prime_index) {
+            let Some(next) = value.checked_mul(prime) else {
+                continue;
+            };
+            if best.is_none_or(|current| next < current) {
+                visit(next, index, minimum, best);
+            }
+        }
+    }
+
+    let mut best = None;
+    visit(1, 0, minimum, &mut best);
+    best
 }

@@ -9,6 +9,7 @@ use fpm_rs::{
     },
     experiment::{Illumination, KVector, Optics},
     measurements::{FrameSpec, MeasurementSpec},
+    model::ReconstructionShape,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -31,8 +32,13 @@ fn write_bundle(root: &Path) -> Result<()> {
     };
     let experiment =
         ExperimentDescription::new(optics, Illumination::KVectors(vec![KVector::new(0.0, 0.0)]));
-    SimulationConfiguration::new(experiment.clone(), experiment, (4, 4), (8, 8))?
-        .save(root.join("configuration.json"))?;
+    SimulationConfiguration::new(
+        experiment.clone(),
+        experiment,
+        (4, 4),
+        ReconstructionShape::Exact((8, 8)),
+    )?
+    .save(root.join("configuration.json"))?;
     fs::write(
         root.join("dataset.json"),
         r#"{

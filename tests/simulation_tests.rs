@@ -5,7 +5,7 @@ use fpm_rs::simulation::{CameraModel, IlluminationAcquisitionErrors, Simulator, 
 use fpm_rs::{
     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
     experiment::{LEDArray, Optics, PupilAberration},
-    model::{ForwardModel, ImagePlaneModel},
+    model::{ForwardModel, ImagePlaneModel, ReconstructionShape},
 };
 use image::GrayImage;
 use rand::{SeedableRng, rngs::StdRng};
@@ -260,10 +260,20 @@ fn illumination_mismatch_keeps_true_and_reconstruction_models_distinct() {
         .distance(89.5e-3)
         .center((1.08, -0.04))
         .rotation_deg(0.7);
-    let true_model =
-        ImagePlaneModel::from_experiment(&optics, &true_array, (8, 8), (16, 16)).unwrap();
-    let reconstruction_model =
-        ImagePlaneModel::from_experiment(&optics, &assumed_array, (8, 8), (16, 16)).unwrap();
+    let true_model = ImagePlaneModel::from_experiment(
+        &optics,
+        &true_array,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
+    let reconstruction_model = ImagePlaneModel::from_experiment(
+        &optics,
+        &assumed_array,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
 
     let simulation = Simulator::new(true_model.clone())
         .reconstruction_model(reconstruction_model.clone())
@@ -301,10 +311,20 @@ fn pupil_mismatch_comes_from_the_provided_models() {
         ..assumed_optics.clone()
     };
     let illumination = LEDArray::new();
-    let true_model =
-        ImagePlaneModel::from_experiment(&true_optics, &illumination, (8, 8), (16, 16)).unwrap();
-    let reconstruction_model =
-        ImagePlaneModel::from_experiment(&assumed_optics, &illumination, (8, 8), (16, 16)).unwrap();
+    let true_model = ImagePlaneModel::from_experiment(
+        &true_optics,
+        &illumination,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
+    let reconstruction_model = ImagePlaneModel::from_experiment(
+        &assumed_optics,
+        &illumination,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
 
     let simulation = Simulator::new(true_model.clone())
         .reconstruction_model(reconstruction_model.clone())

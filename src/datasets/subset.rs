@@ -4,7 +4,7 @@ use crate::{
     error::Error,
     experiment::Illumination,
     measurements::MeasurementStack,
-    model::ImagePlaneModel,
+    model::{ImagePlaneModel, ReconstructionShape},
     reconstruction::ReconstructionProblem,
 };
 
@@ -215,7 +215,7 @@ impl<'a> DatasetSubsetBuilder<'a> {
             true_experiment,
             reconstruction_experiment,
             (crop.height, crop.width),
-            reconstruction_shape,
+            ReconstructionShape::Exact(reconstruction_shape),
         )?
         .with_random_seed(source_configuration.random_seed);
         Ok(DatasetSubset {

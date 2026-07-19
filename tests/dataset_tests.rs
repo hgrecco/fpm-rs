@@ -6,6 +6,7 @@ use fpm_rs::{
     datasets::{Dataset, DatasetLoader, DatasetManifest, FrameSelector},
     experiment::{Illumination, KVector, Optics},
     measurements::{FrameSpec, MeasurementSpec, MeasurementStack},
+    model::ReconstructionShape,
 };
 use tempfile::TempDir;
 
@@ -85,8 +86,13 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
     let illumination =
         Illumination::KVectors(vec![KVector::new(0.0, 0.0), KVector::new(1000.0, 0.0)]);
     let experiment = ExperimentDescription::new(optics, illumination);
-    SimulationConfiguration::new(experiment.clone(), experiment, (4, 4), (8, 8))?
-        .save(derived.join("configuration.json"))?;
+    SimulationConfiguration::new(
+        experiment.clone(),
+        experiment,
+        (4, 4),
+        ReconstructionShape::Exact((8, 8)),
+    )?
+    .save(derived.join("configuration.json"))?;
     let ground_truth = Array2::from_vec(
         (8, 8),
         (0..64)
@@ -200,8 +206,12 @@ fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
         KVector::new(0.0, 1000.0),
     ]);
     let experiment = ExperimentDescription::new(optics, illumination);
-    let configuration =
-        SimulationConfiguration::new(experiment.clone(), experiment, (4, 4), (8, 8))?;
+    let configuration = SimulationConfiguration::new(
+        experiment.clone(),
+        experiment,
+        (4, 4),
+        ReconstructionShape::Exact((8, 8)),
+    )?;
     let measurements =
         MeasurementStack::from_vec((0..48).map(f64::from).collect(), (4, 4), Vec::new())?;
     let dataset = Dataset::new(measurements, configuration)?;
@@ -270,7 +280,7 @@ fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
         ordinary_experiment.clone(),
         ordinary_experiment,
         (4, 4),
-        (8, 8),
+        ReconstructionShape::Exact((8, 8)),
     )?;
     let measurements =
         MeasurementStack::from_vec((0..48).map(f64::from).collect(), (4, 4), Vec::new())?;
@@ -304,7 +314,7 @@ fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
         multiplexed_experiment.clone(),
         multiplexed_experiment,
         (4, 4),
-        (8, 8),
+        ReconstructionShape::Exact((8, 8)),
     )?;
     let multiplexed = Dataset::new(measurements, multiplexed_configuration)?;
     let multiplexed_subset = multiplexed

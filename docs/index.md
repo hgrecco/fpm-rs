@@ -32,11 +32,11 @@ import fpm_rs as fpm
 
 optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
 leds = fpm.LEDArray((3, 3), 4e-3, 90e-3, (1.0, 1.0))
-model = fpm.compile_model(optics, leds, (32, 32), (64, 64))
+model = fpm.compile_model(optics, leds, (32, 32))
 
 simulation = fpm.simulate(
     model,
-    np.ones((64, 64), dtype=np.complex128),
+    np.ones(model.reconstruction_shape, dtype=np.complex128),
     seed=1234,
 )
 problem = fpm.ReconstructionProblem(
@@ -44,7 +44,7 @@ problem = fpm.ReconstructionProblem(
     simulation.reconstruction_model,
 )
 result = fpm.AlternatingProjection(iterations=10).run(problem)
-print(result.amplitude.shape)  # (64, 64)
+print(result.amplitude.shape)  # (42, 42)
 ```
 
 Continue through the [Quickstart](getting-started/quickstart.md), run the

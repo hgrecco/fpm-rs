@@ -17,7 +17,7 @@ use crate::{
     Result,
     error::Error,
     experiment::{Illumination, IlluminationSource, Optics},
-    model::ImagePlaneModel,
+    model::{ImagePlaneModel, ReconstructionShape},
     simulation::{CameraModel, IlluminationAcquisitionErrors},
 };
 
@@ -51,11 +51,22 @@ impl ExperimentDescription {
     pub fn compile(
         &self,
         image_shape: (usize, usize),
-        reconstruction_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
     ) -> Result<ImagePlaneModel> {
-        let mut model = ImagePlaneModel::from_experiment(
+        let k_vectors = self.illumination.k_vectors(&self.optics)?;
+        self.compile_with_k_vectors(image_shape, reconstruction_shape, k_vectors)
+    }
+
+    fn compile_with_k_vectors(
+        &self,
+        image_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
+        k_vectors: Vec<crate::experiment::KVector>,
+    ) -> Result<ImagePlaneModel> {
+        let mut model = ImagePlaneModel::from_experiment_with_k_vectors(
             &self.optics,
             &self.illumination,
+            k_vectors,
             image_shape,
             reconstruction_shape,
         )?;
@@ -129,12 +140,40 @@ impl SimulationConfiguration {
         true_experiment: ExperimentDescription,
         reconstruction_experiment: ExperimentDescription,
         image_shape: (usize, usize),
-        reconstruction_shape: (usize, usize),
+        reconstruction_shape: ReconstructionShape,
     ) -> Result<Self> {
+        let true_k_vectors = true_experiment
+            .illumination
+            .k_vectors(&true_experiment.optics)?;
+        let reconstruction_k_vectors = reconstruction_experiment
+            .illumination
+            .k_vectors(&reconstruction_experiment.optics)?;
+        let true_bounds = ImagePlaneModel::crop_displacement_bounds(
+            &true_experiment.optics,
+            image_shape,
+            &true_k_vectors,
+        )?;
+        let reconstruction_bounds = ImagePlaneModel::crop_displacement_bounds(
+            &reconstruction_experiment.optics,
+            image_shape,
+            &reconstruction_k_vectors,
+        )?;
+        let reconstruction_shape = ImagePlaneModel::resolve_reconstruction_shape(
+            image_shape,
+            reconstruction_shape,
+            &[true_bounds, reconstruction_bounds],
+        )?;
         let compiled_models = CompiledModelPair {
-            true_model: true_experiment.compile(image_shape, reconstruction_shape)?,
-            reconstruction_model: reconstruction_experiment
-                .compile(image_shape, reconstruction_shape)?,
+            true_model: true_experiment.compile_with_k_vectors(
+                image_shape,
+                ReconstructionShape::Exact(reconstruction_shape),
+                true_k_vectors,
+            )?,
+            reconstruction_model: reconstruction_experiment.compile_with_k_vectors(
+                image_shape,
+                ReconstructionShape::Exact(reconstruction_shape),
+                reconstruction_k_vectors,
+            )?,
         };
         let configuration = Self {
             format_version: CONFIGURATION_FORMAT_VERSION,
@@ -245,7 +284,10 @@ fn validate_compiled_description(
             "compiled model dimensions differ from configuration dimensions".into(),
         ));
     }
-    let expected = description.compile(image_shape, reconstruction_shape)?;
+    let expected = description.compile(
+        image_shape,
+        ReconstructionShape::Exact(reconstruction_shape),
+    )?;
     if expected.frame_count() != stored.frame_count()
         || expected.source_count() != stored.source_count()
         || expected.crop_indices.crops != stored.crop_indices.crops

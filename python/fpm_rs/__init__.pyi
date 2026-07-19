@@ -1,6 +1,6 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from os import PathLike
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 from numpy.typing import NDArray
@@ -8,6 +8,9 @@ import fpm_rs.diagnostics as diagnostics
 import fpm_rs.plot as plot
 
 Shape2D: TypeAlias = tuple[int, int]
+ReconstructionShapeSpec: TypeAlias = (
+    Shape2D | Literal["minimum", "smooth", "power_of_two"]
+)
 FloatArray: TypeAlias = NDArray[np.float64]
 ComplexArray: TypeAlias = NDArray[np.complex128]
 MaskArray: TypeAlias = NDArray[np.uint8]
@@ -389,8 +392,14 @@ def compile_model(
     optics: Optics,
     illumination: Illumination,
     image_shape: Shape2D,
-    reconstruction_shape: Shape2D,
+    reconstruction_shape: ReconstructionShapeSpec = "smooth",
 ) -> ImagePlaneModel: ...
+def suggest_reconstruction_shape(
+    optics: Optics,
+    illumination: Illumination,
+    image_shape: Shape2D,
+    reconstruction_shape: ReconstructionShapeSpec = "smooth",
+) -> Shape2D: ...
 def compile_camera_model(
     model: ImagePlaneModel, camera: CameraModel
 ) -> ImagePlaneModel: ...

@@ -1,4 +1,4 @@
-use fpm_rs::model::ImagePlaneModel;
+use fpm_rs::model::{ImagePlaneModel, ReconstructionShape};
 use numpy::{PyArray1, PyArray2, ndarray};
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -8,6 +8,32 @@ use crate::{
     config::{PyCameraModel, PyOptics, extract_illumination},
     errors::to_py_err,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) struct PyReconstructionShape(ReconstructionShape);
+
+impl FromPyObject<'_, '_> for PyReconstructionShape {
+    type Error = PyErr;
+
+    fn extract(value: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        if let Ok(shape) = value.extract::<(usize, usize)>() {
+            return Ok(Self(ReconstructionShape::Exact(shape)));
+        }
+        if let Ok(mode) = value.extract::<&str>() {
+            return match mode {
+                "minimum" => Ok(Self(ReconstructionShape::Minimum)),
+                "smooth" => Ok(Self(ReconstructionShape::Smooth)),
+                "power_of_two" => Ok(Self(ReconstructionShape::PowerOfTwo)),
+                _ => Err(pyo3::exceptions::PyValueError::new_err(
+                    "reconstruction_shape must be a (height, width) tuple, 'minimum', 'smooth', or 'power_of_two'",
+                )),
+            };
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "reconstruction_shape must be a (height, width) tuple, 'minimum', 'smooth', or 'power_of_two'",
+        ))
+    }
+}
 
 #[pyclass(
     module = "fpm_rs._core",
@@ -94,13 +120,50 @@ impl PyImagePlaneModel {
 }
 
 #[pyfunction]
+#[pyo3(
+    signature = (optics, illumination, image_shape, reconstruction_shape=PyReconstructionShape(ReconstructionShape::Smooth)),
+    text_signature = "(optics, illumination, image_shape, reconstruction_shape='smooth')"
+)]
+/// Resolves an exact or automatic reconstruction-shape choice without
+/// compiling the pupil and crop arrays.
+pub(crate) fn suggest_reconstruction_shape(
+    py: Python<'_>,
+    optics: PyRef<'_, PyOptics>,
+    illumination: &Bound<'_, PyAny>,
+    image_shape: (usize, usize),
+    reconstruction_shape: PyReconstructionShape,
+) -> PyResult<(usize, usize)> {
+    let reconstruction_shape = reconstruction_shape.0;
+    let illumination = extract_illumination(illumination)?;
+    let optics = optics.inner.clone();
+    py.detach(move || {
+        ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &illumination,
+            image_shape,
+            reconstruction_shape,
+        )
+    })
+    .map_err(to_py_err)
+}
+
+#[pyfunction]
+#[pyo3(
+    signature = (optics, illumination, image_shape, reconstruction_shape=PyReconstructionShape(ReconstructionShape::Smooth)),
+    text_signature = "(optics, illumination, image_shape, reconstruction_shape='smooth')"
+)]
+/// Compiles optics and illumination into an immutable image-plane model.
+///
+/// `reconstruction_shape` accepts `(height, width)`, `"minimum"`, `"smooth"`,
+/// or `"power_of_two"`; omission selects `"smooth"`.
 pub(crate) fn compile_model(
     py: Python<'_>,
     optics: PyRef<'_, PyOptics>,
     illumination: &Bound<'_, PyAny>,
     image_shape: (usize, usize),
-    reconstruction_shape: (usize, usize),
+    reconstruction_shape: PyReconstructionShape,
 ) -> PyResult<PyImagePlaneModel> {
+    let reconstruction_shape = reconstruction_shape.0;
     let illumination = extract_illumination(illumination)?;
     let optics = optics.inner.clone();
     // The inputs are all Rust-owned after conversion. Pupil construction and
@@ -139,6 +202,7 @@ pub(crate) fn compile_camera_model(
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyImagePlaneModel>()?;
+    module.add_function(wrap_pyfunction!(suggest_reconstruction_shape, module)?)?;
     module.add_function(wrap_pyfunction!(compile_model, module)?)?;
     module.add_function(wrap_pyfunction!(compile_camera_model, module)?)?;
     Ok(())

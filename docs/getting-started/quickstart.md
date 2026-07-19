@@ -20,12 +20,7 @@ illumination = fpm.LEDArray(
     distance=90e-3,
     center=(1.0, 1.0),
 )
-model = fpm.compile_model(
-    optics,
-    illumination,
-    image_shape=(32, 32),
-    reconstruction_shape=(64, 64),
-)
+model = fpm.compile_model(optics, illumination, image_shape=(32, 32))
 
 row, column = np.indices(model.reconstruction_shape)
 amplitude = 0.7 + 0.3 * ((row // 8 + column // 8) % 2)
@@ -45,7 +40,7 @@ print(result.runtime.completed_iterations)
 print(result.final_loss)
 ```
 
-Expected output includes an amplitude shape of `(64, 64)`, 20 completed
+Expected output includes an amplitude shape of `(42, 42)`, 20 completed
 iterations, and a finite final loss. Exact floating-point loss values may vary
 slightly by platform.
 
@@ -53,6 +48,11 @@ The model separates the measured low-resolution frame shape from the recovered
 object shape. `simulate` returns both detector intensities and the reconstruction
 model appropriate for those intensities. The algorithm returns NumPy amplitude,
 phase, spectrum, and pupil arrays.
+
+Omitting `reconstruction_shape` selects the default `"smooth"` grid. For this
+geometry that is `(42, 42)`. Pass an exact `(height, width)`, `"minimum"`, or
+`"power_of_two"` when memory, a prescribed sampling grid, or radix-2 FFT sizes
+matter more than the default small-factor FFT choice.
 
 Next, follow the rendered [first reconstruction tutorial](../tutorials/notebooks/quickstart.ipynb),
 learn how to [record diagnostics](../diagnostics.md), or consult the

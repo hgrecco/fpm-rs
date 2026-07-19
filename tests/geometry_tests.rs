@@ -5,7 +5,10 @@ use fpm_rs::{
         AngleList, CodedIllumination, IlluminationSource, KVector, LEDArray, LEDSphere, Optics,
         PupilAberration, RotatingLEDArc, SphericalLEDArm,
     },
-    model::{CropIndices, FourierCrop, FourierOffset, ImagePlaneModel, Pupil, Sampling},
+    model::{
+        CropIndices, FourierCrop, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape,
+        Sampling,
+    },
 };
 
 fn optics() -> Optics {
@@ -246,7 +249,13 @@ fn experiment_compiles_to_valid_model() {
         .pitch(4e-3)
         .distance(90e-3)
         .center((1.0, 1.0));
-    let model = ImagePlaneModel::from_experiment(&optics(), &array, (16, 16), (32, 32)).unwrap();
+    let model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &array,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
     assert_eq!(model.frame_count(), 9);
     assert_eq!(model.pupil.shape(), (16, 16));
     assert!(model.pupil.support.iter().any(|inside| *inside));
@@ -257,6 +266,208 @@ fn experiment_compiles_to_valid_model() {
             .iter()
             .all(|crop| crop.validate_inside((32, 32)).is_ok())
     );
+}
+
+#[test]
+fn reconstruction_shape_suggestion_resolves_all_policies() {
+    let optics = optics();
+    let image_shape = (8, 8);
+    let low_res_pixel_size = optics.object_pixel_size();
+    let dk = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
+    let illumination = vec![KVector::new(2.25 * dk, -1.4 * dk)];
+
+    let minimum = ImagePlaneModel::suggest_reconstruction_shape(
+        &optics,
+        &illumination,
+        image_shape,
+        ReconstructionShape::Minimum,
+    )
+    .unwrap();
+    let smooth = ImagePlaneModel::suggest_reconstruction_shape(
+        &optics,
+        &illumination,
+        image_shape,
+        ReconstructionShape::Smooth,
+    )
+    .unwrap();
+    let power_of_two = ImagePlaneModel::suggest_reconstruction_shape(
+        &optics,
+        &illumination,
+        image_shape,
+        ReconstructionShape::PowerOfTwo,
+    )
+    .unwrap();
+
+    assert_eq!(minimum, (13, 13));
+    assert_eq!(smooth, (14, 14));
+    assert_eq!(power_of_two, (16, 16));
+    assert!(
+        ImagePlaneModel::from_experiment(
+            &optics,
+            &illumination,
+            image_shape,
+            ReconstructionShape::Exact((12, 12)),
+        )
+        .is_err()
+    );
+    for shape in [minimum, smooth, power_of_two] {
+        assert_eq!(
+            ImagePlaneModel::from_experiment(
+                &optics,
+                &illumination,
+                image_shape,
+                ReconstructionShape::Exact(shape),
+            )
+            .unwrap()
+            .reconstruction_shape,
+            shape
+        );
+    }
+}
+
+#[test]
+fn automatic_shapes_preserve_rectangular_aspect_ratio() {
+    let optics = optics();
+    let image_shape = (8, 12);
+    let low_res_pixel_size = optics.object_pixel_size();
+    let dkx = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
+    let dky = std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size);
+    let illumination = vec![KVector::new(2.25 * dkx, -1.4 * dky)];
+
+    let minimum = ImagePlaneModel::suggest_reconstruction_shape(
+        &optics,
+        &illumination,
+        image_shape,
+        ReconstructionShape::Minimum,
+    )
+    .unwrap();
+    let smooth = ImagePlaneModel::suggest_reconstruction_shape(
+        &optics,
+        &illumination,
+        image_shape,
+        ReconstructionShape::Smooth,
+    )
+    .unwrap();
+    let power_of_two = ImagePlaneModel::suggest_reconstruction_shape(
+        &optics,
+        &illumination,
+        image_shape,
+        ReconstructionShape::PowerOfTwo,
+    )
+    .unwrap();
+
+    assert_eq!(minimum, (12, 18));
+    assert_eq!(smooth, (12, 18));
+    assert_eq!(power_of_two, (16, 24));
+    assert_eq!(minimum.0 * image_shape.1, minimum.1 * image_shape.0);
+    assert_eq!(
+        power_of_two.0 * image_shape.1,
+        power_of_two.1 * image_shape.0
+    );
+}
+
+#[test]
+fn exact_reconstruction_shape_is_validated_by_the_suggestion_api() {
+    let optics = optics();
+    let illumination = vec![KVector::default()];
+    assert_eq!(
+        ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &illumination,
+            (8, 12),
+            ReconstructionShape::Exact((16, 24)),
+        )
+        .unwrap(),
+        (16, 24)
+    );
+    assert!(
+        ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &illumination,
+            (8, 12),
+            ReconstructionShape::Exact((16, 23)),
+        )
+        .is_err()
+    );
+    assert!(
+        ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &illumination,
+            (0, 12),
+            ReconstructionShape::Minimum,
+        )
+        .is_err()
+    );
+    assert!(
+        ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &Vec::<KVector>::new(),
+            (8, 8),
+            ReconstructionShape::Minimum,
+        )
+        .is_err()
+    );
+    assert!(
+        ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &illumination,
+            (8, 8),
+            ReconstructionShape::Exact((usize::MAX, usize::MAX)),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn minimum_suggestion_matches_compilation_across_grid_parities() {
+    for image_shape in [(7, 7), (8, 8), (8, 12), (9, 15)] {
+        let optics = optics();
+        let low_res_pixel_size = optics.object_pixel_size();
+        let dkx = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
+        let dky = std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size);
+        let illumination = vec![
+            KVector::new(-2.5 * dkx, 1.0 * dky),
+            KVector::new(1.2 * dkx, -1.75 * dky),
+            KVector::new(0.0, 0.0),
+        ];
+        let suggested = ImagePlaneModel::suggest_reconstruction_shape(
+            &optics,
+            &illumination,
+            image_shape,
+            ReconstructionShape::Minimum,
+        )
+        .unwrap();
+        ImagePlaneModel::from_experiment(
+            &optics,
+            &illumination,
+            image_shape,
+            ReconstructionShape::Exact(suggested),
+        )
+        .unwrap();
+
+        let divisor = greatest_common_divisor(image_shape.0, image_shape.1);
+        let aspect = (image_shape.0 / divisor, image_shape.1 / divisor);
+        let multiplier = suggested.0 / aspect.0;
+        if multiplier > divisor {
+            let previous = (aspect.0 * (multiplier - 1), aspect.1 * (multiplier - 1));
+            assert!(
+                ImagePlaneModel::from_experiment(
+                    &optics,
+                    &illumination,
+                    image_shape,
+                    ReconstructionShape::Exact(previous),
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
 }
 
 #[test]
@@ -271,11 +482,20 @@ fn pupil_aberration_and_apodization_compile_into_the_pupil() {
         edge_apodization: 0.4,
     });
     let illumination = LEDArray::new();
-    let ideal =
-        ImagePlaneModel::from_experiment(&ideal_optics, &illumination, (16, 16), (32, 32)).unwrap();
-    let aberrated =
-        ImagePlaneModel::from_experiment(&aberrated_optics, &illumination, (16, 16), (32, 32))
-            .unwrap();
+    let ideal = ImagePlaneModel::from_experiment(
+        &ideal_optics,
+        &illumination,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
+    let aberrated = ImagePlaneModel::from_experiment(
+        &aberrated_optics,
+        &illumination,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
 
     assert_eq!(ideal.pupil.support, aberrated.pupil.support);
     assert_ne!(ideal.pupil.values, aberrated.pupil.values);
@@ -309,7 +529,7 @@ fn experiment_compilation_preserves_fractional_fourier_shifts() {
         &optics,
         &vec![KVector::new(0.25 * dk, -0.4 * dk)],
         (16, 16),
-        (32, 32),
+        ReconstructionShape::Exact((32, 32)),
     )
     .unwrap();
     let offset = model.source_offset(0).unwrap();
@@ -338,8 +558,13 @@ fn invalid_crop_is_rejected() {
 
 #[test]
 fn non_finite_model_parameters_are_rejected() {
-    let mut model =
-        ImagePlaneModel::from_experiment(&optics(), &LEDArray::new(), (8, 8), (16, 16)).unwrap();
+    let mut model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &LEDArray::new(),
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
     model.frame_gains = Some(vec![f64::NAN]);
     assert!(model.validate().is_err());
 
@@ -347,9 +572,13 @@ fn non_finite_model_parameters_are_rejected() {
     model.pupil.values.as_mut_slice()[0] = Complex64::new(f64::INFINITY, 0.0);
     assert!(model.validate().is_err());
 
-    let mut model =
-        ImagePlaneModel::from_experiment(&optics(), &vec![KVector::default()], (8, 8), (16, 16))
-            .unwrap();
+    let mut model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &vec![KVector::default()],
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
     model.subpixel_offsets = Some(vec![FourierOffset::new(f64::NAN, 0.0)]);
     assert!(model.validate().is_err());
 
@@ -361,7 +590,7 @@ fn non_finite_model_parameters_are_rejected() {
             &optics(),
             &vec![KVector::new(f64::MAX, 0.0)],
             (8, 8),
-            (16, 16),
+            ReconstructionShape::Exact((16, 16)),
         )
         .is_err()
     );
@@ -374,7 +603,13 @@ fn led_intensity_weights_compile_in_acquisition_order() {
         .center((1.0, 0.0))
         .illumination_order(vec![2, 0, 1])
         .intensity_weights(vec![0.5, 1.0, 2.0]);
-    let model = ImagePlaneModel::from_experiment(&optics(), &array, (16, 16), (32, 32)).unwrap();
+    let model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &array,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
     assert_eq!(model.frame_gains, Some(vec![2.0, 0.5, 1.0]));
 }
 
@@ -388,7 +623,13 @@ fn coded_illumination_compiles_sources_and_measured_frames_separately() {
         ],
         frame_weights: vec![vec![(0, 0.5), (1, 0.5)], vec![(2, 1.0)]],
     };
-    let model = ImagePlaneModel::from_experiment(&optics(), &coded, (16, 16), (32, 32)).unwrap();
+    let model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &coded,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
     assert_eq!(model.source_count(), 3);
     assert_eq!(model.frame_count(), 2);
     assert_eq!(model.crop_indices.len(), 3);
@@ -404,8 +645,13 @@ fn experiment_validation_rejects_non_finite_and_non_propagating_inputs() {
     });
     assert!(invalid_optics.validate().is_err());
     assert!(
-        ImagePlaneModel::from_experiment(&invalid_optics, &LEDArray::new(), (8, 8), (16, 16))
-            .is_err()
+        ImagePlaneModel::from_experiment(
+            &invalid_optics,
+            &LEDArray::new(),
+            (8, 8),
+            ReconstructionShape::Exact((16, 16)),
+        )
+        .is_err()
     );
 
     let mut invalid_optics = optics();
@@ -442,9 +688,13 @@ fn coded_illumination_rejects_invalid_and_duplicate_sources() {
     assert!(coded.validate(&optics()).is_err());
     assert!(coded.multiplexing_matrix().is_err());
 
-    let model =
-        ImagePlaneModel::from_experiment(&optics(), &vec![KVector::default()], (8, 8), (16, 16))
-            .unwrap();
+    let model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &vec![KVector::default()],
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
     assert!(
         model
             .with_multiplexing(vec![vec![(0, 0.5), (0, 0.5)]])

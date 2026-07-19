@@ -50,6 +50,13 @@ the format version and validate that serialized compiled geometry, pupil,
 sampling, gains, background, and multiplexing still agree with their concrete
 descriptions.
 
+Both constructors take `ReconstructionShape`. `Exact((height, width))` validates
+a prescribed grid, while `Minimum`, `Smooth`, and `PowerOfTwo` resolve a concrete
+aspect-preserving grid from the compiled illumination geometry. For paired
+simulation configurations, automatic sizing covers the union of the true and
+assumed geometries. Only the resolved tuple is serialized; the selection variant
+does not alter the versioned schema.
+
 Known uniform camera response is deliberately not baked into
 `compiled_models.reconstruction_model`. Call
 `reconstruction_model_for_counts()` when constructing a problem directly from

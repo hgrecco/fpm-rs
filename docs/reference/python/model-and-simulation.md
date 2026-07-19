@@ -34,6 +34,8 @@
 
 ::: fpm_rs.ImagePlaneModel
 
+::: fpm_rs.suggest_reconstruction_shape
+
 ::: fpm_rs.compile_model
 
 ::: fpm_rs.compile_camera_model

@@ -57,6 +57,7 @@ from ._core import (
     compile_model,
     open_dataset,
     simulate,
+    suggest_reconstruction_shape,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

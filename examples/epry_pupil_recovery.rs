@@ -4,7 +4,7 @@ use fpm_rs::{
     Result,
     algorithms::{Epry, ReconstructionAlgorithm},
     experiment::PupilAberration,
-    model::ImagePlaneModel,
+    model::{ImagePlaneModel, ReconstructionShape},
     reconstruction::ReconstructionProblem,
     simulation::{Simulator, SyntheticObject, compare_with_true_model},
 };
@@ -19,8 +19,12 @@ fn main() -> Result<()> {
         }),
         ..assumed_optics.clone()
     };
-    let true_model =
-        ImagePlaneModel::from_experiment(&true_optics, &illumination, (32, 32), (64, 64))?;
+    let true_model = ImagePlaneModel::from_experiment(
+        &true_optics,
+        &illumination,
+        (32, 32),
+        ReconstructionShape::Exact((64, 64)),
+    )?;
     let reconstruction_model = support::experimental_model()?;
     let simulation = Simulator::new(true_model)
         .object(SyntheticObject::phase_disk((64, 64), 16.0, 0.9)?)

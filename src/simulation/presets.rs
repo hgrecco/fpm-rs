@@ -7,7 +7,7 @@
 use crate::{
     Result,
     experiment::{LEDArray, Optics, PupilAberration},
-    model::ImagePlaneModel,
+    model::{ImagePlaneModel, ReconstructionShape},
 };
 
 use super::{CameraModel, SimulationResult, Simulator, SyntheticObject};
@@ -83,5 +83,10 @@ fn base_model(optics: Optics) -> Result<ImagePlaneModel> {
         .pitch(4e-3)
         .distance(90e-3)
         .center((1.0, 1.0));
-    ImagePlaneModel::from_experiment(&optics, &illumination, (32, 32), (64, 64))
+    ImagePlaneModel::from_experiment(
+        &optics,
+        &illumination,
+        (32, 32),
+        ReconstructionShape::Exact((64, 64)),
+    )
 }
