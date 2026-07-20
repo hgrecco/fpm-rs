@@ -21,3 +21,44 @@ permutation. Set a fixed seed whenever the workflow must be reproducible.
 The Rust simulator also provides named deterministic benchmark presets and
 ground-truth metrics. Their precise definitions and validation policy are in
 [Reconstruction benchmarks](../benchmarks.md).
+
+## Model mismatch and detector counts
+
+Represent geometric mismatch with separate concrete source descriptions:
+compile the actual geometry into the model given to `Simulator::new`, and the
+assumed geometry into the reconstruction model. `IlluminationAcquisitionErrors`
+is limited to acquisition effects—relative frame-gain variation, failed frames,
+and source permutations. Failed frames remain as dark, zero-weight frames so
+frame/model indexing is retained. Fixed-sphere placement/pose and moving-arm
+kinematic errors are detailed in [Spherical illumination geometries](../spherical-geometries.md).
+
+`CameraModel` owns pixel sensitivity, photon/electron conversion, shot and read
+noise, dark current, gain, offset, quantization, saturation, and deterministic
+bad pixels. Defocus, pupil aberration, and edge apodization compile through
+`Optics` into the model pupil; represent aberration mismatch with separate true
+and reconstruction models. Illumination-angle transmission belongs in source
+intensity weights, frame gains, or multiplex weights—not in the pupil.
+
+`SimulationResult` retains both compiled models and acquisition configuration.
+`compare_with_problem` adds masked, normalized per-frame intensity residuals to
+amplitude, phase, complex-field, Fourier, and pupil metrics. With a true model,
+it also reports source-position RMSE in Fourier-grid pixels from recovered
+illumination corrections. Pupil metrics remove the best global complex scale,
+because object and pupil share that ambiguity.
+
+`Simulator::simulate` compiles known linear camera response into the returned
+reconstruction model: gains include photon conversion and electronic gain, while
+background includes dark current and offset. Digitized counts can therefore be
+passed directly to `ReconstructionProblem`; clipping, quantization, noise,
+pixel-response variation, and bad pixels remain deliberate nonlinear effects or
+model mismatch. A serialized `SimulationConfiguration` keeps
+`compiled_models.reconstruction_model` as the strict optical model; use
+`reconstruction_model_for_counts()` when making a problem from its saved detector
+counts. Optical background belongs in both optical models; detector dark current
+and electronic offset belong in `CameraModel`.
+
+Synthetic objects include amplitude-only and phase-only fields, mixed patterns,
+resolution targets, particles, random phase, Siemens stars, and seeded
+biological-like phase/absorption fields. Image-backed constructors normalize
+grayscale values to physical amplitude and a selected phase range; empty or
+colour images, mismatched dimensions, and invalid phase ranges are rejected.

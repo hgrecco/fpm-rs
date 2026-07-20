@@ -51,6 +51,25 @@ Continue through the [Quickstart](getting-started/quickstart.md), run the
 [first reconstruction tutorial](tutorials/notebooks/quickstart.ipynb), or go
 straight to the [Python API](reference/python/index.md).
 
+## Library components
+
+- `experiment` describes optics and planar, spherical, angular, and calibrated
+  illumination sources.
+- `model` compiles sampling, pupil, Fourier crops, and the shared forward model.
+- `measurements` provides resident and lazy intensity stacks plus preprocessing.
+- `algorithms` implements AP, FPIE, EPRY, linearized ADMM, and gradient descent.
+- `reconstruction` provides problems, state, results, schedules, batches, and
+  runner orchestration.
+- `callbacks` records images, CSV history, checkpoints, progress, and early
+  stopping.
+- `simulation` supplies synthetic objects, acquisition effects, camera response,
+  and ground-truth metrics.
+- `datasets` validates local bundles, discovers and downloads registered bundles,
+  manages cache, and selects deterministic subsets.
+- `backend` provides the CPU backend and future resident-buffer boundary.
+- `benchmark` runs single cases and writes versioned benchmark records and
+  artifacts.
+
 ## Documentation map
 
 - [Tutorials](tutorials/index.md) provide executable, public-API workflows.

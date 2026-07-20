@@ -93,3 +93,47 @@ cargo run --example benchmark_algorithms
 Converted-dataset benchmarks use the same API. When ground truth is unavailable,
 pass `ground_truth: None`; normalized frame residuals remain available without
 ground truth. The `load_local_dataset` example demonstrates this path.
+
+## Forward-model and gradient scaling benchmarks
+
+`ForwardModel::forward_intensity` is the allocation-owning convenience API.
+Repeated simulation, metrics, or parameter searches can reuse mutable scratch
+from `ForwardModel::workspace` through `forward_intensity_into` or
+`forward_source_field_into`. A workspace must not be shared concurrently;
+create one per worker. FFT plans and backend objects remain shareable.
+
+`forward_intensity_stack_into` evaluates complete stacks with scoped CPU workers
+and preserves `[frame][row][column]` order. `Simulator` parallelizes optical
+prediction, then applies `CameraModel` serially so seeded detector noise is
+independent of worker count.
+
+Run the dependency-free forward benchmark with:
+
+```sh
+cargo bench --bench forward_model
+```
+
+Set `FPM_BENCH_ITERATIONS` to change its duration. It compares allocation with
+workspace reuse but has no machine-specific pass/fail threshold.
+
+The gradient scaling and memory benchmark is:
+
+```sh
+cargo bench --bench gradient_parallel
+```
+
+It covers ordinary and multiplexed object, pupil, and illumination updates.
+For each worker count it reports milliseconds per batch step, speedup relative
+to one worker, and peak incremental heap for the step. Configure it with
+`FPM_GRADIENT_BENCH_LOW_SIZE`, `FPM_GRADIENT_BENCH_HIGH_SIZE`,
+`FPM_GRADIENT_BENCH_ITERATIONS`, and `FPM_GRADIENT_BENCH_MAX_WORKERS`. The heap
+measure includes worker-local state and reduction buffers, but excludes existing
+reconstruction state, native thread stacks, and system FFT/allocator memory.
+
+Use one worker for single-frame or tiny batches. For larger CPU batches, start
+with two to four workers and benchmark the actual image and multiplexing sizes:
+worker-local high-resolution accumulators make memory grow roughly linearly and
+thread overhead can dominate. A 20-sample 32×32/64×64 development run measured
+1.89× ordinary-update speedup with four workers (1.49 MiB incremental heap,
+versus 0.06 MiB serial); eight workers reached 1.91× with 2.26 MiB. These are
+illustrative measurements, not portable guarantees.

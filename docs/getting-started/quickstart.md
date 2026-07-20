@@ -49,10 +49,52 @@ object shape. `simulate` returns both detector intensities and the reconstructio
 model appropriate for those intensities. The algorithm returns NumPy amplitude,
 phase, spectrum, and pupil arrays.
 
-Omitting `reconstruction_shape` selects the default `"smooth"` grid. For this
-geometry that is `(42, 42)`. Pass an exact `(height, width)`, `"minimum"`, or
-`"power_of_two"` when memory, a prescribed sampling grid, or radix-2 FFT sizes
-matter more than the default small-factor FFT choice.
+## Choose the reconstruction grid
+
+Omitting `reconstruction_shape` selects the default `"smooth"` grid. You can
+inspect every automatic choice before compiling the model:
+
+```python
+image_shape = (32, 32)
+
+minimum_shape = fpm.suggest_reconstruction_shape(
+    optics, illumination, image_shape, "minimum"
+)
+# Omitting the fourth argument selects "smooth".
+smooth_shape = fpm.suggest_reconstruction_shape(optics, illumination, image_shape)
+power_of_two_shape = fpm.suggest_reconstruction_shape(
+    optics, illumination, image_shape, "power_of_two"
+)
+
+print(minimum_shape, smooth_shape, power_of_two_shape)
+# (42, 42) (42, 42) (64, 64)
+
+radix2_model = fpm.compile_model(
+    optics,
+    illumination,
+    image_shape,
+    reconstruction_shape="power_of_two",
+)
+exact_model = fpm.compile_model(
+    optics,
+    illumination,
+    image_shape,
+    reconstruction_shape=(64, 64),
+)
+```
+
+`"minimum"` uses the smallest grid that contains every shifted
+low-resolution Fourier crop. `"smooth"` rounds the shared aspect-ratio factor
+to a number composed of 2, 3, 5, and 7, while `"power_of_two"` rounds that
+factor to a power of two. An exact tuple is validated against the same crop
+bounds. Pass one of these values explicitly or omit the argument; `None` is not
+accepted.
+
+The linear increase in pixels is often estimated by the ratio of synthetic NA
+to objective NA, but that is only a heuristic. The software sizes from the
+actual illumination wave vectors and includes the interpolation margin needed
+for fractional Fourier shifts. See [Configure and run a reconstruction](../guides/reconstruction.md#choose-the-reconstruction-shape)
+for the complete sizing rules.
 
 Next, follow the rendered [first reconstruction tutorial](../tutorials/notebooks/quickstart.ipynb),
 learn how to [record diagnostics](../diagnostics.md), or consult the
