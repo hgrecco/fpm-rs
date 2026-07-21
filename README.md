@@ -19,6 +19,9 @@ ptychography, multislice propagation, and GPU execution are not implemented.
   options fit the experiment.
 - **Keep a run inspectable.** Record diagnostics, write checkpoints, and
   compare simulations with known ground truth.
+- **Measure at the right layer.** Reusable reference/candidate metrics,
+  optimization objectives, reconstruction evaluation, and recorder-driven
+  diagnostics are separate APIs.
 
 ## A typical workflow
 

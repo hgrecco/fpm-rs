@@ -9,8 +9,8 @@ use fpm_rs::{
         save_benchmark_outputs, write_benchmark_csv, write_benchmark_json,
     },
     diagnostics::{DiagnosticRecorder, DiagnosticRecorderConfig},
+    evaluation::evaluate_reconstruction,
     reconstruction::ReconstructionProblem,
-    simulation::compare_to_ground_truth_masked,
     simulation::presets::{
         ABERRATED_PUPIL_PRESET, NOISELESS_MIXED_PRESET, POISSON_GAUSSIAN_PRESET,
         aberrated_pupil_fpm, noiseless_mixed_fpm, poisson_gaussian_fpm,
@@ -176,7 +176,7 @@ fn benchmark_preset_produces_regression_diagnostics() -> Result<()> {
         diagnostics
             .frame_diagnostics
             .iter()
-            .all(|entry| entry.normalized_l2.is_finite())
+            .all(|entry| entry.metrics.normalized_l2.is_finite())
     );
     Ok(())
 }
@@ -283,8 +283,8 @@ fn object_mask_controls_ground_truth_metrics_and_benchmark_evaluation() -> Resul
     );
     assert!(record.success, "{:?}", record.error);
     let result = result.unwrap();
-    let expected = compare_to_ground_truth_masked(&result, &truth, &mask)?;
-    assert!((record.amplitude_rmse.unwrap() - expected.amplitude_rmse).abs() < 1e-12);
+    let expected = evaluate_reconstruction(&result, &truth, None, Some(&mask))?;
+    assert!((record.amplitude_rmse.unwrap() - expected.object.amplitude_rmse).abs() < 1e-12);
 
     let mut changed_outside = result;
     for (index, value) in changed_outside.object.as_mut_slice().iter_mut().enumerate() {
@@ -292,13 +292,13 @@ fn object_mask_controls_ground_truth_metrics_and_benchmark_evaluation() -> Resul
             *value = Complex64::new(1e6, -1e6);
         }
     }
-    let unchanged = compare_to_ground_truth_masked(&changed_outside, &truth, &mask)?;
-    assert!((unchanged.amplitude_rmse - expected.amplitude_rmse).abs() < 1e-12);
-    assert!((unchanged.phase_rmse - expected.phase_rmse).abs() < 1e-12);
-    assert!((unchanged.complex_field_error - expected.complex_field_error).abs() < 1e-12);
-    assert!((unchanged.fourier_domain_error - expected.fourier_domain_error).abs() < 1e-12);
+    let unchanged = evaluate_reconstruction(&changed_outside, &truth, None, Some(&mask))?;
+    assert!((unchanged.object.amplitude_rmse - expected.object.amplitude_rmse).abs() < 1e-12);
+    assert!((unchanged.object.phase_rmse - expected.object.phase_rmse).abs() < 1e-12);
+    assert!((unchanged.object.complex_nrmse - expected.object.complex_nrmse).abs() < 1e-12);
+    assert!((unchanged.object.fourier_nrmse - expected.object.fourier_nrmse).abs() < 1e-12);
 
     let empty_mask = Array2::filled((64, 64), 0_u8)?;
-    assert!(compare_to_ground_truth_masked(&changed_outside, &truth, &empty_mask).is_err());
+    assert!(evaluate_reconstruction(&changed_outside, &truth, None, Some(&empty_mask)).is_err());
     Ok(())
 }

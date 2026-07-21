@@ -1,3 +1,5 @@
+//! Optimization objectives used by reconstruction algorithms.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, error::Error};

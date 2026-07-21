@@ -5,9 +5,11 @@ use fpm_rs::{
     Array2, Complex64,
     algorithms::{
         Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
+        objective::{LossType, loss},
     },
     callbacks::CheckpointEvery,
-    diagnostics::{LossType, ReconstructionHistory, loss},
+    diagnostics::ReconstructionHistory,
+    evaluation::{evaluate_reconstruction, evaluate_reconstruction_with_problem},
     experiment::{LEDArray, Optics, PupilAberration},
     measurements::{LazyMeasurementStack, MeasurementRead},
     model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape},
@@ -15,10 +17,7 @@ use fpm_rs::{
         Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionState, RunOptions,
         Runner,
     },
-    simulation::{
-        CameraModel, Simulator, SyntheticObject, compare_to_ground_truth, compare_with_problem,
-        compare_with_true_model,
-    },
+    simulation::{CameraModel, Simulator, SyntheticObject},
 };
 use image::{ImageBuffer, Luma};
 use std::sync::atomic::Ordering;
@@ -47,8 +46,15 @@ fn ap_reconstructs_and_reports_history() {
         last < first,
         "expected loss decrease, got {first} -> {last}"
     );
-    let metrics = compare_with_problem(&result, &problem, &truth, None).unwrap();
-    let residuals = metrics.per_frame_residuals.unwrap();
+    let metrics =
+        evaluate_reconstruction_with_problem(&result, &problem, &truth, None, None).unwrap();
+    let residuals: Vec<_> = metrics
+        .intensity
+        .unwrap()
+        .per_frame
+        .into_iter()
+        .map(|frame| frame.normalized_l2)
+        .collect();
     assert_eq!(residuals.len(), problem.model.frame_count());
     assert!(residuals.iter().all(|value| value.is_finite()));
 }
@@ -586,30 +592,40 @@ fn joint_illumination_calibration_reduces_model_mismatch() {
         final_error < initial_error,
         "calibration error did not improve: {initial_error} -> {final_error}; {corrections:?}"
     );
-    let corrected_metrics = compare_with_problem(
+    let corrected_metrics = evaluate_reconstruction_with_problem(
         &calibrated,
         &problem,
         &simulation.ground_truth_object,
         Some(&simulation.true_model),
+        None,
     )
     .unwrap();
     assert!(
-        corrected_metrics.illumination_position_rmse.unwrap()
+        corrected_metrics.illumination.unwrap().position_rmse
             < (initial_error / true_offsets.len() as f64).sqrt()
     );
-    let corrected_residual: f64 = corrected_metrics.per_frame_residuals.unwrap().iter().sum();
+    let corrected_residual: f64 = corrected_metrics
+        .intensity
+        .unwrap()
+        .per_frame
+        .iter()
+        .map(|frame| frame.normalized_l2)
+        .sum();
     let mut ignored_corrections = calibrated.clone();
     ignored_corrections.calibrated_illumination = None;
-    let uncorrected_residual: f64 = compare_with_problem(
+    let uncorrected_residual: f64 = evaluate_reconstruction_with_problem(
         &ignored_corrections,
         &problem,
         &simulation.ground_truth_object,
         None,
+        None,
     )
     .unwrap()
-    .per_frame_residuals
+    .intensity
     .unwrap()
+    .per_frame
     .iter()
+    .map(|frame| frame.normalized_l2)
     .sum();
     assert!(corrected_residual < uncorrected_residual);
 }
@@ -1641,9 +1657,9 @@ fn epry_runs_joint_object_pupil_updates() {
         .pupil_step(0.05)
         .run(&problem)
         .unwrap();
-    let metrics = compare_to_ground_truth(&result, &truth).unwrap();
-    assert!(metrics.amplitude_rmse.is_finite());
-    assert!(metrics.phase_rmse.is_finite());
+    let metrics = evaluate_reconstruction(&result, &truth, None, None).unwrap();
+    assert!(metrics.object.amplitude_rmse.is_finite());
+    assert!(metrics.object.phase_rmse.is_finite());
     assert_eq!(result.runtime.completed_iterations, 4);
 }
 
@@ -1903,10 +1919,11 @@ fn epry_reduces_known_pupil_phase_error() {
         .pupil_step(0.05)
         .run(&problem)
         .unwrap();
-    let recovered_error = compare_with_true_model(&result, &truth, &true_model)
+    let recovered_error = evaluate_reconstruction(&result, &truth, Some(&true_model), None)
         .unwrap()
-        .pupil_phase_error
-        .unwrap();
+        .pupil
+        .unwrap()
+        .phase_rmse;
     assert!(
         recovered_error < initial_error,
         "expected Epry pupil improvement, got {initial_error} -> {recovered_error}"
@@ -1933,9 +1950,9 @@ fn pupil_metrics_remove_global_complex_scale() {
     for value in result.recovered_pupil.values.as_mut_slice() {
         *value *= ambiguity;
     }
-    let metrics = compare_with_true_model(&result, &truth, &true_model).unwrap();
-    assert!(metrics.pupil_amplitude_error.unwrap() < 1e-12);
-    assert!(metrics.pupil_phase_error.unwrap() < 1e-12);
+    let metrics = evaluate_reconstruction(&result, &truth, Some(&true_model), None).unwrap();
+    assert!(metrics.pupil.as_ref().unwrap().amplitude_rmse < 1e-12);
+    assert!(metrics.pupil.as_ref().unwrap().phase_rmse < 1e-12);
 }
 
 #[test]
@@ -1963,10 +1980,11 @@ fn epry_recovers_relative_frame_gain_mismatch() {
         .gain_step(1.0)
         .run(&problem)
         .unwrap();
-    let recovered_error = compare_with_true_model(&result, &truth, &true_model)
+    let recovered_error = evaluate_reconstruction(&result, &truth, Some(&true_model), None)
         .unwrap()
-        .frame_gain_relative_error
-        .unwrap();
+        .frame_gains
+        .unwrap()
+        .relative_error;
     let mean_gain = true_gains.iter().sum::<f64>() / true_gains.len() as f64;
     let initial_error = (true_gains
         .iter()

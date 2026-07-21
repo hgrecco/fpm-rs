@@ -4,8 +4,9 @@ use fpm_rs::{
     Result,
     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
     callbacks::{CsvLogger, SaveImageEvery},
+    evaluation::evaluate_reconstruction,
     reconstruction::ReconstructionProblem,
-    simulation::{Simulator, SyntheticObject, compare_to_ground_truth},
+    simulation::{Simulator, SyntheticObject},
 };
 
 fn main() -> Result<()> {
@@ -28,11 +29,11 @@ fn main() -> Result<()> {
         )?;
     result.save_amplitude("output/amplitude.png")?;
     result.save_phase("output/phase.png")?;
-    let metrics = compare_to_ground_truth(&result, &truth)?;
+    let metrics = evaluate_reconstruction(&result, &truth, None, None)?;
     println!(
         "final loss {:.4e}, amplitude RMSE {:.4e}",
         result.history.final_loss().unwrap_or(f64::NAN),
-        metrics.amplitude_rmse
+        metrics.object.amplitude_rmse
     );
     Ok(())
 }

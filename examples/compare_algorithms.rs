@@ -3,8 +3,9 @@ mod support;
 use fpm_rs::{
     Result,
     algorithms::{Admm, AlternatingProjection, Epry, ReconstructionAlgorithm},
+    evaluation::evaluate_reconstruction,
     reconstruction::ReconstructionProblem,
-    simulation::{Simulator, SyntheticObject, compare_to_ground_truth},
+    simulation::{Simulator, SyntheticObject},
 };
 
 fn main() -> Result<()> {
@@ -20,17 +21,20 @@ fn main() -> Result<()> {
         .run(&problem)?;
     let epry = Epry::default().iterations(20).run(&problem)?;
     let admm = Admm::default().iterations(20).run(&problem)?;
-    let ap_metrics = compare_to_ground_truth(&ap, &truth)?;
-    let epry_metrics = compare_to_ground_truth(&epry, &truth)?;
-    let admm_metrics = compare_to_ground_truth(&admm, &truth)?;
-    println!("AP complex error:   {:.4e}", ap_metrics.complex_field_error);
+    let ap_metrics = evaluate_reconstruction(&ap, &truth, None, None)?;
+    let epry_metrics = evaluate_reconstruction(&epry, &truth, None, None)?;
+    let admm_metrics = evaluate_reconstruction(&admm, &truth, None, None)?;
+    println!(
+        "AP complex error:   {:.4e}",
+        ap_metrics.object.complex_nrmse
+    );
     println!(
         "Epry complex error: {:.4e}",
-        epry_metrics.complex_field_error
+        epry_metrics.object.complex_nrmse
     );
     println!(
         "ADMM complex error: {:.4e}",
-        admm_metrics.complex_field_error
+        admm_metrics.object.complex_nrmse
     );
     Ok(())
 }

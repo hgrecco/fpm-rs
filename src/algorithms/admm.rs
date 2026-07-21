@@ -2,8 +2,9 @@ use num_complex::Complex64;
 
 use crate::{
     Result,
+    algorithms::objective::{LossType, point_loss},
     backend::FftDirection,
-    diagnostics::{LossType, StepDiagnostics, point_loss},
+    diagnostics::StepDiagnostics,
     error::Error,
     measurements::MeasurementRead,
     model::{FourierOffset, ImagePlaneModel, fftshift_copy, ifftshift_copy},

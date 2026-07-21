@@ -5,7 +5,13 @@ from typing import Any, Literal, TypeAlias
 import numpy as np
 from numpy.typing import NDArray
 import fpm_rs.diagnostics as diagnostics
+import fpm_rs.evaluation as evaluation
+import fpm_rs.metrics as metrics
 import fpm_rs.plot as plot
+
+def radial_fourier_spectrum(field: ComplexArray) -> dict[str, list[float] | list[int]]:
+    """Return radial bins, normalized Fourier power, and samples per bin."""
+    ...
 
 Shape2D: TypeAlias = tuple[int, int]
 ReconstructionShapeSpec: TypeAlias = (

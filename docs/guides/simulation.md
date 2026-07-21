@@ -40,11 +40,11 @@ and reconstruction models. Illumination-angle transmission belongs in source
 intensity weights, frame gains, or multiplex weights—not in the pupil.
 
 `SimulationResult` retains both compiled models and acquisition configuration.
-`compare_with_problem` adds masked, normalized per-frame intensity residuals to
-amplitude, phase, complex-field, Fourier, and pupil metrics. With a true model,
-it also reports source-position RMSE in Fourier-grid pixels from recovered
-illumination corrections. Pupil metrics remove the best global complex scale,
-because object and pupil share that ambiguity.
+Use `evaluation::evaluate_reconstruction_with_problem` in Rust, or
+`fpm.evaluation.evaluate_reconstruction(..., problem=..., reference_model=...)`
+in Python, to combine masked per-frame intensity residuals with object, pupil,
+and calibration comparisons. Pupil metrics remove the best global complex
+scale, because object and pupil share that ambiguity.
 
 `Simulator::simulate` compiles known linear camera response into the returned
 reconstruction model: gains include photon conversion and electronic gain, while

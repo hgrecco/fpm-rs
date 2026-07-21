@@ -7,6 +7,7 @@ use std::{
 
 use fpm_rs::{
     Complex64, Error,
+    algorithms::objective::LossType,
     algorithms::{
         Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
     },
@@ -16,22 +17,23 @@ use fpm_rs::{
     },
     diagnostics::{
         DiagnosticRecorder as CoreDiagnosticRecorder, DiagnosticRecorderConfig, DiagnosticRequest,
-        LossType, ReconstructionDiagnostics,
+        ReconstructionDiagnostics,
     },
     measurements::{FrameMetadata, MeasurementRead, MeasurementStack},
+    model::Pupil,
     reconstruction::{
         FrameSchedule, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionResult,
         RunOptions, Runner,
     },
 };
-use numpy::{PyArray1, PyArray2, ndarray};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, ndarray};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyList},
 };
 
 use crate::{
-    arrays::{array2_to_py, complex_array2_to_py, vec2_to_py},
+    arrays::{array2_to_py, complex_array2_to_py, copy_array2, vec2_to_py},
     errors::to_py_err,
     measurements::extract_measurements,
     model::PyImagePlaneModel,
@@ -281,6 +283,194 @@ impl PyReconstructionResult {
             metadata: result.metadata,
         })
     }
+
+    fn to_core_for_evaluation(&self, py: Python<'_>) -> PyResult<ReconstructionResult> {
+        let object =
+            crate::arrays::core_array2(&self.object.bind(py).readonly()).map_err(to_py_err)?;
+        let amplitude =
+            crate::arrays::core_array2(&self.amplitude.bind(py).readonly()).map_err(to_py_err)?;
+        let phase =
+            crate::arrays::core_array2(&self.phase.bind(py).readonly()).map_err(to_py_err)?;
+        let object_spectrum = crate::arrays::core_array2(&self.object_spectrum.bind(py).readonly())
+            .map_err(to_py_err)?;
+        let pupil_values = crate::arrays::core_array2(&self.recovered_pupil.bind(py).readonly())
+            .map_err(to_py_err)?;
+        let pupil_support = copy_array2(&self.pupil_support.bind(py).readonly())
+            .into_iter()
+            .map(|value| value != 0)
+            .collect();
+        let recovered_pupil = Pupil::new(pupil_values, pupil_support).map_err(to_py_err)?;
+        let calibrated_illumination = self
+            .calibrated_illumination
+            .as_ref()
+            .map(|values| {
+                let values = copy_array2(&values.bind(py).readonly());
+                if values.len() % 2 != 0 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "calibrated illumination must have two columns",
+                    ));
+                }
+                Ok(values
+                    .chunks_exact(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .collect())
+            })
+            .transpose()?;
+        let recovered_frame_gains = self.recovered_frame_gains.as_ref().map(|values| {
+            values
+                .bind(py)
+                .readonly()
+                .as_slice()
+                .map(<[f64]>::to_vec)
+                .unwrap_or_else(|_| {
+                    values
+                        .bind(py)
+                        .readonly()
+                        .as_array()
+                        .iter()
+                        .copied()
+                        .collect()
+                })
+        });
+        let recovered_background = self.recovered_background.as_ref().map(|values| {
+            values
+                .bind(py)
+                .readonly()
+                .as_slice()
+                .map(<[f64]>::to_vec)
+                .unwrap_or_else(|_| {
+                    values
+                        .bind(py)
+                        .readonly()
+                        .as_array()
+                        .iter()
+                        .copied()
+                        .collect()
+                })
+        });
+        Ok(ReconstructionResult {
+            object,
+            amplitude,
+            phase,
+            object_spectrum,
+            recovered_pupil,
+            calibrated_illumination,
+            recovered_frame_gains,
+            recovered_background,
+            history: fpm_rs::diagnostics::ReconstructionHistory::default(),
+            diagnostics: self.diagnostics.clone(),
+            runtime: fpm_rs::reconstruction::RuntimeInfo {
+                elapsed_seconds: self.runtime.elapsed_seconds,
+                completed_iterations: self.runtime.completed_iterations,
+                stopped_early: self.runtime.stopped_early,
+                algorithm: self.runtime.algorithm.clone(),
+            },
+            metadata: self.metadata.clone(),
+        })
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (result, truth, *, problem=None, reference_model=None, valid_object_mask=None))]
+fn evaluate_reconstruction_py(
+    py: Python<'_>,
+    result: PyRef<'_, PyReconstructionResult>,
+    truth: numpy::PyReadonlyArray2<'_, Complex64>,
+    problem: Option<PyRef<'_, PyReconstructionProblem>>,
+    reference_model: Option<PyRef<'_, PyImagePlaneModel>>,
+    valid_object_mask: Option<numpy::PyReadonlyArray2<'_, u8>>,
+) -> PyResult<Py<PyDict>> {
+    let result = result.to_core_for_evaluation(py)?;
+    let truth = crate::arrays::core_array2(&truth).map_err(to_py_err)?;
+    let mask = valid_object_mask
+        .map(|value| crate::arrays::core_array2(&value))
+        .transpose()
+        .map_err(to_py_err)?;
+    let reference_model = reference_model.map(|value| (*value.inner).clone());
+    let evaluation = if let Some(problem) = problem {
+        let problem = problem.inner.clone();
+        py.detach(move || {
+            fpm_rs::evaluation::evaluate_reconstruction_with_problem(
+                &result,
+                &problem,
+                &truth,
+                reference_model.as_ref(),
+                mask.as_ref(),
+            )
+        })
+    } else {
+        py.detach(move || {
+            fpm_rs::evaluation::evaluate_reconstruction(
+                &result,
+                &truth,
+                reference_model.as_ref(),
+                mask.as_ref(),
+            )
+        })
+    }
+    .map_err(to_py_err)?;
+    evaluation_to_py(py, &evaluation)
+}
+
+fn evaluation_to_py(
+    py: Python<'_>,
+    evaluation: &fpm_rs::evaluation::ReconstructionEvaluation,
+) -> PyResult<Py<PyDict>> {
+    let output = PyDict::new(py);
+    let object = PyDict::new(py);
+    object.set_item("amplitude_rmse", evaluation.object.amplitude_rmse)?;
+    object.set_item("amplitude_nrmse", evaluation.object.amplitude_nrmse)?;
+    object.set_item("complex_rmse", evaluation.object.complex_rmse)?;
+    object.set_item("complex_nrmse", evaluation.object.complex_nrmse)?;
+    object.set_item("phase_rmse", evaluation.object.phase_rmse)?;
+    object.set_item("phase_mae", evaluation.object.phase_mae)?;
+    object.set_item("fourier_nrmse", evaluation.object.fourier_nrmse)?;
+    object.set_item("global_phase_offset", evaluation.object.global_phase_offset)?;
+    output.set_item("object", object)?;
+    if let Some(value) = &evaluation.pupil {
+        let section = PyDict::new(py);
+        section.set_item("amplitude_rmse", value.amplitude_rmse)?;
+        section.set_item("phase_rmse", value.phase_rmse)?;
+        output.set_item("pupil", section)?;
+    } else {
+        output.set_item("pupil", py.None())?;
+    }
+    if let Some(value) = &evaluation.illumination {
+        let section = PyDict::new(py);
+        section.set_item("position_rmse", value.position_rmse)?;
+        output.set_item("illumination", section)?;
+    } else {
+        output.set_item("illumination", py.None())?;
+    }
+    if let Some(value) = &evaluation.frame_gains {
+        let section = PyDict::new(py);
+        section.set_item("relative_error", value.relative_error)?;
+        output.set_item("frame_gains", section)?;
+    } else {
+        output.set_item("frame_gains", py.None())?;
+    }
+    if let Some(value) = &evaluation.intensity {
+        let section = PyDict::new(py);
+        let frames = PyList::empty(py);
+        for frame in &value.per_frame {
+            let item = PyDict::new(py);
+            item.set_item("reference_sum", frame.reference_sum)?;
+            item.set_item("candidate_sum", frame.candidate_sum)?;
+            item.set_item("residual_l1", frame.residual_l1)?;
+            item.set_item("residual_l2", frame.residual_l2)?;
+            item.set_item("residual_mean", frame.residual_mean)?;
+            item.set_item("residual_std", frame.residual_std)?;
+            item.set_item("residual_max_abs", frame.residual_max_abs)?;
+            item.set_item("normalized_l2", frame.normalized_l2)?;
+            item.set_item("saturated_pixels", frame.saturated_pixels)?;
+            frames.append(item)?;
+        }
+        section.set_item("per_frame", frames)?;
+        output.set_item("intensity", section)?;
+    } else {
+        output.set_item("intensity", py.None())?;
+    }
+    Ok(output.unbind())
 }
 
 #[pymethods]
@@ -470,15 +660,15 @@ fn diagnostics_to_py(
         value.set_item("iteration", entry.iteration)?;
         value.set_item("frame_index", entry.frame_index)?;
         value.set_item("illumination_index", entry.illumination_index)?;
-        value.set_item("measured_sum", entry.measured_sum)?;
-        value.set_item("predicted_sum", entry.predicted_sum)?;
-        value.set_item("residual_l1", entry.residual_l1)?;
-        value.set_item("residual_l2", entry.residual_l2)?;
-        value.set_item("residual_mean", entry.residual_mean)?;
-        value.set_item("residual_std", entry.residual_std)?;
-        value.set_item("residual_max_abs", entry.residual_max_abs)?;
-        value.set_item("normalized_l2", entry.normalized_l2)?;
-        value.set_item("saturated_pixels", entry.saturated_pixels)?;
+        value.set_item("measured_sum", entry.metrics.reference_sum)?;
+        value.set_item("predicted_sum", entry.metrics.candidate_sum)?;
+        value.set_item("residual_l1", entry.metrics.residual_l1)?;
+        value.set_item("residual_l2", entry.metrics.residual_l2)?;
+        value.set_item("residual_mean", entry.metrics.residual_mean)?;
+        value.set_item("residual_std", entry.metrics.residual_std)?;
+        value.set_item("residual_max_abs", entry.metrics.residual_max_abs)?;
+        value.set_item("normalized_l2", entry.metrics.normalized_l2)?;
+        value.set_item("saturated_pixels", entry.metrics.saturated_pixels)?;
         frame_diagnostics.append(value)?;
     }
     output.set_item("frame_diagnostics", frame_diagnostics)?;
@@ -487,13 +677,13 @@ fn diagnostics_to_py(
     for entry in &diagnostics.raw_frame_stats {
         let value = PyDict::new(py);
         value.set_item("frame_index", entry.frame_index)?;
-        value.set_item("mean", entry.mean)?;
-        value.set_item("std", entry.std)?;
-        value.set_item("min", entry.min)?;
-        value.set_item("max", entry.max)?;
-        value.set_item("sum", entry.sum)?;
-        value.set_item("saturated_pixels", entry.saturated_pixels)?;
-        value.set_item("zero_pixels", entry.zero_pixels)?;
+        value.set_item("mean", entry.metrics.mean)?;
+        value.set_item("std", entry.metrics.std)?;
+        value.set_item("min", entry.metrics.min)?;
+        value.set_item("max", entry.metrics.max)?;
+        value.set_item("sum", entry.metrics.sum)?;
+        value.set_item("saturated_pixels", entry.metrics.saturated_pixels)?;
+        value.set_item("zero_pixels", entry.metrics.zero_pixels)?;
         raw_frame_stats.append(value)?;
     }
     output.set_item("raw_frame_stats", raw_frame_stats)?;
@@ -539,6 +729,7 @@ fn diagnostics_to_py(
         value.set_item("phase_rmse", metrics.phase_rmse)?;
         value.set_item("phase_mae", metrics.phase_mae)?;
         value.set_item("fourier_nrmse", metrics.fourier_nrmse)?;
+        value.set_item("global_phase_offset", metrics.global_phase_offset)?;
         output.set_item("ground_truth_metrics", value)?;
     } else {
         output.set_item("ground_truth_metrics", py.None())?;
@@ -1303,6 +1494,7 @@ impl PyGradientDescent {
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(evaluate_reconstruction_py, module)?)?;
     module.add_class::<PyReconstructionProblem>()?;
     module.add_class::<PyReconstructionCheckpoint>()?;
     module.add_class::<PyRuntimeInfo>()?;

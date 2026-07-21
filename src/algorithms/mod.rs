@@ -4,6 +4,7 @@ mod common;
 mod epry;
 mod fpie;
 mod gradient_descent;
+pub mod objective;
 mod regularization;
 
 pub use admm::Admm;

@@ -1,6 +1,7 @@
 use crate::{
     Result,
-    diagnostics::{LossType, StepDiagnostics},
+    algorithms::objective::LossType,
+    diagnostics::StepDiagnostics,
     error::Error,
     measurements::MeasurementRead,
     reconstruction::{Batch, ReconstructionProblem, ReconstructionState},

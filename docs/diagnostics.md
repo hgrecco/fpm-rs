@@ -5,6 +5,16 @@ Python as a dictionary shaped like the Rust `ReconstructionDiagnostics` model.
 Recording does not invoke Python or acquire the GIL inside the reconstruction
 loop.
 
+Reusable calculations are split by responsibility. Rust `metrics` contains
+domain-agnostic reference/candidate comparisons; `algorithms::objective`
+contains losses optimized by reconstruction algorithms; and `evaluation`
+combines a reconstruction with optional reference model and measurement stack.
+Python exposes the direct equivalents under `fpm.metrics` and
+`fpm.evaluation`. This module focuses only on run-scoped diagnostic requests,
+Fourier coverage, convergence records, recorder cadence, and serialization.
+See [intensity metrics](metrics.md) for standalone reference/candidate image
+calculations such as NRMSE, PSNR, SSIM, and Poisson deviance.
+
 ## End-to-end report
 
 ```python
@@ -22,6 +32,14 @@ fpm.diagnostics.make_diagnostic_report(
 
 `result.diagnostics` remains the reconstruction result's small scalar summary.
 The structured recorder output is retrieved with `recorder.diagnostics()`.
+
+## Radial Fourier power spectrum
+
+`fpm.radial_fourier_spectrum(field)` computes a forward two-dimensional FFT
+of a complex field and averages its normalized power in integer-radius annuli.
+It returns a dictionary containing `radius_px`, `power`, and `sample_count`.
+The radii are Fourier-grid pixels; convert them to physical spatial frequency
+only when the input sampling pitch is known.
 
 ADMM results additionally expose `result.admm_residual_history` as
 `(iteration, primal_rms, dual_rms)` tuples. The primal value is the RMS

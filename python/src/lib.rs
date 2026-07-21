@@ -1,8 +1,10 @@
 mod arrays;
 mod config;
 mod datasets;
+mod diagnostics;
 mod errors;
 mod measurements;
+mod metrics;
 mod model;
 mod reconstruction;
 mod simulation;
@@ -15,6 +17,8 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     errors::register(module)?;
     config::register(module)?;
     datasets::register(module)?;
+    diagnostics::register(module)?;
+    metrics::register(module)?;
     model::register(module)?;
     measurements::register(module)?;
     simulation::register(module)?;

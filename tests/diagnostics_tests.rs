@@ -1,17 +1,25 @@
 mod common;
 
 use approx::assert_abs_diff_eq;
-use fpm_rs::algorithms::{AlternatingProjection, ReconstructionAlgorithm};
+use fpm_rs::algorithms::{
+    AlternatingProjection, ReconstructionAlgorithm,
+    objective::{LossType, loss},
+};
 use fpm_rs::callbacks::{Callback, CallbackAction, CallbackHook, StepContext};
 use fpm_rs::diagnostics::{
-    DiagnosticRecorder, DiagnosticRecorderConfig, DiagnosticRequest, Diagnostics, FrameDiagnostics,
-    GroundTruthMetrics, IterationDiagnostics, LossType, RawFrameStats, ReconstructionDiagnostics,
-    ReconstructionHistory, compute_fourier_coverage, compute_frame_diagnostics,
-    compute_frame_diagnostics_with_mask, compute_ground_truth_metrics, compute_raw_frame_stats,
-    loss,
+    DiagnosticRecorder, DiagnosticRecorderConfig, DiagnosticRequest, Diagnostics,
+    FrameDiagnosticRecord, IterationDiagnostics, RawFrameStatisticsRecord,
+    ReconstructionDiagnostics, ReconstructionHistory, compute_fourier_coverage,
 };
 use fpm_rs::{
     Array2, Complex64, Error, Result,
+    metrics::{
+        complex_field::{ComplexFieldComparisonMetrics, compare_complex_fields},
+        intensity::{
+            IntensityComparisonMetrics, IntensityStatistics, compare_intensity,
+            compare_intensity_masked, intensity_statistics,
+        },
+    },
     reconstruction::{ReconstructionProblem, ReconstructionState},
     simulation::{Simulator, SyntheticObject},
 };
@@ -60,8 +68,7 @@ fn loss_rejects_empty_mismatched_and_non_finite_inputs() {
 
 #[test]
 fn raw_frame_stats_match_known_values() {
-    let stats = compute_raw_frame_stats(7, &[0.0, 1.0, 2.0, 3.0], Some(2.0)).unwrap();
-    assert_eq!(stats.frame_index, 7);
+    let stats = intensity_statistics(&[0.0, 1.0, 2.0, 3.0], Some(2.0)).unwrap();
     assert_abs_diff_eq!(stats.mean, 1.5, epsilon = 1e-14);
     assert_abs_diff_eq!(stats.std, (1.25f64).sqrt(), epsilon = 1e-14);
     assert_abs_diff_eq!(stats.min, 0.0, epsilon = 1e-14);
@@ -75,11 +82,9 @@ fn raw_frame_stats_match_known_values() {
 fn frame_diagnostics_match_known_values() {
     let measured = [1.0, 2.0];
     let predicted = [2.0, 0.0];
-    let diagnostics = compute_frame_diagnostics(3, 9, &measured, &predicted, Some(2.0)).unwrap();
-    assert_eq!(diagnostics.frame_index, 3);
-    assert_eq!(diagnostics.illumination_index, 9);
-    assert_abs_diff_eq!(diagnostics.measured_sum, 3.0, epsilon = 1e-14);
-    assert_abs_diff_eq!(diagnostics.predicted_sum, 2.0, epsilon = 1e-14);
+    let diagnostics = compare_intensity(&measured, &predicted, Some(2.0)).unwrap();
+    assert_abs_diff_eq!(diagnostics.reference_sum, 3.0, epsilon = 1e-14);
+    assert_abs_diff_eq!(diagnostics.candidate_sum, 2.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_l1, 3.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_l2, (5.0f64).sqrt(), epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_mean, -0.5, epsilon = 1e-14);
@@ -93,7 +98,7 @@ fn frame_diagnostics_match_known_values() {
 fn frame_diagnostics_handles_zero_measured_frames() {
     let measured = [0.0, 0.0];
     let predicted = [1.0, 2.0];
-    let diagnostics = compute_frame_diagnostics(0, 0, &measured, &predicted, None).unwrap();
+    let diagnostics = compare_intensity(&measured, &predicted, None).unwrap();
     assert!(diagnostics.normalized_l2.is_finite());
     assert!(diagnostics.normalized_l2 > 0.0);
 }
@@ -101,10 +106,9 @@ fn frame_diagnostics_handles_zero_measured_frames() {
 #[test]
 fn frame_diagnostics_exclude_masked_pixels() {
     let diagnostics =
-        compute_frame_diagnostics_with_mask(0, 0, &[1.0, 100.0], &[1.0, 0.0], Some(&[1, 0]), None)
-            .unwrap();
-    assert_abs_diff_eq!(diagnostics.measured_sum, 1.0, epsilon = 1e-14);
-    assert_abs_diff_eq!(diagnostics.predicted_sum, 1.0, epsilon = 1e-14);
+        compare_intensity_masked(&[1.0, 100.0], &[1.0, 0.0], Some(&[1, 0]), None).unwrap();
+    assert_abs_diff_eq!(diagnostics.reference_sum, 1.0, epsilon = 1e-14);
+    assert_abs_diff_eq!(diagnostics.candidate_sum, 1.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_l2, 0.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.normalized_l2, 0.0, epsilon = 1e-14);
 }
@@ -131,13 +135,13 @@ fn ground_truth_metrics_align_global_phase() {
             .collect(),
     )
     .unwrap();
-    let metrics = compute_ground_truth_metrics(&truth, &reconstruction).unwrap();
+    let metrics = compare_complex_fields(&truth, &reconstruction).unwrap();
     assert_abs_diff_eq!(metrics.amplitude_rmse, 0.0, epsilon = 1e-12);
     assert_abs_diff_eq!(metrics.amplitude_nrmse, 0.0, epsilon = 1e-12);
     assert_abs_diff_eq!(metrics.complex_rmse, 0.0, epsilon = 1e-12);
     assert_abs_diff_eq!(metrics.complex_nrmse, 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(metrics.phase_rmse.unwrap(), 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(metrics.phase_mae.unwrap(), 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(metrics.phase_rmse, 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(metrics.phase_mae, 0.0, epsilon = 1e-12);
 }
 
 #[test]
@@ -154,39 +158,44 @@ fn reconstruction_diagnostics_json_round_trips() {
             worst_frame_loss: Some(0.4),
             elapsed_ms: Some(12.0),
         }],
-        frame_diagnostics: vec![FrameDiagnostics {
+        frame_diagnostics: vec![FrameDiagnosticRecord {
             iteration: Some(1),
             frame_index: 0,
             illumination_index: 1,
-            measured_sum: 10.0,
-            predicted_sum: 9.0,
-            residual_l1: 1.0,
-            residual_l2: 1.0,
-            residual_mean: 0.0,
-            residual_std: 1.0,
-            residual_max_abs: 1.0,
-            normalized_l2: 0.1,
-            saturated_pixels: Some(2),
+            metrics: IntensityComparisonMetrics {
+                reference_sum: 10.0,
+                candidate_sum: 9.0,
+                residual_l1: 1.0,
+                residual_l2: 1.0,
+                residual_mean: 0.0,
+                residual_std: 1.0,
+                residual_max_abs: 1.0,
+                normalized_l2: 0.1,
+                saturated_pixels: Some(2),
+            },
         }],
-        raw_frame_stats: vec![RawFrameStats {
+        raw_frame_stats: vec![RawFrameStatisticsRecord {
             frame_index: 0,
-            mean: 1.0,
-            std: 0.5,
-            min: 0.0,
-            max: 2.0,
-            sum: 4.0,
-            saturated_pixels: 2,
-            zero_pixels: 1,
+            metrics: IntensityStatistics {
+                mean: 1.0,
+                std: 0.5,
+                min: 0.0,
+                max: 2.0,
+                sum: 4.0,
+                saturated_pixels: 2,
+                zero_pixels: 1,
+            },
         }],
         coverage: Some(compute_fourier_coverage(&common::direct_model().unwrap()).unwrap()),
-        ground_truth_metrics: Some(GroundTruthMetrics {
+        ground_truth_metrics: Some(ComplexFieldComparisonMetrics {
             amplitude_rmse: 0.0,
             amplitude_nrmse: 0.0,
             complex_rmse: 0.0,
             complex_nrmse: 0.0,
-            phase_rmse: Some(0.0),
-            phase_mae: Some(0.0),
-            fourier_nrmse: None,
+            phase_rmse: 0.0,
+            phase_mae: 0.0,
+            fourier_nrmse: 0.0,
+            global_phase_offset: 0.0,
         }),
     };
     let directory = tempfile::tempdir().unwrap();
@@ -223,15 +232,17 @@ fn diagnostic_recorder_respects_every() {
     let history = ReconstructionHistory::default();
 
     let start_diagnostics = Diagnostics {
-        raw_frame_stats: Some(vec![RawFrameStats {
+        raw_frame_stats: Some(vec![RawFrameStatisticsRecord {
             frame_index: 0,
-            mean: 1.0,
-            std: 0.0,
-            min: 1.0,
-            max: 1.0,
-            sum: 1.0,
-            saturated_pixels: 0,
-            zero_pixels: 0,
+            metrics: IntensityStatistics {
+                mean: 1.0,
+                std: 0.0,
+                min: 1.0,
+                max: 1.0,
+                sum: 1.0,
+                saturated_pixels: 0,
+                zero_pixels: 0,
+            },
         }]),
         ..Diagnostics::default()
     };
@@ -434,11 +445,19 @@ fn runner_frame_summaries_ignore_masked_measurements() {
         .iter()
         .zip(&corrupted.frame_diagnostics)
     {
-        assert_abs_diff_eq!(clean.measured_sum, corrupted.measured_sum, epsilon = 1e-12);
-        assert_abs_diff_eq!(clean.residual_l2, corrupted.residual_l2, epsilon = 1e-12);
         assert_abs_diff_eq!(
-            clean.normalized_l2,
-            corrupted.normalized_l2,
+            clean.metrics.reference_sum,
+            corrupted.metrics.reference_sum,
+            epsilon = 1e-12
+        );
+        assert_abs_diff_eq!(
+            clean.metrics.residual_l2,
+            corrupted.metrics.residual_l2,
+            epsilon = 1e-12
+        );
+        assert_abs_diff_eq!(
+            clean.metrics.normalized_l2,
+            corrupted.metrics.normalized_l2,
             epsilon = 1e-12
         );
     }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 matplotlib = pytest.importorskip("matplotlib")
@@ -11,6 +12,17 @@ plt = pytest.importorskip("matplotlib.pyplot")
 
 import fpm_rs as fpm
 from fpm_rs.diagnostics import load_diagnostics, make_diagnostic_report, write_summary
+
+
+def test_radial_fourier_spectrum_constant_field() -> None:
+    field = np.ones((4, 4), dtype=np.complex128)
+
+    spectrum = fpm.radial_fourier_spectrum(field)
+
+    assert spectrum["radius_px"] == [0.0, 1.0, 2.0]
+    assert spectrum["sample_count"] == [1, 8, 7]
+    assert spectrum["power"][0] == pytest.approx(16.0)
+    assert spectrum["power"][1:] == pytest.approx([0.0, 0.0])
 
 
 def test_load_diagnostics_reads_json(tmp_path: Path) -> None:

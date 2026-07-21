@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Array2, Complex64, Result,
     algorithms::ReconstructionAlgorithm,
+    evaluation::{evaluate_frame_intensity, evaluate_reconstruction_with_problem},
     measurements::MeasurementRead,
     model::ImagePlaneModel,
     reconstruction::{ReconstructionProblem, ReconstructionResult},
-    simulation::{compare_with_problem, compare_with_problem_masked, per_frame_residuals},
 };
 
 pub const BENCHMARK_RECORD_FORMAT_VERSION: u32 = 1;
@@ -229,21 +229,37 @@ where
             .map(|final_loss| final_loss / initial)
     });
 
-    let residuals = if let Some(truth) = ground_truth {
-        let metrics = match valid_object_mask {
-            Some(mask) => compare_with_problem_masked(&result, problem, truth, true_model, mask),
-            None => compare_with_problem(&result, problem, truth, true_model),
-        };
+    let residuals: Vec<f64> = if let Some(truth) = ground_truth {
+        let metrics = evaluate_reconstruction_with_problem(
+            &result,
+            problem,
+            truth,
+            true_model,
+            valid_object_mask,
+        );
         match metrics {
             Ok(metrics) => {
-                record.amplitude_rmse = Some(metrics.amplitude_rmse);
-                record.phase_rmse = Some(metrics.phase_rmse);
-                record.complex_field_relative_error = Some(metrics.complex_field_error);
-                record.fourier_domain_relative_error = Some(metrics.fourier_domain_error);
-                record.pupil_amplitude_rmse = metrics.pupil_amplitude_error;
-                record.pupil_phase_rmse = metrics.pupil_phase_error;
-                record.illumination_position_rmse = metrics.illumination_position_rmse;
-                metrics.per_frame_residuals.unwrap_or_default()
+                record.amplitude_rmse = Some(metrics.object.amplitude_rmse);
+                record.phase_rmse = Some(metrics.object.phase_rmse);
+                record.complex_field_relative_error = Some(metrics.object.complex_nrmse);
+                record.fourier_domain_relative_error = Some(metrics.object.fourier_nrmse);
+                record.pupil_amplitude_rmse =
+                    metrics.pupil.as_ref().map(|value| value.amplitude_rmse);
+                record.pupil_phase_rmse = metrics.pupil.as_ref().map(|value| value.phase_rmse);
+                record.illumination_position_rmse = metrics
+                    .illumination
+                    .as_ref()
+                    .map(|value| value.position_rmse);
+                metrics
+                    .intensity
+                    .map(|value| {
+                        value
+                            .per_frame
+                            .into_iter()
+                            .map(|frame| frame.normalized_l2)
+                            .collect()
+                    })
+                    .unwrap_or_default()
             }
             Err(error) => {
                 record.error = Some(format!("benchmark metric calculation failed: {error}"));
@@ -251,8 +267,12 @@ where
             }
         }
     } else {
-        match per_frame_residuals(&result, problem) {
-            Ok(residuals) => residuals,
+        match evaluate_frame_intensity(&result, problem) {
+            Ok(metrics) => metrics
+                .per_frame
+                .into_iter()
+                .map(|frame| frame.normalized_l2)
+                .collect(),
             Err(error) => {
                 record.error = Some(format!("benchmark residual calculation failed: {error}"));
                 return (record, Some(result));

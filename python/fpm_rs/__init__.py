@@ -2,6 +2,8 @@
 
 from . import diagnostics
 from . import datasets
+from . import evaluation
+from . import metrics
 from . import plot
 from ._core import (
     Admm,
@@ -59,5 +61,8 @@ from ._core import (
     simulate,
     suggest_reconstruction_shape,
 )
+
+# Backwards-compatible alias; use ``fpm_rs.metrics.radial_fourier_spectrum``.
+radial_fourier_spectrum = metrics.radial_fourier_spectrum
 
 __all__ = [name for name in globals() if not name.startswith("_")]

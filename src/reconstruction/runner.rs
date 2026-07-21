@@ -7,11 +7,12 @@ use crate::{
     callbacks::{Callback, CallbackAction, CallbackHook, StepContext},
     complex,
     diagnostics::{
-        DiagnosticRequest, Diagnostics, IterationRecord, ReconstructionHistory, StepDiagnostics,
-        compute_frame_diagnostics_with_mask, compute_raw_frame_stats,
+        DiagnosticRequest, Diagnostics, FrameDiagnosticRecord, IterationRecord,
+        RawFrameStatisticsRecord, ReconstructionHistory, StepDiagnostics,
     },
     error::Error,
     measurements::MeasurementRead,
+    metrics::intensity::{compare_intensity_masked, intensity_statistics},
     model::ForwardModel,
 };
 
@@ -283,7 +284,10 @@ fn build_diagnostics<M: MeasurementRead>(
         let mut values = Vec::with_capacity(problem.model.frame_count());
         for frame in 0..problem.model.frame_count() {
             let measured = problem.measurements.frame(frame)?;
-            values.push(compute_raw_frame_stats(frame, &measured, None)?);
+            values.push(RawFrameStatisticsRecord {
+                frame_index: frame,
+                metrics: intensity_statistics(&measured, None)?,
+            });
         }
         diagnostics.raw_frame_stats = Some(values);
     }
@@ -368,16 +372,13 @@ fn build_diagnostics<M: MeasurementRead>(
                 )?);
             }
             if requests.contains(&DiagnosticRequest::FrameSummaries) {
-                let mut summary = compute_frame_diagnostics_with_mask(
-                    frame,
-                    metadata.illumination_index.unwrap_or(frame),
-                    &measured,
-                    &predicted,
-                    mask,
-                    None,
-                )?;
-                summary.iteration = Some(iteration);
-                frame_diagnostics.push(summary);
+                let metrics = compare_intensity_masked(&measured, &predicted, mask, None)?;
+                frame_diagnostics.push(FrameDiagnosticRecord {
+                    iteration: Some(iteration),
+                    frame_index: frame,
+                    illumination_index: metadata.illumination_index.unwrap_or(frame),
+                    metrics,
+                });
             }
         }
         if diagnostics.per_frame_error.is_none() {

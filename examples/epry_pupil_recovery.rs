@@ -3,10 +3,11 @@ mod support;
 use fpm_rs::{
     Result,
     algorithms::{Epry, ReconstructionAlgorithm},
+    evaluation::evaluate_reconstruction,
     experiment::PupilAberration,
     model::{ImagePlaneModel, ReconstructionShape},
     reconstruction::ReconstructionProblem,
-    simulation::{Simulator, SyntheticObject, compare_with_true_model},
+    simulation::{Simulator, SyntheticObject},
 };
 
 fn main() -> Result<()> {
@@ -39,7 +40,10 @@ fn main() -> Result<()> {
         .pupil_step(0.05)
         .recover_pupil(true)
         .run(&problem)?;
-    let metrics = compare_with_true_model(&result, &truth, &true_model)?;
-    println!("pupil phase RMSE: {:?}", metrics.pupil_phase_error);
+    let metrics = evaluate_reconstruction(&result, &truth, Some(&true_model), None)?;
+    println!(
+        "pupil phase RMSE: {:?}",
+        metrics.pupil.map(|value| value.phase_rmse)
+    );
     Ok(())
 }

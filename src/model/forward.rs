@@ -3,8 +3,8 @@ use std::{sync::Arc, thread};
 
 use crate::{
     Array2, Result,
+    algorithms::objective::LossType,
     backend::{Backend, CpuBackend, FftDirection},
-    diagnostics::LossType,
     error::Error,
 };
 
@@ -413,7 +413,7 @@ impl<'a> ForwardModel<'a> {
         loss_type: LossType,
     ) -> Result<f64> {
         let predicted = self.forward_intensity(object_spectrum, pupil, frame)?;
-        crate::diagnostics::loss(predicted.as_slice(), measured, loss_type)
+        crate::algorithms::objective::loss(predicted.as_slice(), measured, loss_type)
     }
 
     fn frame_gain(&self, frame: usize) -> Result<f64> {

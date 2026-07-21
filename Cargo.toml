@@ -43,6 +43,8 @@ image = {
   features = ["png", "tiff"]
 }
 num-complex = { version = "0.4", features = ["serde"] }
+ndarray = "0.17"
+num-traits = "0.2"
 numpy = "0.29"
 pyo3 = { version = "0.29", features = ["extension-module"] }
 rand = "0.9"
@@ -77,6 +79,8 @@ dirs.workspace = true
 fs2.workspace = true
 image.workspace = true
 num-complex.workspace = true
+ndarray.workspace = true
+num-traits.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 rustfft.workspace = true

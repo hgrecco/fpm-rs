@@ -6,19 +6,19 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{FrameDiagnostics, IterationDiagnostics, RawFrameStats};
+use super::{FrameDiagnosticRecord, IterationDiagnostics, RawFrameStatisticsRecord};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ReconstructionDiagnostics {
     pub iteration_history: Vec<IterationDiagnostics>,
 
-    pub frame_diagnostics: Vec<FrameDiagnostics>,
+    pub frame_diagnostics: Vec<FrameDiagnosticRecord>,
 
-    pub raw_frame_stats: Vec<RawFrameStats>,
+    pub raw_frame_stats: Vec<RawFrameStatisticsRecord>,
 
     pub coverage: Option<super::FourierCoverageDiagnostics>,
 
-    pub ground_truth_metrics: Option<super::GroundTruthMetrics>,
+    pub ground_truth_metrics: Option<crate::metrics::complex_field::ComplexFieldComparisonMetrics>,
 }
 
 impl ReconstructionDiagnostics {

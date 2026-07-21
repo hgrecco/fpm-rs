@@ -3,7 +3,7 @@
 Native rustdoc is generated only for the public `fpm-rs` crate. It exposes the
 physical experiment descriptions, compiled image-plane model, resident and lazy
 measurements, reconstruction algorithms and runner, callbacks, diagnostics,
-simulation, datasets, and CPU backend boundary.
+metrics, simulation, datasets, and CPU backend boundary.
 
 The Rust API is intended for lower-level integrations, new algorithm work,
 custom measurement storage or callbacks, and performance-sensitive use. The
