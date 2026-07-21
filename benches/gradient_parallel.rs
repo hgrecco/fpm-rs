@@ -7,7 +7,7 @@ use std::{
 };
 
 use fpm_rs::{
-    Array2, Complex64, Error, Result,
+    Complex64, Error, Result,
     algorithms::{GradientDescent, ReconstructionAlgorithm},
     experiment::KVector,
     measurements::MeasurementStack,
@@ -15,6 +15,7 @@ use fpm_rs::{
     reconstruction::{Batch, ReconstructionProblem, ReconstructionState},
     simulation::{Simulator, SyntheticObject},
 };
+use ndarray::Array2;
 
 struct TrackingAllocator;
 
@@ -169,8 +170,14 @@ fn benchmark_case(
             elapsed += started.elapsed();
             let peak = PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline);
             maximum_peak = maximum_peak.max(peak);
+            let spectrum = state.object_spectrum();
             checksum += diagnostics.mean_loss().unwrap_or_default()
-                + state.object_spectrum.as_slice()[sample % state.object_spectrum.len()].norm();
+                + spectrum
+                    .iter()
+                    .nth(sample % spectrum.len())
+                    .copied()
+                    .unwrap_or_default()
+                    .norm();
             black_box(&state);
         }
         black_box(checksum);
@@ -187,7 +194,7 @@ fn benchmark_case(
 }
 
 fn benchmark_problem(model: ImagePlaneModel) -> Result<ReconstructionProblem<MeasurementStack>> {
-    let object = SyntheticObject::mixed_test_pattern(model.reconstruction_shape)?;
+    let object = SyntheticObject::mixed_test_pattern(model.reconstruction_shape())?;
     let simulation = Simulator::ideal(model).object(object).simulate()?;
     ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
 }
@@ -203,8 +210,8 @@ fn benchmark_model(low_size: usize, high_size: usize) -> Result<ImagePlaneModel>
     let reconstruction_shape = (high_size, high_size);
     let sampling = Sampling::new(1.0, 0.5, 1.0, 1.0)?;
     let pupil = Pupil::new(
-        Array2::filled(image_shape, Complex64::new(1.0, 0.0))?,
-        vec![true; low_size * low_size],
+        Array2::from_elem(image_shape, Complex64::new(1.0, 0.0)),
+        Array2::from_elem(image_shape, 1_u8),
     )?;
     let distance = (low_size / 8).max(1) as isize;
     let origin = ((high_size - low_size) / 2) as isize;

@@ -11,6 +11,7 @@ use fpm_rs::measurements::{
     MeasurementStack, PreprocessingConfig,
 };
 use image::{GrayImage, ImageBuffer, Luma};
+use ndarray::{Array2, Array3};
 
 fn assert_measurement_read<M: MeasurementRead>(
     measurements: &M,
@@ -50,11 +51,11 @@ fn preprocessing_applies_dark_background_flat_and_exposure_in_order() {
         vec![first, second],
     )
     .unwrap()
-    .with_dark_frame(vec![1.0; 3])
+    .with_dark_frame(Array2::from_elem(shape, 1.0))
     .unwrap()
-    .with_background(vec![2.0; 3])
+    .with_background(Array2::from_elem(shape, 2.0))
     .unwrap()
-    .with_flat_field(vec![2.0; 3])
+    .with_flat_field(Array2::from_elem(shape, 2.0))
     .unwrap()
     .normalize_exposure()
     .clamp_negative()
@@ -71,15 +72,20 @@ fn metadata_and_corrections_are_validated() {
     assert!(MeasurementStack::from_vec(vec![1.0], (1, 1), vec![metadata]).is_err());
 
     let stack = MeasurementStack::from_vec(vec![1.0, 2.0], (1, 2), Vec::new()).unwrap();
-    assert!(stack.clone().with_flat_field(vec![1.0, 0.0]).is_err());
-    assert!(stack.with_masks(vec![1, 0, 1]).is_err());
+    assert!(
+        stack
+            .clone()
+            .with_flat_field(Array2::from_shape_vec((1, 2), vec![1.0, 0.0]).unwrap())
+            .is_err()
+    );
+    assert!(stack.with_masks(Array2::from_elem((1, 3), 1)).is_err());
 }
 
 #[test]
 fn measurement_deserialization_preserves_and_validates_private_invariants() {
     let stack = MeasurementStack::from_vec(vec![1.0, 2.0, 3.0, 4.0], (1, 2), Vec::new())
         .unwrap()
-        .with_masks(vec![1, 0])
+        .with_masks(Array2::from_shape_vec((1, 2), vec![1, 0]).unwrap())
         .unwrap();
     let encoded = serde_json::to_string(&stack).unwrap();
     let decoded: MeasurementStack = serde_json::from_str(&encoded).unwrap();
@@ -101,14 +107,16 @@ fn measurement_deserialization_preserves_and_validates_private_invariants() {
 fn masks_can_be_broadcast_or_stored_per_frame() {
     let broadcast = MeasurementStack::from_vec(vec![1.0; 8], (2, 2), Vec::new())
         .unwrap()
-        .with_masks(vec![1, 0, 1, 1])
+        .with_masks(Array2::from_shape_vec((2, 2), vec![1, 0, 1, 1]).unwrap())
         .unwrap();
     assert_eq!(broadcast.frame_mask(0).unwrap().unwrap(), &[1, 0, 1, 1]);
     assert_eq!(broadcast.frame_mask(1).unwrap().unwrap(), &[1, 0, 1, 1]);
 
     let per_frame = MeasurementStack::from_vec(vec![1.0; 8], (2, 2), Vec::new())
         .unwrap()
-        .with_masks(vec![1, 1, 1, 1, 0, 1, 1, 1])
+        .with_per_frame_masks(
+            Array3::from_shape_vec((2, 2, 2), vec![1, 1, 1, 1, 0, 1, 1, 1]).unwrap(),
+        )
         .unwrap();
     assert_eq!(per_frame.frame_mask(0).unwrap().unwrap(), &[1, 1, 1, 1]);
     assert_eq!(per_frame.frame_mask(1).unwrap().unwrap(), &[0, 1, 1, 1]);
@@ -299,7 +307,7 @@ fn image_stack_loader_preserves_native_8_and_16_bit_counts() {
     let eight_bit = MeasurementStack::from_image_files(&[&eight_bit_path], Vec::new()).unwrap();
     assert_eq!(eight_bit.frame(0).unwrap(), &[0.0, 1.0, 127.0, 255.0]);
     assert!(
-        eight_bit.frame_metadata[0]
+        eight_bit.frame_metadata()[0]
             .label
             .as_ref()
             .unwrap()
@@ -377,7 +385,7 @@ fn multipage_tiff_loader_reads_each_page_as_a_frame() {
     assert_eq!(stack.frame(0).unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert_eq!(stack.frame(1).unwrap(), &[100.0, 200.0, 300.0, 400.0]);
     assert!(
-        stack.frame_metadata[1]
+        stack.frame_metadata()[1]
             .label
             .as_deref()
             .unwrap()
@@ -441,14 +449,14 @@ fn manifest_loads_relative_images_metadata_and_preprocessing() {
 
     let stack = MeasurementStack::from_manifest(&manifest_path).unwrap();
     assert_eq!(stack.frame(0).unwrap(), &[20.0, 10.0]);
-    assert_eq!(stack.frame_metadata[0].illumination_index, Some(7));
-    assert_eq!(stack.frame_metadata[0].weight, 0.5);
+    assert_eq!(stack.frame_metadata()[0].illumination_index, Some(7));
+    assert_eq!(stack.frame_metadata()[0].weight, 0.5);
     assert_eq!(
-        stack.frame_metadata[0].label.as_deref(),
+        stack.frame_metadata()[0].label.as_deref(),
         Some("brightfield")
     );
     assert_eq!(
-        stack.frame_metadata[1].label.as_deref(),
+        stack.frame_metadata()[1].label.as_deref(),
         Some("frame1.tiff")
     );
     assert_eq!(stack.frame_mask(0).unwrap().unwrap(), &[1, 0]);

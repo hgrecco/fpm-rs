@@ -2,7 +2,7 @@ use rand::Rng;
 use rand_distr::{Distribution, Normal, Poisson};
 use serde::{Deserialize, Serialize};
 
-use crate::{Result, error::Error, model::ImagePlaneModel};
+use crate::{Result, array_layout::checked_len_2d, error::Error, model::ImagePlaneModel};
 
 /// Concrete detector pipeline from optical intensity to digital counts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -273,7 +273,8 @@ impl CameraModel {
         &self,
         mut model: ImagePlaneModel,
     ) -> Result<ImagePlaneModel> {
-        self.validate_for_frame(model.image_shape.0 * model.image_shape.1)?;
+        let image_len = checked_len_2d(model.image_shape)?;
+        self.validate_for_frame(image_len)?;
         let scale = self.photons_per_pixel * self.gain_counts_per_electron;
         model.frame_gains = Some(match &model.frame_gains {
             Some(gains) => gains.iter().map(|gain| gain * scale).collect(),
@@ -286,10 +287,7 @@ impl CameraModel {
                 *value = *value * scale + additive_counts;
             }
         } else if additive_counts != 0.0 {
-            model.background = Some(vec![
-                additive_counts;
-                model.image_shape.0 * model.image_shape.1
-            ]);
+            model.background = Some(vec![additive_counts; image_len]);
         }
         model.validate()?;
         Ok(model)

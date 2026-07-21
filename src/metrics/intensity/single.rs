@@ -2,8 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Summary statistics calculated from one intensity image.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IntensityStatistics {
+pub struct IntensityStats {
     pub mean: f64,
     pub std: f64,
     pub min: f64,
@@ -13,10 +14,8 @@ pub struct IntensityStatistics {
     pub zero_pixels: usize,
 }
 
-pub fn intensity_statistics(
-    values: &[f64],
-    saturation_value: Option<f64>,
-) -> crate::Result<IntensityStatistics> {
+/// Calculate summary statistics for a non-empty intensity image.
+pub fn stats(values: &[f64], saturation_value: Option<f64>) -> crate::Result<IntensityStats> {
     if values.is_empty() {
         return Err(crate::Error::InvalidShape(
             "intensity statistics require non-empty values".into(),
@@ -43,7 +42,7 @@ pub fn intensity_statistics(
     }
     let count = values.len() as f64;
     let mean = sum / count;
-    Ok(IntensityStatistics {
+    Ok(IntensityStats {
         mean,
         std: (sum_squares / count - mean * mean).max(0.0).sqrt(),
         min,

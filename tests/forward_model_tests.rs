@@ -2,10 +2,11 @@ mod common;
 
 use approx::assert_abs_diff_eq;
 use fpm_rs::{
-    Array2, Complex64, Error,
+    Complex64, Error,
     backend::{Backend, CpuBackend, FftDirection, MemoryLocation},
     model::{ForwardModel, FourierCrop, FourierOffset},
 };
+use ndarray::{Array2, s};
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -74,13 +75,13 @@ fn cpu_backend_exposes_typed_resident_buffer_capabilities() {
 #[test]
 fn constant_object_has_constant_central_frame() {
     let model = common::direct_model().unwrap();
-    let backend = CpuBackend::new(model.image_shape, model.reconstruction_shape).unwrap();
+    let backend = CpuBackend::new(model.image_shape(), model.reconstruction_shape()).unwrap();
     let mut spatial = vec![Complex64::new(2.0, 0.0); 16 * 16];
     let mut column = vec![Complex64::default(); 16];
     backend
         .fft2(
             &mut spatial,
-            model.reconstruction_shape,
+            model.reconstruction_shape(),
             FftDirection::Forward,
             &mut column,
         )
@@ -91,30 +92,25 @@ fn constant_object_has_constant_central_frame() {
             centered[((row + 8) % 16) * 16 + (column + 8) % 16] = spatial[row * 16 + column];
         }
     }
-    let spectrum = Array2::from_vec((16, 16), centered).unwrap();
+    let spectrum = Array2::from_shape_vec((16, 16), centered).unwrap();
     let intensity = ForwardModel::new(&model)
         .unwrap()
-        .forward_intensity(&spectrum, &model.pupil, 2)
+        .forward_intensity(spectrum.view(), model.pupil(), 2)
         .unwrap();
-    assert!(
-        intensity
-            .as_slice()
-            .iter()
-            .all(|value| (*value - 4.0).abs() < 1e-10)
-    );
+    assert!(intensity.iter().all(|value| (*value - 4.0).abs() < 1e-10));
 }
 
 #[test]
 fn patch_extraction_and_update_are_consistent() {
     let model = common::direct_model().unwrap();
     let forward = ForwardModel::new(&model).unwrap();
-    let mut spectrum = Array2::filled((16, 16), Complex64::new(0.0, 0.0)).unwrap();
+    let mut spectrum = Array2::from_elem((16, 16), Complex64::new(0.0, 0.0));
     let update = vec![Complex64::new(1.0, -0.5); 64];
     forward
-        .insert_patch_update(&mut spectrum, 2, &update, 1.0)
+        .insert_patch_update(spectrum.view_mut(), 2, &update, 1.0)
         .unwrap();
-    let patch = forward.extract_patch(&spectrum, 2).unwrap();
-    assert_eq!(patch.as_slice(), update.as_slice());
+    let patch = forward.extract_patch(spectrum.view(), 2).unwrap();
+    assert_eq!(patch.iter().copied().collect::<Vec<_>>(), update);
 }
 
 #[test]
@@ -135,10 +131,10 @@ fn subpixel_patch_uses_bilinear_fourier_sampling() {
             })
         })
         .collect();
-    let spectrum = Array2::from_vec((16, 16), values).unwrap();
+    let spectrum = Array2::from_shape_vec((16, 16), values).unwrap();
     let patch = ForwardModel::new(&model)
         .unwrap()
-        .extract_patch(&spectrum, 2)
+        .extract_patch(spectrum.view(), 2)
         .unwrap();
 
     for row in 0..8 {
@@ -187,7 +183,7 @@ fn subpixel_sinusoid_relative_rms_error(
     offset: FourierOffset,
     cycles: usize,
 ) -> f64 {
-    let spectrum = Array2::from_vec(
+    let spectrum = Array2::from_shape_vec(
         shape,
         (0..shape.0 * shape.1)
             .map(|index| {
@@ -201,7 +197,7 @@ fn subpixel_sinusoid_relative_rms_error(
     )
     .unwrap();
     let mut sampled = vec![Complex64::default(); crop.height * crop.width];
-    crop.extract_subpixel(&spectrum, &mut sampled, offset)
+    crop.extract_subpixel(spectrum.view(), &mut sampled, offset)
         .unwrap();
     let squared_error: f64 = sampled
         .iter()
@@ -227,7 +223,7 @@ fn subpixel_patch_insertion_is_the_exact_adjoint() {
         .unwrap()
         .with_subpixel_offsets(offsets)
         .unwrap();
-    let spectrum = Array2::from_vec(
+    let spectrum = Array2::from_shape_vec(
         (16, 16),
         (0..256)
             .map(|index| {
@@ -241,22 +237,20 @@ fn subpixel_patch_insertion_is_the_exact_adjoint() {
         .collect();
     let extracted = ForwardModel::new(&model)
         .unwrap()
-        .extract_patch(&spectrum, 2)
+        .extract_patch(spectrum.view(), 2)
         .unwrap();
-    let mut adjoint = Array2::filled((16, 16), Complex64::default()).unwrap();
+    let mut adjoint = Array2::from_elem((16, 16), Complex64::default());
     model
-        .insert_patch_adjoint(&mut adjoint, 2, &update, 1.0)
+        .insert_patch_adjoint(adjoint.view_mut(), 2, &update, 1.0)
         .unwrap();
     let left: Complex64 = extracted
-        .as_slice()
         .iter()
         .zip(&update)
         .map(|(&sample, &value)| sample.conj() * value)
         .sum();
     let right: Complex64 = spectrum
-        .as_slice()
         .iter()
-        .zip(adjoint.as_slice())
+        .zip(adjoint.iter())
         .map(|(&value, &backprojected)| value.conj() * backprojected)
         .sum();
     assert_abs_diff_eq!(left.re, right.re, epsilon = 1e-12);
@@ -267,11 +261,11 @@ fn subpixel_patch_insertion_is_the_exact_adjoint() {
 fn forward_model_uses_injected_backend() {
     let model = common::direct_model().unwrap();
     let (backend, calls) =
-        common::CountingBackend::new(model.image_shape, model.reconstruction_shape).unwrap();
+        common::CountingBackend::new(model.image_shape(), model.reconstruction_shape()).unwrap();
     let forward = ForwardModel::with_backend(&model, backend).unwrap();
-    let spectrum = Array2::filled(model.reconstruction_shape, Complex64::default()).unwrap();
+    let spectrum = Array2::from_elem(model.reconstruction_shape(), Complex64::default());
     forward
-        .forward_intensity(&spectrum, &model.pupil, 0)
+        .forward_intensity(spectrum.view(), model.pupil(), 0)
         .unwrap();
     assert!(calls.load(Ordering::Relaxed) > 0);
 }
@@ -289,37 +283,48 @@ fn reusable_forward_workspace_matches_allocating_api() {
             ])
             .unwrap(),
     ] {
-        let spectrum = Array2::from_vec(
-            model.reconstruction_shape,
-            (0..model.reconstruction_shape.0 * model.reconstruction_shape.1)
+        let spectrum = Array2::from_shape_vec(
+            model.reconstruction_shape(),
+            (0..model.reconstruction_shape().0 * model.reconstruction_shape().1)
                 .map(|index| Complex64::new((index % 17) as f64 / 13.0, (index % 11) as f64 / 9.0))
                 .collect(),
         )
         .unwrap();
         let forward = ForwardModel::new(&model).unwrap();
-        let mut workspace = forward.workspace();
-        let mut reused = vec![-1.0; model.image_shape.0 * model.image_shape.1];
+        let mut workspace = forward.workspace().unwrap();
+        let mut reused = vec![-1.0; model.image_shape().0 * model.image_shape().1];
         let mut serial_stack = Vec::new();
         for frame in 0..model.frame_count() {
             let allocated = forward
-                .forward_intensity(&spectrum, &model.pupil, frame)
+                .forward_intensity(spectrum.view(), model.pupil(), frame)
                 .unwrap();
-            serial_stack.extend_from_slice(allocated.as_slice());
+            serial_stack.extend(allocated.iter().copied());
             forward
-                .forward_intensity_into(&spectrum, &model.pupil, frame, &mut workspace, &mut reused)
+                .forward_intensity_into(
+                    spectrum.view(),
+                    model.pupil(),
+                    frame,
+                    &mut workspace,
+                    &mut reused,
+                )
                 .unwrap();
-            for (&allocated, &reused) in allocated.as_slice().iter().zip(&reused) {
+            for (&allocated, &reused) in allocated.iter().zip(&reused) {
                 assert_abs_diff_eq!(allocated, reused, epsilon = 1e-14);
             }
         }
         let parallel_stack = forward
-            .forward_intensity_stack(&spectrum, &model.pupil, 3)
+            .forward_intensity_stack(spectrum.view(), model.pupil(), 3)
             .unwrap();
         assert_eq!(parallel_stack, serial_stack);
 
         let mut single_worker_stack = vec![f64::NAN; serial_stack.len()];
         forward
-            .forward_intensity_stack_into(&spectrum, &model.pupil, &mut single_worker_stack, 1)
+            .forward_intensity_stack_into(
+                spectrum.view(),
+                model.pupil(),
+                &mut single_worker_stack,
+                1,
+            )
             .unwrap();
         assert_eq!(single_worker_stack, serial_stack);
     }
@@ -329,10 +334,10 @@ fn reusable_forward_workspace_matches_allocating_api() {
 fn forward_stack_validates_worker_count_and_destination_length() {
     let model = common::direct_model().unwrap();
     let forward = ForwardModel::new(&model).unwrap();
-    let spectrum = Array2::filled(model.reconstruction_shape, Complex64::default()).unwrap();
-    let mut destination = vec![0.0; model.frame_count() * model.pupil.values.len()];
+    let spectrum = Array2::from_elem(model.reconstruction_shape(), Complex64::default());
+    let mut destination = vec![0.0; model.frame_count() * model.pupil().values().len()];
     assert!(matches!(
-        forward.forward_intensity_stack_into(&spectrum, &model.pupil, &mut destination, 0),
+        forward.forward_intensity_stack_into(spectrum.view(), model.pupil(), &mut destination, 0),
         Err(Error::InvalidParameter {
             name: "worker_count",
             ..
@@ -341,11 +346,27 @@ fn forward_stack_validates_worker_count_and_destination_length() {
     let short_length = destination.len() - 1;
     assert!(matches!(
         forward.forward_intensity_stack_into(
-            &spectrum,
-            &model.pupil,
+            spectrum.view(),
+            model.pupil(),
             &mut destination[..short_length],
             2
         ),
         Err(Error::LengthMismatch { .. })
+    ));
+}
+
+#[test]
+fn forward_model_rejects_nonstandard_spectra_without_copying() {
+    let model = common::direct_model().unwrap();
+    let forward = ForwardModel::new(&model).unwrap();
+    let spectrum = Array2::from_elem(model.reconstruction_shape(), Complex64::default());
+
+    assert!(matches!(
+        forward.forward_intensity(spectrum.t(), model.pupil(), 0),
+        Err(Error::NonStandardLayout { .. })
+    ));
+    assert!(matches!(
+        forward.forward_intensity(spectrum.slice(s![.., ..;2]), model.pupil(), 0),
+        Err(Error::NonStandardLayout { .. })
     ));
 }

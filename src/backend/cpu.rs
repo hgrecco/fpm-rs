@@ -3,7 +3,7 @@ use std::sync::Arc;
 use num_complex::Complex64;
 use rustfft::{Fft, FftPlanner};
 
-use crate::{Result, error::Error};
+use crate::{Result, array_layout::checked_len_2d, error::Error};
 
 use super::{
     Backend, BackendCapabilities, ComplexBuffer, FftDirection, MemoryLocation, RealBuffer,
@@ -92,6 +92,8 @@ impl CpuBackend {
                 "FFT dimensions must be non-zero".into(),
             ));
         }
+        checked_len_2d(low_shape)?;
+        checked_len_2d(high_shape)?;
         Ok(Self {
             low: CpuFftPlan::new(low_shape),
             high: CpuFftPlan::new(high_shape),
@@ -131,7 +133,7 @@ impl Backend for CpuBackend {
         direction: FftDirection,
         column_scratch: &mut [Complex64],
     ) -> Result<()> {
-        let expected = shape.0 * shape.1;
+        let expected = checked_len_2d(shape)?;
         if values.len() != expected || column_scratch.len() < shape.0 {
             return Err(Error::InvalidShape(format!(
                 "FFT {:?} requires {expected} values and {} column scratch values",

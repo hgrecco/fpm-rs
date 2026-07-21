@@ -12,17 +12,16 @@ use fpm_rs::diagnostics::{
     ReconstructionDiagnostics, ReconstructionHistory, compute_fourier_coverage,
 };
 use fpm_rs::{
-    Array2, Complex64, Error, Result,
+    Complex64, Error, Result,
     metrics::{
         complex_field::{ComplexFieldComparisonMetrics, compare_complex_fields},
-        intensity::{
-            IntensityComparisonMetrics, IntensityStatistics, compare_intensity,
-            compare_intensity_masked, intensity_statistics,
-        },
+        intensity::{IntensityComparisonMetrics, IntensityStats, compare_intensity, stats},
     },
     reconstruction::{ReconstructionProblem, ReconstructionState},
     simulation::{Simulator, SyntheticObject},
 };
+use ndarray::Array2;
+use ndarray::array;
 
 struct FailingIterationCallback;
 
@@ -68,7 +67,7 @@ fn loss_rejects_empty_mismatched_and_non_finite_inputs() {
 
 #[test]
 fn raw_frame_stats_match_known_values() {
-    let stats = intensity_statistics(&[0.0, 1.0, 2.0, 3.0], Some(2.0)).unwrap();
+    let stats = stats(&[0.0, 1.0, 2.0, 3.0], Some(2.0)).unwrap();
     assert_abs_diff_eq!(stats.mean, 1.5, epsilon = 1e-14);
     assert_abs_diff_eq!(stats.std, (1.25f64).sqrt(), epsilon = 1e-14);
     assert_abs_diff_eq!(stats.min, 0.0, epsilon = 1e-14);
@@ -80,11 +79,12 @@ fn raw_frame_stats_match_known_values() {
 
 #[test]
 fn frame_diagnostics_match_known_values() {
-    let measured = [1.0, 2.0];
-    let predicted = [2.0, 0.0];
-    let diagnostics = compare_intensity(&measured, &predicted, Some(2.0)).unwrap();
+    let reference = array![[1.0, 2.0]];
+    let estimate = array![[2.0, 0.0]];
+    let diagnostics =
+        compare_intensity(reference.view(), estimate.view(), None, Some(2.0)).unwrap();
     assert_abs_diff_eq!(diagnostics.reference_sum, 3.0, epsilon = 1e-14);
-    assert_abs_diff_eq!(diagnostics.candidate_sum, 2.0, epsilon = 1e-14);
+    assert_abs_diff_eq!(diagnostics.estimate_sum, 2.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_l1, 3.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_l2, (5.0f64).sqrt(), epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_mean, -0.5, epsilon = 1e-14);
@@ -96,26 +96,34 @@ fn frame_diagnostics_match_known_values() {
 
 #[test]
 fn frame_diagnostics_handles_zero_measured_frames() {
-    let measured = [0.0, 0.0];
-    let predicted = [1.0, 2.0];
-    let diagnostics = compare_intensity(&measured, &predicted, None).unwrap();
+    let reference = array![[0.0, 0.0]];
+    let estimate = array![[1.0, 2.0]];
+    let diagnostics = compare_intensity(reference.view(), estimate.view(), None, None).unwrap();
     assert!(diagnostics.normalized_l2.is_finite());
     assert!(diagnostics.normalized_l2 > 0.0);
 }
 
 #[test]
 fn frame_diagnostics_exclude_masked_pixels() {
-    let diagnostics =
-        compare_intensity_masked(&[1.0, 100.0], &[1.0, 0.0], Some(&[1, 0]), None).unwrap();
+    let reference = array![[1.0, 100.0]];
+    let estimate = array![[1.0, 0.0]];
+    let valid_mask = array![[true, false]];
+    let diagnostics = compare_intensity(
+        reference.view(),
+        estimate.view(),
+        Some(valid_mask.view()),
+        None,
+    )
+    .unwrap();
     assert_abs_diff_eq!(diagnostics.reference_sum, 1.0, epsilon = 1e-14);
-    assert_abs_diff_eq!(diagnostics.candidate_sum, 1.0, epsilon = 1e-14);
+    assert_abs_diff_eq!(diagnostics.estimate_sum, 1.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.residual_l2, 0.0, epsilon = 1e-14);
     assert_abs_diff_eq!(diagnostics.normalized_l2, 0.0, epsilon = 1e-14);
 }
 
 #[test]
 fn ground_truth_metrics_align_global_phase() {
-    let truth = Array2::from_vec(
+    let truth = Array2::from_shape_vec(
         (2, 2),
         vec![
             Complex64::new(1.0, 0.0),
@@ -126,16 +134,9 @@ fn ground_truth_metrics_align_global_phase() {
     )
     .unwrap();
     let phase = Complex64::from_polar(1.0, 0.7);
-    let reconstruction = Array2::from_vec(
-        (2, 2),
-        truth
-            .as_slice()
-            .iter()
-            .map(|&value| value * phase)
-            .collect(),
-    )
-    .unwrap();
-    let metrics = compare_complex_fields(&truth, &reconstruction).unwrap();
+    let reconstruction =
+        Array2::from_shape_vec((2, 2), truth.iter().map(|&value| value * phase).collect()).unwrap();
+    let metrics = compare_complex_fields(truth.view(), reconstruction.view()).unwrap();
     assert_abs_diff_eq!(metrics.amplitude_rmse, 0.0, epsilon = 1e-12);
     assert_abs_diff_eq!(metrics.amplitude_nrmse, 0.0, epsilon = 1e-12);
     assert_abs_diff_eq!(metrics.complex_rmse, 0.0, epsilon = 1e-12);
@@ -164,7 +165,7 @@ fn reconstruction_diagnostics_json_round_trips() {
             illumination_index: 1,
             metrics: IntensityComparisonMetrics {
                 reference_sum: 10.0,
-                candidate_sum: 9.0,
+                estimate_sum: 9.0,
                 residual_l1: 1.0,
                 residual_l2: 1.0,
                 residual_mean: 0.0,
@@ -176,7 +177,7 @@ fn reconstruction_diagnostics_json_round_trips() {
         }],
         raw_frame_stats: vec![RawFrameStatisticsRecord {
             frame_index: 0,
-            metrics: IntensityStatistics {
+            metrics: IntensityStats {
                 mean: 1.0,
                 std: 0.5,
                 min: 0.0,
@@ -201,9 +202,22 @@ fn reconstruction_diagnostics_json_round_trips() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("diagnostics.json");
     diagnostics.to_json_file(&path).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let frame = &json["frame_diagnostics"][0];
+    assert_eq!(frame["measured_sum"], 10.0);
+    assert_eq!(frame["predicted_sum"], 9.0);
+    assert!(frame.get("reference_sum").is_none());
+    assert!(frame.get("estimate_sum").is_none());
+
     let loaded = ReconstructionDiagnostics::from_json_file(&path).unwrap();
     assert_eq!(loaded.iteration_history.len(), 1);
     assert_eq!(loaded.frame_diagnostics.len(), 1);
+    assert_abs_diff_eq!(
+        loaded.frame_diagnostics[0].metrics.estimate_sum,
+        9.0,
+        epsilon = 1e-14
+    );
     assert_eq!(loaded.raw_frame_stats.len(), 1);
     assert!(loaded.coverage.is_some());
     assert!(loaded.ground_truth_metrics.is_some());
@@ -234,7 +248,7 @@ fn diagnostic_recorder_respects_every() {
     let start_diagnostics = Diagnostics {
         raw_frame_stats: Some(vec![RawFrameStatisticsRecord {
             frame_index: 0,
-            metrics: IntensityStatistics {
+            metrics: IntensityStats {
                 mean: 1.0,
                 std: 0.0,
                 min: 1.0,
@@ -407,8 +421,8 @@ fn runner_frame_summaries_ignore_masked_measurements() {
     for frame in 0..corrupted.frame_count() {
         corrupted.frame_mut(frame).unwrap()[0] = 1e12;
     }
-    let mut mask = vec![1; corrupted.frame_len()];
-    mask[0] = 0;
+    let mut mask = ndarray::Array2::from_elem(corrupted.image_shape(), 1_u8);
+    mask[(0, 0)] = 0;
     let clean_problem = ReconstructionProblem::new(
         simulation.measurements.with_masks(mask.clone()).unwrap(),
         simulation.reconstruction_model.clone(),

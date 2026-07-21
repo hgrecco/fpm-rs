@@ -1,9 +1,11 @@
+use ndarray::Array2;
 use num_complex::Complex64;
 use rand::{SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, Normal};
 
 use crate::{
     Result,
+    array_layout::checked_len_2d,
     backend::{Backend, CpuBackend, FftDirection},
     error::Error,
     measurements::{FrameMetadata, MeasurementStack},
@@ -49,8 +51,8 @@ impl Simulator {
         }
     }
 
-    pub fn object(mut self, object: impl Into<SyntheticObject>) -> Self {
-        self.object = Some(object.into());
+    pub fn object(mut self, object: SyntheticObject) -> Self {
+        self.object = Some(object);
         self
     }
 
@@ -135,11 +137,20 @@ impl Simulator {
 
         let object_spectrum = object_spectrum(&object, &true_model)?;
         let forward = ForwardModel::new(&true_model)?;
-        let image_len = true_model.image_shape.0 * true_model.image_shape.1;
+        let image_len = checked_len_2d(true_model.image_shape)?;
         let worker_count = std::thread::available_parallelism().map_or(1, |count| count.get());
-        let mut data = vec![0.0; image_len * true_model.frame_count()];
+        let stack_len = image_len
+            .checked_mul(true_model.frame_count())
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![
+                    true_model.frame_count(),
+                    true_model.image_shape.0,
+                    true_model.image_shape.1,
+                ],
+            })?;
+        let mut data = vec![0.0; stack_len];
         forward.forward_intensity_stack_into(
-            &object_spectrum,
+            object_spectrum.view(),
             &true_model.pupil,
             &mut data,
             worker_count,
@@ -170,7 +181,7 @@ impl Simulator {
         let measurements = MeasurementStack::from_vec(data, true_model.image_shape, metadata)?;
         Ok(SimulationResult {
             measurements,
-            ground_truth_object: object.field,
+            ground_truth_object: object.field.into_inner(),
             true_model: true_model.clone(),
             reconstruction_model,
             camera: self.camera,
@@ -186,10 +197,7 @@ impl Simulator {
     }
 }
 
-fn object_spectrum(
-    object: &SyntheticObject,
-    model: &ImagePlaneModel,
-) -> Result<crate::Array2<Complex64>> {
+fn object_spectrum(object: &SyntheticObject, model: &ImagePlaneModel) -> Result<Array2<Complex64>> {
     let backend = CpuBackend::new(model.image_shape, model.reconstruction_shape)?;
     let mut values = object.field.as_slice().to_vec();
     let mut column =
@@ -202,7 +210,10 @@ fn object_spectrum(
     )?;
     let mut centered = vec![Complex64::default(); values.len()];
     fftshift_copy(&values, &mut centered, model.reconstruction_shape);
-    crate::Array2::from_vec(model.reconstruction_shape, centered)
+    Ok(Array2::from_shape_vec(
+        model.reconstruction_shape,
+        centered,
+    )?)
 }
 
 fn apply_illumination_acquisition_errors(
@@ -260,15 +271,35 @@ fn apply_illumination_acquisition_errors(
         if !multiplexed && let Some(gains) = &model.frame_gains {
             model.frame_gains = Some(permutation.iter().map(|&index| gains[index]).collect());
         }
-        let image_len = model.image_shape.0 * model.image_shape.1;
+        let image_len = checked_len_2d(model.image_shape)?;
+        let stack_len = image_len
+            .checked_mul(frame_count)
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![frame_count, model.image_shape.0, model.image_shape.1],
+            })?;
         if !multiplexed
             && let Some(background) = &model.background
-            && background.len() == image_len * frame_count
+            && background.len() == stack_len
         {
             let mut reordered = Vec::with_capacity(background.len());
             for &index in permutation {
-                let start = index * image_len;
-                reordered.extend_from_slice(&background[start..start + image_len]);
+                let start = index
+                    .checked_mul(image_len)
+                    .ok_or_else(|| Error::ShapeOverflow {
+                        shape: vec![index, model.image_shape.0, model.image_shape.1],
+                    })?;
+                let end = start
+                    .checked_add(image_len)
+                    .ok_or_else(|| Error::ShapeOverflow {
+                        shape: vec![
+                            index.saturating_add(1),
+                            model.image_shape.0,
+                            model.image_shape.1,
+                        ],
+                    })?;
+                reordered.extend_from_slice(background.get(start..end).ok_or_else(|| {
+                    Error::InvalidModel("background source permutation is out of range".into())
+                })?);
             }
             model.background = Some(reordered);
         }

@@ -1,9 +1,10 @@
 //! Atomic comparisons for calibrated optical-model quantities.
 
+use ndarray::ArrayView2;
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
-use crate::{Array2, Result, error::Error, model::ImagePlaneModel};
+use crate::{Result, error::Error, model::ImagePlaneModel};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PupilComparisonMetrics {
@@ -12,21 +13,20 @@ pub struct PupilComparisonMetrics {
 }
 
 pub fn compare_pupils(
-    reference: &Array2<Complex64>,
-    candidate: &Array2<Complex64>,
-    support: &[bool],
+    reference: ArrayView2<'_, Complex64>,
+    candidate: ArrayView2<'_, Complex64>,
+    support: ArrayView2<'_, u8>,
 ) -> Result<PupilComparisonMetrics> {
-    if reference.shape() != candidate.shape() || support.len() != reference.len() {
+    if reference.dim() != candidate.dim() || support.dim() != reference.dim() {
         return Err(Error::InvalidShape(
             "pupil comparison inputs have incompatible shapes".into(),
         ));
     }
     let (numerator, denominator) = candidate
-        .as_slice()
         .iter()
-        .zip(reference.as_slice())
-        .zip(support)
-        .filter(|&(_, &inside)| inside)
+        .zip(reference.iter())
+        .zip(support.iter())
+        .filter(|&(_, &inside)| inside != 0)
         .fold(
             (Complex64::default(), 0.0),
             |(numerator, denominator), ((&candidate, &reference), _)| {
@@ -44,13 +44,10 @@ pub fn compare_pupils(
     let mut amplitude = 0.0;
     let mut phase = 0.0;
     let mut count = 0usize;
-    for ((&reference, &candidate), &inside) in reference
-        .as_slice()
-        .iter()
-        .zip(candidate.as_slice())
-        .zip(support)
+    for ((&reference, &candidate), &inside) in
+        reference.iter().zip(candidate.iter()).zip(support.iter())
     {
-        if !inside {
+        if inside == 0 {
             continue;
         }
         let candidate = candidate * alignment;

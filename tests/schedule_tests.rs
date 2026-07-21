@@ -73,7 +73,7 @@ fn runner_applies_measurement_aware_snr_order() {
 
 fn weighted_problem() -> ReconstructionProblem<MeasurementStack> {
     let model = common::direct_model().unwrap();
-    let frame_len = model.image_shape.0 * model.image_shape.1;
+    let frame_len = model.image_shape().0 * model.image_shape().1;
     let mut data = Vec::with_capacity(frame_len * model.frame_count());
     for level in [4.0, 9.0, 100.0, 16.0, 1.0] {
         data.extend(std::iter::repeat_n(level, frame_len));
@@ -86,9 +86,18 @@ fn weighted_problem() -> ReconstructionProblem<MeasurementStack> {
     let mut masks = vec![1; data.len()];
     masks[frame_len] = 0;
     masks[2 * frame_len..3 * frame_len].fill(0);
-    let measurements = MeasurementStack::from_vec(data, model.image_shape, metadata)
+    let masks = ndarray::Array3::from_shape_vec(
+        (
+            model.frame_count(),
+            model.image_shape().0,
+            model.image_shape().1,
+        ),
+        masks,
+    )
+    .unwrap();
+    let measurements = MeasurementStack::from_vec(data, model.image_shape(), metadata)
         .unwrap()
-        .with_masks(masks)
+        .with_per_frame_masks(masks)
         .unwrap();
     ReconstructionProblem::new(measurements, model).unwrap()
 }

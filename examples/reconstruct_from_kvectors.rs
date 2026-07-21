@@ -1,11 +1,12 @@
 use fpm_rs::{
-    Array2, Complex64, Result,
+    Complex64, Result,
     algorithms::{Fpie, ReconstructionAlgorithm},
     experiment::KVector,
     model::{CropIndices, FourierCrop, ImagePlaneModel, Pupil, Sampling},
     reconstruction::ReconstructionProblem,
     simulation::{Simulator, SyntheticObject},
 };
+use ndarray::Array2;
 
 fn main() -> Result<()> {
     let low_shape = (32, 32);
@@ -28,8 +29,8 @@ fn main() -> Result<()> {
         })
         .collect();
     let pupil = Pupil::new(
-        Array2::filled(low_shape, Complex64::new(1.0, 0.0))?,
-        vec![true; low_shape.0 * low_shape.1],
+        Array2::from_elem(low_shape, Complex64::new(1.0, 0.0)),
+        Array2::from_elem(low_shape, 1_u8),
     )?;
     let model = ImagePlaneModel::new(
         k_vectors,

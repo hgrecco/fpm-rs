@@ -1,5 +1,8 @@
+use ndarray::{Array2, Array3};
+
 use crate::{
-    Array2, Complex64, Result,
+    Complex64, Result,
+    array_layout::checked_len_2d,
     configuration::{ExperimentDescription, SimulationConfiguration},
     error::Error,
     experiment::Illumination,
@@ -143,12 +146,18 @@ impl<'a> DatasetSubsetBuilder<'a> {
             width: source_shape.1,
         });
         validate_crop(crop, source_shape)?;
+        let crop_len = checked_len_2d((crop.height, crop.width))?;
+        let data_len = crop_len
+            .checked_mul(indices.len())
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![indices.len(), crop.height, crop.width],
+            })?;
 
-        let mut data = Vec::with_capacity(indices.len() * crop.height * crop.width);
+        let mut data = Vec::with_capacity(data_len);
         let mut metadata = Vec::with_capacity(indices.len());
         for (new_index, &source_index) in indices.iter().enumerate() {
             crop_frame(source.frame(source_index)?, source_shape, crop, &mut data);
-            let mut frame_metadata = source.frame_metadata[source_index].clone();
+            let mut frame_metadata = source.frame_metadata()[source_index].clone();
             frame_metadata.original_frame_index =
                 Some(frame_metadata.original_frame_index.unwrap_or(source_index));
             frame_metadata.original_illumination_index = frame_metadata
@@ -160,26 +169,49 @@ impl<'a> DatasetSubsetBuilder<'a> {
         }
         let mut measurements =
             MeasurementStack::from_vec(data, (crop.height, crop.width), metadata)?;
-        measurements.dark_frame =
-            crop_optional_shared(source.dark_frame.as_deref(), source_shape, crop);
-        measurements.flat_field =
-            crop_optional_shared(source.flat_field.as_deref(), source_shape, crop);
-        measurements.background = crop_optional_frames(
-            source.background.as_deref(),
+        if let Some(values) = crop_optional_shared(source.dark_frame_slice(), source_shape, crop)? {
+            measurements = measurements
+                .with_dark_frame(Array2::from_shape_vec((crop.height, crop.width), values)?)?;
+        }
+        if let Some(values) = crop_optional_shared(source.flat_field_slice(), source_shape, crop)? {
+            measurements = measurements
+                .with_flat_field(Array2::from_shape_vec((crop.height, crop.width), values)?)?;
+        }
+        if let Some(values) = crop_optional_frames(
+            source.background_slice(),
             source_shape,
             source.frame_count(),
             &indices,
             crop,
-        )?;
-        measurements.masks = crop_optional_masks(
-            source.masks.as_deref(),
+        )? {
+            if values.len() == crop_len {
+                measurements = measurements
+                    .with_background(Array2::from_shape_vec((crop.height, crop.width), values)?)?;
+            } else {
+                measurements = measurements.with_per_frame_background(Array3::from_shape_vec(
+                    (indices.len(), crop.height, crop.width),
+                    values,
+                )?)?;
+            }
+        }
+        if let Some(values) = crop_optional_masks(
+            source.masks_slice(),
             source_shape,
             source.frame_count(),
             &indices,
             crop,
-        )?;
-        measurements.preprocessing = source.preprocessing.clone();
-        measurements.validate()?;
+        )? {
+            if values.len() == crop_len {
+                measurements = measurements
+                    .with_masks(Array2::from_shape_vec((crop.height, crop.width), values)?)?;
+            } else {
+                measurements = measurements.with_per_frame_masks(Array3::from_shape_vec(
+                    (indices.len(), crop.height, crop.width),
+                    values,
+                )?)?;
+            }
+        }
+        measurements = measurements.with_preprocessing(source.preprocessing().clone())?;
 
         let scale_y = model.reconstruction_shape.0 as f64 / model.image_shape.0 as f64;
         let scale_x = model.reconstruction_shape.1 as f64 / model.image_shape.1 as f64;
@@ -351,22 +383,28 @@ fn scaled_object_crop(crop: Rect, scale_y: f64, scale_x: f64) -> Result<Rect> {
 }
 
 fn crop_array<T: Copy>(source: &Array2<T>, crop: Rect) -> Result<Array2<T>> {
-    validate_crop(crop, source.shape())?;
-    let mut output = Vec::with_capacity(crop.height * crop.width);
-    crop_frame(source.as_slice(), source.shape(), crop, &mut output);
-    Array2::from_vec((crop.height, crop.width), output)
+    validate_crop(crop, source.dim())?;
+    let mut output = Vec::with_capacity(checked_len_2d((crop.height, crop.width))?);
+    for row in crop.row..crop.row + crop.height {
+        for column in crop.column..crop.column + crop.width {
+            output.push(source[(row, column)]);
+        }
+    }
+    Ok(Array2::from_shape_vec((crop.height, crop.width), output)?)
 }
 
 fn crop_optional_shared(
     source: Option<&[f64]>,
     shape: (usize, usize),
     crop: Rect,
-) -> Option<Vec<f64>> {
-    source.map(|source| {
-        let mut output = Vec::with_capacity(crop.height * crop.width);
-        crop_frame(source, shape, crop, &mut output);
-        output
-    })
+) -> Result<Option<Vec<f64>>> {
+    source
+        .map(|source| {
+            let mut output = Vec::with_capacity(checked_len_2d((crop.height, crop.width))?);
+            crop_frame(source, shape, crop, &mut output);
+            Ok(output)
+        })
+        .transpose()
 }
 
 fn crop_optional_frames(
@@ -379,19 +417,41 @@ fn crop_optional_frames(
     let Some(source) = source else {
         return Ok(None);
     };
-    let frame_len = shape.0 * shape.1;
+    let frame_len = checked_len_2d(shape)?;
     if source.len() == frame_len {
-        return Ok(crop_optional_shared(Some(source), shape, crop));
+        return crop_optional_shared(Some(source), shape, crop);
     }
-    if source.len() != frame_count * frame_len {
+    let stack_len = frame_len
+        .checked_mul(frame_count)
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![frame_count, shape.0, shape.1],
+        })?;
+    if source.len() != stack_len {
         return Err(Error::InvalidMeasurements(
             "source background length is inconsistent".into(),
         ));
     }
-    let mut output = Vec::with_capacity(indices.len() * crop.height * crop.width);
+    let output_len = checked_len_2d((crop.height, crop.width))?
+        .checked_mul(indices.len())
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![indices.len(), crop.height, crop.width],
+        })?;
+    let mut output = Vec::with_capacity(output_len);
     for &index in indices {
+        let start = index
+            .checked_mul(frame_len)
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![index, shape.0, shape.1],
+            })?;
+        let end = start
+            .checked_add(frame_len)
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![index.saturating_add(1), shape.0, shape.1],
+            })?;
         crop_frame(
-            &source[index * frame_len..(index + 1) * frame_len],
+            source.get(start..end).ok_or_else(|| {
+                Error::InvalidMeasurements("source background frame is out of range".into())
+            })?,
             shape,
             crop,
             &mut output,
@@ -410,21 +470,43 @@ fn crop_optional_masks(
     let Some(source) = source else {
         return Ok(None);
     };
-    let frame_len = shape.0 * shape.1;
+    let frame_len = checked_len_2d(shape)?;
     if source.len() == frame_len {
-        let mut output = Vec::with_capacity(crop.height * crop.width);
+        let mut output = Vec::with_capacity(checked_len_2d((crop.height, crop.width))?);
         crop_frame(source, shape, crop, &mut output);
         return Ok(Some(output));
     }
-    if source.len() != frame_count * frame_len {
+    let stack_len = frame_len
+        .checked_mul(frame_count)
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![frame_count, shape.0, shape.1],
+        })?;
+    if source.len() != stack_len {
         return Err(Error::InvalidMeasurements(
             "source mask length is inconsistent".into(),
         ));
     }
-    let mut output = Vec::with_capacity(indices.len() * crop.height * crop.width);
+    let output_len = checked_len_2d((crop.height, crop.width))?
+        .checked_mul(indices.len())
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![indices.len(), crop.height, crop.width],
+        })?;
+    let mut output = Vec::with_capacity(output_len);
     for &index in indices {
+        let start = index
+            .checked_mul(frame_len)
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![index, shape.0, shape.1],
+            })?;
+        let end = start
+            .checked_add(frame_len)
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![index.saturating_add(1), shape.0, shape.1],
+            })?;
         crop_frame(
-            &source[index * frame_len..(index + 1) * frame_len],
+            source.get(start..end).ok_or_else(|| {
+                Error::InvalidMeasurements("source mask frame is out of range".into())
+            })?,
             shape,
             crop,
             &mut output,

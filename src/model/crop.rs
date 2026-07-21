@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use ndarray::{ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
 
-use crate::{Array2, Result, error::Error};
+use crate::{
+    Result,
+    array_layout::{StandardView2, StandardViewMut2, checked_len_2d},
+    error::Error,
+};
 
 /// Fractional Fourier-grid displacement relative to an integer crop origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -54,20 +59,33 @@ impl FourierCrop {
         Ok(())
     }
 
-    pub fn extract<T: Copy>(&self, source: &Array2<T>, destination: &mut [T]) -> Result<()> {
-        self.validate_inside(source.shape())?;
-        if destination.len() != self.height * self.width {
+    /// Extracts from a C-contiguous standard row-major view without copying the
+    /// input. Nonstandard views are rejected.
+    pub fn extract<T: Copy>(&self, source: ArrayView2<'_, T>, destination: &mut [T]) -> Result<()> {
+        self.extract_standard(StandardView2::try_from(source)?, destination)
+    }
+
+    pub(crate) fn extract_standard<T: Copy>(
+        &self,
+        source: StandardView2<'_, T>,
+        destination: &mut [T],
+    ) -> Result<()> {
+        let source_shape = source.dim();
+        self.validate_inside(source_shape)?;
+        let crop_len = checked_len_2d((self.height, self.width))?;
+        if destination.len() != crop_len {
             return Err(Error::LengthMismatch {
                 actual: destination.len(),
-                expected: self.height * self.width,
+                expected: crop_len,
                 shape: (self.height, self.width),
             });
         }
+        let source_values = source.as_slice();
         for row in 0..self.height {
-            let source_start = (self.start_row + row) * source.width() + self.start_col;
+            let source_start = (self.start_row + row) * source_shape.1 + self.start_col;
             let destination_start = row * self.width;
             destination[destination_start..destination_start + self.width]
-                .copy_from_slice(&source.as_slice()[source_start..source_start + self.width]);
+                .copy_from_slice(&source_values[source_start..source_start + self.width]);
         }
         Ok(())
     }
@@ -89,36 +107,47 @@ impl FourierCrop {
     /// fractional displacement; low-bandwidth objects are the intended regime.
     pub fn extract_subpixel(
         &self,
-        source: &Array2<Complex64>,
+        source: ArrayView2<'_, Complex64>,
         destination: &mut [Complex64],
         offset: FourierOffset,
     ) -> Result<()> {
-        if destination.len() != self.height * self.width {
+        self.extract_subpixel_standard(StandardView2::try_from(source)?, destination, offset)
+    }
+
+    pub(crate) fn extract_subpixel_standard(
+        &self,
+        source: StandardView2<'_, Complex64>,
+        destination: &mut [Complex64],
+        offset: FourierOffset,
+    ) -> Result<()> {
+        let crop_len = checked_len_2d((self.height, self.width))?;
+        if destination.len() != crop_len {
             return Err(Error::LengthMismatch {
                 actual: destination.len(),
-                expected: self.height * self.width,
+                expected: crop_len,
                 shape: (self.height, self.width),
             });
         }
         if offset.is_zero() {
-            return self.extract(source, destination);
+            return self.extract_standard(source, destination);
         }
-        let rows = interpolation_axis(self.start_row, self.height, source.height(), offset.row)?;
-        let columns =
-            interpolation_axis(self.start_col, self.width, source.width(), offset.column)?;
+        let shape = source.dim();
+        let rows = interpolation_axis(self.start_row, self.height, shape.0, offset.row)?;
+        let columns = interpolation_axis(self.start_col, self.width, shape.1, offset.column)?;
+        let source = source.as_slice();
         for row in 0..self.height {
             let lower_row = rows.lower_start + row;
             let upper_row = rows.upper_start + row;
             for column in 0..self.width {
                 let lower_column = columns.lower_start + column;
                 let upper_column = columns.upper_start + column;
-                destination[row * self.width + column] = source[(lower_row, lower_column)]
+                destination[row * self.width + column] = source[lower_row * shape.1 + lower_column]
                     * (rows.lower_weight * columns.lower_weight)
-                    + source[(lower_row, upper_column)]
+                    + source[lower_row * shape.1 + upper_column]
                         * (rows.lower_weight * columns.upper_weight)
-                    + source[(upper_row, lower_column)]
+                    + source[upper_row * shape.1 + lower_column]
                         * (rows.upper_weight * columns.lower_weight)
-                    + source[(upper_row, upper_column)]
+                    + source[upper_row * shape.1 + upper_column]
                         * (rows.upper_weight * columns.upper_weight);
             }
         }
@@ -128,14 +157,15 @@ impl FourierCrop {
     /// Adds the exact adjoint of [`Self::extract_subpixel`] to `destination`.
     pub fn insert_subpixel_adjoint(
         &self,
-        destination: &mut Array2<Complex64>,
+        destination: ArrayViewMut2<'_, Complex64>,
         update: &[Complex64],
         scale: f64,
         offset: FourierOffset,
     ) -> Result<()> {
-        let destination_shape = destination.shape();
+        let mut destination = StandardViewMut2::try_from(destination)?;
+        let destination_shape = destination.dim();
         self.insert_subpixel_adjoint_slice(
-            destination.as_mut_slice(),
+            destination.as_slice_mut(),
             destination_shape,
             update,
             scale,
@@ -151,17 +181,19 @@ impl FourierCrop {
         scale: f64,
         offset: FourierOffset,
     ) -> Result<()> {
-        if destination.len() != destination_shape.0 * destination_shape.1 {
+        let destination_len = checked_len_2d(destination_shape)?;
+        if destination.len() != destination_len {
             return Err(Error::LengthMismatch {
                 actual: destination.len(),
-                expected: destination_shape.0 * destination_shape.1,
+                expected: destination_len,
                 shape: destination_shape,
             });
         }
-        if update.len() != self.height * self.width {
+        let update_len = checked_len_2d((self.height, self.width))?;
+        if update.len() != update_len {
             return Err(Error::LengthMismatch {
                 actual: update.len(),
-                expected: self.height * self.width,
+                expected: update_len,
                 shape: (self.height, self.width),
             });
         }
@@ -270,7 +302,7 @@ fn interpolation_axis(
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CropIndices {
-    pub crops: Vec<FourierCrop>,
+    pub(crate) crops: Vec<FourierCrop>,
 }
 
 impl CropIndices {
@@ -294,5 +326,9 @@ impl CropIndices {
                 index: frame,
                 frames: self.crops.len(),
             })
+    }
+
+    pub fn as_slice(&self) -> &[FourierCrop] {
+        &self.crops
     }
 }

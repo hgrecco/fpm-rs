@@ -1,9 +1,10 @@
 //! Metrics calculated from one complex-valued field.
 
+use ndarray::ArrayView2;
 use num_complex::Complex64;
 
 use crate::{
-    Array2, Result,
+    Result,
     backend::{Backend, CpuBackend, FftDirection},
 };
 
@@ -29,9 +30,9 @@ pub struct RadialFourierSpectrum {
 ///
 /// This applies a forward FFT, treats DC as the centre of the Fourier grid, and
 /// averages normalized power over annular bins with integer Fourier-pixel radius.
-pub fn radial_fourier_spectrum(field: &Array2<Complex64>) -> Result<RadialFourierSpectrum> {
-    let shape = field.shape();
-    let mut spectrum = field.as_slice().to_vec();
+pub fn radial_fourier_spectrum(field: ArrayView2<'_, Complex64>) -> Result<RadialFourierSpectrum> {
+    let shape = field.dim();
+    let mut spectrum: Vec<_> = field.iter().copied().collect();
     let backend = CpuBackend::new(shape, shape)?;
     let mut column_scratch = vec![Complex64::default(); shape.0];
     backend.fft2(
@@ -83,12 +84,13 @@ pub fn radial_fourier_spectrum(field: &Array2<Complex64>) -> Result<RadialFourie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::Array2;
 
     #[test]
     fn constant_field_has_power_only_at_dc() {
-        let field = Array2::from_vec((4, 4), vec![Complex64::new(1.0, 0.0); 16]).unwrap();
+        let field = Array2::from_elem((4, 4), Complex64::new(1.0, 0.0));
 
-        let spectrum = radial_fourier_spectrum(&field).unwrap();
+        let spectrum = radial_fourier_spectrum(field.view()).unwrap();
 
         assert_eq!(spectrum.radius_px, vec![0.0, 1.0, 2.0]);
         assert_eq!(spectrum.sample_count, vec![1, 8, 7]);

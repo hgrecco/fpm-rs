@@ -92,7 +92,7 @@ nav:
       - Reconstruction workflow: guides/reconstruction.md
       - Measurements and acquisitions: guides/measurements.md
       - Simulation: guides/simulation.md
-      - Intensity metrics: metrics.md
+      - Image metrics: metrics.md
       - Diagnostics and callbacks: diagnostics.md
       - Datasets: datasets.md
       - Configuration schema: configuration-schema.md

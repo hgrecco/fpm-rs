@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 
 use fpm_rs::{
-    Array2, Complex64, Result,
+    Complex64, Result,
     backend::{Backend, CpuBackend, FftDirection},
     experiment::KVector,
     model::{CropIndices, FourierCrop, ImagePlaneModel, Pupil, Sampling},
 };
+use ndarray::Array2;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -50,8 +51,8 @@ pub fn direct_model() -> Result<ImagePlaneModel> {
     let reconstruction_shape = (16, 16);
     let sampling = Sampling::new(1.0, 0.5, 1.0, 1.0)?;
     let pupil = Pupil::new(
-        Array2::filled(image_shape, Complex64::new(1.0, 0.0))?,
-        vec![true; image_shape.0 * image_shape.1],
+        Array2::from_elem(image_shape, Complex64::new(1.0, 0.0)),
+        Array2::from_elem(image_shape, 1_u8),
     )?;
     let shifts = [(-3, 0), (0, -3), (0, 0), (0, 3), (3, 0)];
     let k_vectors = shifts

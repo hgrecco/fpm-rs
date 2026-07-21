@@ -3,8 +3,10 @@ use std::{
     time::Instant,
 };
 
+use ndarray::{Array2, ArrayView2};
+
 use crate::{
-    Array2, Result,
+    Result,
     callbacks::{Callback, CallbackAction, StepContext},
     reconstruction::ReconstructionResult,
 };
@@ -178,10 +180,10 @@ impl Callback for DiagnosticRecorder {
                 .map(|started| started.elapsed().as_secs_f64() * 1e3);
             let object_relative_change = relative_change(
                 state.previous_object.as_ref(),
-                &context.state.object_spectrum,
+                context.state.object_spectrum.ndarray_view(),
             );
             let pupil_relative_change =
-                relative_change(state.previous_pupil.as_ref(), &context.state.pupil.values);
+                relative_change(state.previous_pupil.as_ref(), context.state.pupil.values());
             state
                 .diagnostics
                 .iteration_history
@@ -206,8 +208,8 @@ impl Callback for DiagnosticRecorder {
                 });
         }
         if should_record {
-            state.previous_object = Some(context.state.object_spectrum.clone());
-            state.previous_pupil = Some(context.state.pupil.values.clone());
+            state.previous_object = Some(context.state.object_spectrum.clone().into_inner());
+            state.previous_pupil = Some(context.state.pupil.values.clone().into_inner());
         }
 
         if should_record && let Some(frame_diagnostics) = &context.diagnostics.frame_diagnostics {
@@ -252,15 +254,15 @@ fn cadence_matches(iteration: usize, every: usize) -> bool {
 
 fn relative_change(
     previous: Option<&Array2<Complex64Proxy>>,
-    current: &Array2<Complex64Proxy>,
+    current: ArrayView2<'_, Complex64Proxy>,
 ) -> Option<f64> {
     let previous = previous?;
-    if previous.shape() != current.shape() {
+    if previous.dim() != current.dim() {
         return None;
     }
-    let mut difference = 0.0;
-    let mut reference = 0.0;
-    for (&previous, &current) in previous.as_slice().iter().zip(current.as_slice()) {
+    let mut difference: f64 = 0.0;
+    let mut reference: f64 = 0.0;
+    for (&previous, &current) in previous.iter().zip(current.iter()) {
         difference += (current - previous).norm_sqr();
         reference += previous.norm_sqr();
     }

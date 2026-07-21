@@ -5,10 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Array2, Complex64, Result,
+    Complex64, Result,
+    array_serde::Array2Data,
     configuration::SimulationConfiguration,
     error::Error,
     measurements::{ImageSet, MeasurementSpec, MeasurementStack},
@@ -270,12 +272,16 @@ where
             path.display()
         ))
     })?;
-    serde_json::from_reader(BufReader::new(file)).map_err(|error| {
-        Error::Dataset(format!(
-            "failed to parse {label} at {}: {error}",
-            path.display()
-        ))
-    })
+    let representation: Array2Data<T> =
+        serde_json::from_reader(BufReader::new(file)).map_err(|error| {
+            Error::Dataset(format!(
+                "failed to parse {label} at {}: {error}",
+                path.display()
+            ))
+        })?;
+    representation
+        .into_array()
+        .map_err(|error| Error::Dataset(format!("invalid {label} at {}: {error}", path.display())))
 }
 
 fn validate_dataset_metadata(
@@ -286,15 +292,14 @@ fn validate_dataset_metadata(
     measurement_units: Option<&str>,
 ) -> Result<()> {
     if let Some(ground_truth) = ground_truth_object {
-        if ground_truth.shape() != configuration.reconstruction_shape {
+        if ground_truth.dim() != configuration.reconstruction_shape {
             return Err(Error::Dataset(format!(
                 "ground-truth shape {:?} differs from reconstruction shape {:?}",
-                ground_truth.shape(),
+                ground_truth.dim(),
                 configuration.reconstruction_shape
             )));
         }
         if ground_truth
-            .as_slice()
             .iter()
             .any(|value| !value.re.is_finite() || !value.im.is_finite())
         {
@@ -309,14 +314,14 @@ fn validate_dataset_metadata(
                 "a valid-object mask requires a ground-truth object".into(),
             ));
         }
-        if mask.shape() != configuration.reconstruction_shape {
+        if mask.dim() != configuration.reconstruction_shape {
             return Err(Error::Dataset(format!(
                 "valid-object mask shape {:?} differs from reconstruction shape {:?}",
-                mask.shape(),
+                mask.dim(),
                 configuration.reconstruction_shape
             )));
         }
-        if mask.as_slice().iter().any(|&value| value > 1) || !mask.as_slice().contains(&1) {
+        if mask.iter().any(|&value| value > 1) || !mask.iter().any(|&value| value == 1) {
             return Err(Error::Dataset(
                 "valid-object mask must contain only zero and one and select at least one pixel"
                     .into(),

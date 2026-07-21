@@ -1,6 +1,7 @@
+use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 
-use crate::{Array2, Complex64, measurements::MeasurementStack, model::ImagePlaneModel};
+use crate::{Complex64, measurements::MeasurementStack, model::ImagePlaneModel};
 
 use super::{CameraModel, IlluminationAcquisitionErrors};
 

@@ -1,23 +1,43 @@
+use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
-use crate::{Array2, Result, error::Error, experiment::Optics};
+use crate::{
+    Result,
+    array_layout::{StandardArray2, checked_len_2d},
+    array_serde::Array2Data,
+    error::Error,
+    experiment::Optics,
+};
 
 use super::Sampling;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pupil {
-    pub values: Array2<Complex64>,
-    pub support: Vec<bool>,
+    pub(crate) values: StandardArray2<Complex64>,
+    pub(crate) support: StandardArray2<u8>,
 }
 
 impl Pupil {
-    pub fn new(values: Array2<Complex64>, support: Vec<bool>) -> Result<Self> {
-        if support.len() != values.len() {
+    /// Stores owned pupil arrays without copying their elements.
+    ///
+    /// Both inputs must have identical, non-zero shapes and C-contiguous
+    /// standard row-major layout. Nonstandard inputs are rejected rather than
+    /// copied. Support entries must be exactly zero or one.
+    pub fn new(values: Array2<Complex64>, support: Array2<u8>) -> Result<Self> {
+        let values = StandardArray2::try_from(values)?;
+        let support = StandardArray2::try_from(support)?;
+        if support.dim() != values.dim() {
             return Err(Error::InvalidShape(format!(
-                "pupil support length {} does not match pupil length {}",
-                support.len(),
-                values.len()
+                "pupil support shape {:?} does not match value shape {:?}",
+                support.dim(),
+                values.dim()
+            )));
+        }
+        if values.dim().0 == 0 || values.dim().1 == 0 {
+            return Err(Error::InvalidShape(format!(
+                "pupil dimensions must be non-zero, got {:?}",
+                values.dim()
             )));
         }
         if values
@@ -27,6 +47,11 @@ impl Pupil {
         {
             return Err(Error::InvalidModel(
                 "pupil contains non-finite complex values".into(),
+            ));
+        }
+        if support.as_slice().iter().any(|&value| value > 1) {
+            return Err(Error::InvalidModel(
+                "pupil support values must be exactly zero or one".into(),
             ));
         }
         Ok(Self { values, support })
@@ -50,8 +75,14 @@ impl Pupil {
         optics.validate()?;
         let cutoff = std::f64::consts::TAU * optics.objective_na / optics.wavelength;
         let medium_k = optics.medium_wavenumber();
-        let mut values = Vec::with_capacity(shape.0 * shape.1);
-        let mut support = Vec::with_capacity(shape.0 * shape.1);
+        let length = checked_len_2d(shape)?;
+        if length == 0 {
+            return Err(Error::InvalidShape(format!(
+                "pupil dimensions must be non-zero, got {shape:?}"
+            )));
+        }
+        let mut values = Vec::with_capacity(length);
+        let mut support = Vec::with_capacity(length);
         let aberration = optics.pupil_aberration.as_ref();
         for row in 0..shape.0 {
             let ky = (row as f64 - (shape.0 / 2) as f64) * sampling.dky;
@@ -59,7 +90,7 @@ impl Pupil {
                 let kx = (column as f64 - (shape.1 / 2) as f64) * sampling.dkx;
                 let radius = kx.hypot(ky);
                 let inside = radius <= cutoff;
-                support.push(inside);
+                support.push(u8::from(inside));
                 if !inside {
                     values.push(Complex64::new(0.0, 0.0));
                     continue;
@@ -80,18 +111,107 @@ impl Pupil {
                 values.push(Complex64::from_polar(amplitude, phase));
             }
         }
-        Self::new(Array2::from_vec(shape, values)?, support)
+        Ok(Self {
+            values: StandardArray2::from_shape_vec(shape, values)?,
+            support: StandardArray2::from_shape_vec(shape, support)?,
+        })
     }
 
     pub fn shape(&self) -> (usize, usize) {
-        self.values.shape()
+        self.values.dim()
+    }
+
+    /// Borrows the pupil values without allocating or copying.
+    pub fn values(&self) -> ArrayView2<'_, Complex64> {
+        self.values.ndarray_view()
+    }
+
+    /// Mutably borrows pupil elements without permitting structural mutation.
+    pub fn values_mut(&mut self) -> ArrayViewMut2<'_, Complex64> {
+        self.values.ndarray_view_mut()
+    }
+
+    /// Borrows the binary pupil support without allocating or copying.
+    pub fn support(&self) -> ArrayView2<'_, u8> {
+        self.support.ndarray_view()
+    }
+
+    pub fn replace_values(&mut self, values: Array2<Complex64>) -> Result<()> {
+        let values = StandardArray2::try_from(values)?;
+        if values.dim() != self.shape() {
+            return Err(Error::InvalidShape(format!(
+                "replacement pupil shape {:?} does not match {:?}",
+                values.dim(),
+                self.shape()
+            )));
+        }
+        if values
+            .as_slice()
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+        {
+            return Err(Error::InvalidModel(
+                "pupil contains non-finite complex values".into(),
+            ));
+        }
+        self.values = values;
+        Ok(())
     }
 
     pub fn apply_support(&mut self) {
-        for (value, &inside) in self.values.as_mut_slice().iter_mut().zip(&self.support) {
-            if !inside {
+        for (value, &inside) in self
+            .values
+            .as_slice_mut()
+            .iter_mut()
+            .zip(self.support.as_slice())
+        {
+            if inside == 0 {
                 *value = Complex64::new(0.0, 0.0);
             }
         }
+    }
+}
+
+impl Serialize for Pupil {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        struct Representation {
+            values: Array2Data<Complex64>,
+            support: Array2Data<u8>,
+        }
+
+        Representation {
+            values: Array2Data::from_view(self.values()),
+            support: Array2Data::from_view(self.support()),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Pupil {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Representation {
+            values: Array2Data<Complex64>,
+            support: Array2Data<u8>,
+        }
+
+        let representation = Representation::deserialize(deserializer)?;
+        let values = representation
+            .values
+            .into_array()
+            .map_err(D::Error::custom)?;
+        let support = representation
+            .support
+            .into_array()
+            .map_err(D::Error::custom)?;
+        Self::new(values, support).map_err(D::Error::custom)
     }
 }

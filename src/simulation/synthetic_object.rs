@@ -1,30 +1,52 @@
+use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use rand_distr::{Distribution, Normal};
 use std::path::Path;
 
 use crate::{
-    Array2, Result, complex,
+    Result,
+    array_layout::{StandardArray2, checked_len_2d},
+    complex,
     error::Error,
     image_io::{GrayscaleScaling, load_grayscale},
 };
 
 #[derive(Clone, Debug)]
 pub struct SyntheticObject {
-    pub field: Array2<Complex64>,
-    pub label: Option<String>,
+    pub(crate) field: StandardArray2<Complex64>,
+    label: Option<String>,
 }
 
 impl SyntheticObject {
-    pub fn new(field: Array2<Complex64>) -> Self {
-        Self { field, label: None }
+    /// Stores a finite complex field without copying its elements.
+    ///
+    /// The field must be non-empty and C-contiguous standard row-major layout.
+    pub fn new(field: Array2<Complex64>) -> Result<Self> {
+        let field = StandardArray2::try_from(field)?;
+        validate_shape(field.dim())?;
+        if field
+            .as_slice()
+            .iter()
+            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+        {
+            return Err(Error::InvalidParameter {
+                name: "field",
+                reason: "values must have finite real and imaginary components".into(),
+            });
+        }
+        Ok(Self { field, label: None })
     }
 
-    pub fn from_amplitude_phase(amplitude: &Array2<f64>, phase: &Array2<f64>) -> Result<Self> {
-        Ok(Self::new(complex::from_amplitude_phase(amplitude, phase)?))
+    pub fn from_amplitude_phase(
+        amplitude: ArrayView2<'_, f64>,
+        phase: ArrayView2<'_, f64>,
+    ) -> Result<Self> {
+        Self::new(complex::from_amplitude_phase(amplitude, phase)?)
     }
 
     pub fn amplitude_only(amplitude: Array2<f64>) -> Result<Self> {
+        let amplitude = StandardArray2::try_from(amplitude)?;
         if amplitude
             .as_slice()
             .iter()
@@ -35,21 +57,32 @@ impl SyntheticObject {
                 reason: "values must be finite and non-negative".into(),
             });
         }
-        Ok(Self::new(
-            amplitude.map(|&value| Complex64::new(value, 0.0)),
-        ))
+        Self::from_values(
+            amplitude.dim(),
+            amplitude
+                .as_slice()
+                .iter()
+                .map(|&value| Complex64::new(value, 0.0))
+                .collect(),
+        )
     }
 
     pub fn phase_only(phase: Array2<f64>) -> Result<Self> {
+        let phase = StandardArray2::try_from(phase)?;
         if phase.as_slice().iter().any(|value| !value.is_finite()) {
             return Err(Error::InvalidParameter {
                 name: "phase",
                 reason: "values must be finite".into(),
             });
         }
-        Ok(Self::new(
-            phase.map(|&value| Complex64::from_polar(1.0, value)),
-        ))
+        Self::from_values(
+            phase.dim(),
+            phase
+                .as_slice()
+                .iter()
+                .map(|&value| Complex64::from_polar(1.0, value))
+                .collect(),
+        )
     }
 
     pub fn from_amplitude_image(path: impl AsRef<Path>) -> Result<Self> {
@@ -72,24 +105,22 @@ impl SyntheticObject {
         }
         let amplitude = load_grayscale(amplitude_path, GrayscaleScaling::Unit)?;
         let normalized_phase = load_grayscale(phase_path, GrayscaleScaling::Unit)?;
-        if amplitude.shape() != normalized_phase.shape() {
+        if amplitude.dim() != normalized_phase.dim() {
             return Err(Error::InvalidShape(format!(
                 "amplitude image shape {:?} differs from phase image shape {:?}",
-                amplitude.shape(),
-                normalized_phase.shape()
+                amplitude.dim(),
+                normalized_phase.dim()
             )));
         }
-        let phase = normalized_phase.map(|&value| (2.0 * value - 1.0) * phase_extent);
-        Self::from_amplitude_phase(&amplitude, &phase)
+        let phase = normalized_phase.mapv(|value| (2.0 * value - 1.0) * phase_extent);
+        Self::from_amplitude_phase(amplitude.view(), phase.view())
     }
 
     pub fn constant(shape: (usize, usize), amplitude: f64, phase: f64) -> Result<Self> {
         validate_shape(shape)?;
         validate_amplitude(amplitude)?;
-        Ok(Self::new(Array2::filled(
-            shape,
-            Complex64::from_polar(amplitude, phase),
-        )?))
+        let length = checked_len_2d(shape)?;
+        Self::from_values(shape, vec![Complex64::from_polar(amplitude, phase); length])
     }
 
     pub fn phase_disk(shape: (usize, usize), radius_pixels: f64, phase_shift: f64) -> Result<Self> {
@@ -101,7 +132,7 @@ impl SyntheticObject {
             });
         }
         let center = ((shape.0 - 1) as f64 / 2.0, (shape.1 - 1) as f64 / 2.0);
-        let mut values = Vec::with_capacity(shape.0 * shape.1);
+        let mut values = Vec::with_capacity(checked_len_2d(shape)?);
         for row in 0..shape.0 {
             for column in 0..shape.1 {
                 let radius = (row as f64 - center.0).hypot(column as f64 - center.1);
@@ -115,7 +146,7 @@ impl SyntheticObject {
                 ));
             }
         }
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     pub fn siemens_star(shape: (usize, usize), spokes: usize) -> Result<Self> {
@@ -128,7 +159,7 @@ impl SyntheticObject {
         }
         let center = ((shape.0 - 1) as f64 / 2.0, (shape.1 - 1) as f64 / 2.0);
         let maximum_radius = shape.0.min(shape.1) as f64 * 0.46;
-        let mut values = Vec::with_capacity(shape.0 * shape.1);
+        let mut values = Vec::with_capacity(checked_len_2d(shape)?);
         for row in 0..shape.0 {
             for column in 0..shape.1 {
                 let y = row as f64 - center.0;
@@ -143,12 +174,12 @@ impl SyntheticObject {
                 values.push(Complex64::new(amplitude, 0.0));
             }
         }
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     pub fn resolution_target(shape: (usize, usize)) -> Result<Self> {
         validate_shape(shape)?;
-        let mut values = vec![Complex64::new(1.0, 0.0); shape.0 * shape.1];
+        let mut values = vec![Complex64::new(1.0, 0.0); checked_len_2d(shape)?];
         let groups = [2_usize, 3, 4, 6, 8];
         for (group, &period) in groups.iter().enumerate() {
             let top = group * shape.0 / groups.len();
@@ -166,7 +197,7 @@ impl SyntheticObject {
                 }
             }
         }
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     pub fn random_phase(shape: (usize, usize), standard_deviation: f64, seed: u64) -> Result<Self> {
@@ -178,31 +209,32 @@ impl SyntheticObject {
             });
         }
         let mut rng = StdRng::seed_from_u64(seed);
+        let length = checked_len_2d(shape)?;
         let values = if standard_deviation == 0.0 {
-            vec![Complex64::new(1.0, 0.0); shape.0 * shape.1]
+            vec![Complex64::new(1.0, 0.0); length]
         } else {
             let distribution =
                 Normal::new(0.0, standard_deviation).map_err(|error| Error::InvalidParameter {
                     name: "standard_deviation",
                     reason: error.to_string(),
                 })?;
-            (0..shape.0 * shape.1)
+            (0..length)
                 .map(|_| Complex64::from_polar(1.0, distribution.sample(&mut rng)))
                 .collect()
         };
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     pub fn particle_field(shape: (usize, usize), particles: usize, seed: u64) -> Result<Self> {
         validate_shape(shape)?;
-        let mut values = vec![Complex64::new(1.0, 0.0); shape.0 * shape.1];
+        let mut values = vec![Complex64::new(1.0, 0.0); checked_len_2d(shape)?];
         let mut rng = StdRng::seed_from_u64(seed);
         for _ in 0..particles {
             let row = rng.random_range(0..shape.0);
             let column = rng.random_range(0..shape.1);
             values[row * shape.1 + column] = Complex64::new(0.1, 0.0);
         }
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     /// A deterministic mixed amplitude/phase target useful for smoke tests.
@@ -210,7 +242,7 @@ impl SyntheticObject {
         validate_shape(shape)?;
         let center = ((shape.0 - 1) as f64 / 2.0, (shape.1 - 1) as f64 / 2.0);
         let scale = shape.0.min(shape.1) as f64;
-        let mut values = Vec::with_capacity(shape.0 * shape.1);
+        let mut values = Vec::with_capacity(checked_len_2d(shape)?);
         for row in 0..shape.0 {
             for column in 0..shape.1 {
                 let y = row as f64 - center.0;
@@ -228,7 +260,7 @@ impl SyntheticObject {
                 values.push(Complex64::from_polar(amplitude, phase));
             }
         }
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     /// Smooth random phase and absorption blobs approximating a weak biological
@@ -256,7 +288,7 @@ impl SyntheticObject {
                 )
             })
             .collect();
-        let mut values = Vec::with_capacity(shape.0 * shape.1);
+        let mut values = Vec::with_capacity(checked_len_2d(shape)?);
         for row in 0..shape.0 {
             for column in 0..shape.1 {
                 let mut phase = 0.0;
@@ -276,16 +308,42 @@ impl SyntheticObject {
                 ));
             }
         }
-        Ok(Self::new(Array2::from_vec(shape, values)?))
+        Self::from_values(shape, values)
     }
 
     pub fn shape(&self) -> (usize, usize) {
-        self.field.shape()
+        self.field.dim()
+    }
+
+    pub fn field(&self) -> ArrayView2<'_, Complex64> {
+        self.field.ndarray_view()
+    }
+
+    pub fn field_mut(&mut self) -> ArrayViewMut2<'_, Complex64> {
+        self.field.ndarray_view_mut()
+    }
+
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    fn from_values(shape: (usize, usize), values: Vec<Complex64>) -> Result<Self> {
+        Ok(Self {
+            field: StandardArray2::from_shape_vec(shape, values)?,
+            label: None,
+        })
     }
 }
 
-impl From<Array2<Complex64>> for SyntheticObject {
-    fn from(field: Array2<Complex64>) -> Self {
+impl TryFrom<Array2<Complex64>> for SyntheticObject {
+    type Error = Error;
+
+    fn try_from(field: Array2<Complex64>) -> Result<Self> {
         Self::new(field)
     }
 }

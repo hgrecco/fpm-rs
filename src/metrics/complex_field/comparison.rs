@@ -1,10 +1,11 @@
 //! Metrics comparing a reference and candidate complex field.
 
+use ndarray::{Array2, ArrayView2};
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Array2, Result,
+    Result,
     backend::{Backend, CpuBackend, FftDirection},
     error::Error,
 };
@@ -22,31 +23,33 @@ pub struct ComplexFieldComparisonMetrics {
 }
 
 pub fn compare_complex_fields(
-    reference: &Array2<Complex64>,
-    candidate: &Array2<Complex64>,
+    reference: ArrayView2<'_, Complex64>,
+    candidate: ArrayView2<'_, Complex64>,
 ) -> Result<ComplexFieldComparisonMetrics> {
     compare_complex_fields_masked(reference, candidate, None)
 }
 
 pub fn compare_complex_fields_masked(
-    reference: &Array2<Complex64>,
-    candidate: &Array2<Complex64>,
-    valid_mask: Option<&Array2<u8>>,
+    reference: ArrayView2<'_, Complex64>,
+    candidate: ArrayView2<'_, Complex64>,
+    valid_mask: Option<ArrayView2<'_, u8>>,
 ) -> Result<ComplexFieldComparisonMetrics> {
-    if reference.shape() != candidate.shape() || reference.is_empty() {
+    if reference.dim() != candidate.dim() || reference.is_empty() {
         return Err(Error::InvalidShape(format!(
             "reference shape {:?} differs from candidate {:?}",
-            reference.shape(),
-            candidate.shape()
+            reference.dim(),
+            candidate.dim()
         )));
     }
-    if valid_mask.is_some_and(|mask| mask.shape() != reference.shape()) {
+    if valid_mask.is_some_and(|mask| mask.dim() != reference.dim()) {
         return Err(Error::InvalidShape(
             "complex-field mask shape differs from inputs".into(),
         ));
     }
-    let valid = |index: usize| valid_mask.is_none_or(|mask| mask.as_slice()[index] != 0);
-    let count = (0..reference.len()).filter(|&index| valid(index)).count();
+    let mask_values: Vec<u8> = valid_mask
+        .map(|mask| mask.iter().copied().collect())
+        .unwrap_or_else(|| vec![1; reference.len()]);
+    let count = mask_values.iter().filter(|&&value| value != 0).count();
     if count == 0 {
         return Err(Error::InvalidParameter {
             name: "valid_mask",
@@ -54,12 +57,11 @@ pub fn compare_complex_fields_masked(
         });
     }
     let cross: Complex64 = reference
-        .as_slice()
         .iter()
-        .zip(candidate.as_slice())
-        .enumerate()
-        .filter(|(index, _)| valid(*index))
-        .map(|(_, (&reference, &candidate))| candidate * reference.conj())
+        .zip(candidate.iter())
+        .zip(&mask_values)
+        .filter(|&(_, &valid)| valid != 0)
+        .map(|((&reference, &candidate), _)| candidate * reference.conj())
         .sum();
     let global_phase_offset = cross.arg();
     let correction = Complex64::from_polar(1.0, -global_phase_offset);
@@ -69,13 +71,10 @@ pub fn compare_complex_fields_masked(
     let mut phase_absolute = 0.0;
     let mut reference_amplitude_squared = 0.0;
     let mut reference_complex_squared = 0.0;
-    for (index, (&reference, &candidate)) in reference
-        .as_slice()
-        .iter()
-        .zip(candidate.as_slice())
-        .enumerate()
+    for ((&reference, &candidate), &valid) in
+        reference.iter().zip(candidate.iter()).zip(&mask_values)
     {
-        if !valid(index) {
+        if valid == 0 {
             continue;
         }
         let aligned = candidate * correction;
@@ -87,16 +86,14 @@ pub fn compare_complex_fields_masked(
         phase_squared += phase_error * phase_error;
         phase_absolute += phase_error.abs();
     }
-    let reference_spectrum = spectrum(&masked(reference, valid_mask)?)?;
-    let candidate_spectrum = spectrum(&masked(candidate, valid_mask)?)?;
+    let reference_spectrum = spectrum(masked(reference, valid_mask)?.view())?;
+    let candidate_spectrum = spectrum(masked(candidate, valid_mask)?.view())?;
     let fourier_squared: f64 = reference_spectrum
-        .as_slice()
         .iter()
-        .zip(candidate_spectrum.as_slice())
+        .zip(candidate_spectrum.iter())
         .map(|(&reference, &candidate)| (candidate * correction - reference).norm_sqr())
         .sum();
     let fourier_reference_squared: f64 = reference_spectrum
-        .as_slice()
         .iter()
         .map(|value| value.norm_sqr())
         .sum();
@@ -118,31 +115,34 @@ pub fn compare_complex_fields_masked(
     })
 }
 
-fn masked(values: &Array2<Complex64>, mask: Option<&Array2<u8>>) -> Result<Array2<Complex64>> {
-    Array2::from_vec(
-        values.shape(),
-        values
-            .as_slice()
+fn masked(
+    values: ArrayView2<'_, Complex64>,
+    mask: Option<ArrayView2<'_, u8>>,
+) -> Result<Array2<Complex64>> {
+    let data = match mask {
+        Some(mask) => values
             .iter()
-            .enumerate()
-            .map(|(index, &value)| {
-                if mask.is_none_or(|mask| mask.as_slice()[index] != 0) {
+            .zip(mask.iter())
+            .map(|(&value, &valid)| {
+                if valid != 0 {
                     value
                 } else {
                     Complex64::default()
                 }
             })
             .collect(),
-    )
+        None => values.iter().copied().collect(),
+    };
+    Ok(Array2::from_shape_vec(values.dim(), data)?)
 }
 
-fn spectrum(values: &Array2<Complex64>) -> Result<Array2<Complex64>> {
-    let shape = values.shape();
+fn spectrum(values: ArrayView2<'_, Complex64>) -> Result<Array2<Complex64>> {
+    let shape = values.dim();
     let backend = CpuBackend::new(shape, shape)?;
-    let mut spectrum = values.as_slice().to_vec();
+    let mut spectrum: Vec<_> = values.iter().copied().collect();
     let mut column = vec![Complex64::default(); shape.0];
     backend.fft2(&mut spectrum, shape, FftDirection::Forward, &mut column)?;
-    Array2::from_vec(shape, spectrum)
+    Ok(Array2::from_shape_vec(shape, spectrum)?)
 }
 
 fn wrap_phase(value: f64) -> f64 {

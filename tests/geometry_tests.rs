@@ -1,6 +1,6 @@
 use approx::assert_abs_diff_eq;
 use fpm_rs::{
-    Array2, Complex64,
+    Complex64,
     experiment::{
         AngleList, CodedIllumination, IlluminationSource, KVector, LEDArray, LEDSphere, Optics,
         PupilAberration, RotatingLEDArc, SphericalLEDArm,
@@ -10,6 +10,7 @@ use fpm_rs::{
         Sampling,
     },
 };
+use ndarray::{Array2, ShapeBuilder};
 
 fn optics() -> Optics {
     Optics {
@@ -257,12 +258,12 @@ fn experiment_compiles_to_valid_model() {
     )
     .unwrap();
     assert_eq!(model.frame_count(), 9);
-    assert_eq!(model.pupil.shape(), (16, 16));
-    assert!(model.pupil.support.iter().any(|inside| *inside));
+    assert_eq!(model.pupil().shape(), (16, 16));
+    assert!(model.pupil().support().iter().any(|&inside| inside != 0));
     assert!(
         model
-            .crop_indices
-            .crops
+            .crop_indices()
+            .as_slice()
             .iter()
             .all(|crop| crop.validate_inside((32, 32)).is_ok())
     );
@@ -319,7 +320,7 @@ fn reconstruction_shape_suggestion_resolves_all_policies() {
                 ReconstructionShape::Exact(shape),
             )
             .unwrap()
-            .reconstruction_shape,
+            .reconstruction_shape(),
             shape
         );
     }
@@ -497,26 +498,24 @@ fn pupil_aberration_and_apodization_compile_into_the_pupil() {
     )
     .unwrap();
 
-    assert_eq!(ideal.pupil.support, aberrated.pupil.support);
-    assert_ne!(ideal.pupil.values, aberrated.pupil.values);
+    assert_eq!(ideal.pupil().support(), aberrated.pupil().support());
+    assert_ne!(ideal.pupil().values(), aberrated.pupil().values());
     assert!(
         ideal
-            .pupil
-            .values
-            .as_slice()
+            .pupil()
+            .values()
             .iter()
-            .zip(aberrated.pupil.values.as_slice())
-            .zip(&ideal.pupil.support)
-            .all(|((&ideal, &aberrated), &inside)| !inside || aberrated.norm() <= ideal.norm())
+            .zip(aberrated.pupil().values().iter())
+            .zip(ideal.pupil().support().iter())
+            .all(|((&ideal, &aberrated), &inside)| inside == 0 || aberrated.norm() <= ideal.norm())
     );
     assert!(
         aberrated
-            .pupil
-            .values
-            .as_slice()
+            .pupil()
+            .values()
             .iter()
-            .zip(&aberrated.pupil.support)
-            .any(|(&value, &inside)| inside && value.norm() < 0.99)
+            .zip(aberrated.pupil().support().iter())
+            .any(|(&value, &inside)| inside != 0 && value.norm() < 0.99)
     );
 }
 
@@ -541,8 +540,8 @@ fn experiment_compilation_preserves_fractional_fourier_shifts() {
 fn invalid_crop_is_rejected() {
     let sampling = Sampling::new(1.0, 0.5, 1.0, 1.0).unwrap();
     let pupil = Pupil::new(
-        Array2::filled((4, 4), Complex64::new(1.0, 0.0)).unwrap(),
-        vec![true; 16],
+        Array2::from_elem((4, 4), Complex64::new(1.0, 0.0)),
+        Array2::from_elem((4, 4), 1_u8),
     )
     .unwrap();
     let result = ImagePlaneModel::new(
@@ -557,6 +556,39 @@ fn invalid_crop_is_rejected() {
 }
 
 #[test]
+fn pupil_construction_is_zero_copy_and_validates_layout_shape_and_values() {
+    let values = Array2::from_elem((2, 3), Complex64::new(1.0, 0.0));
+    let values_pointer = values.as_ptr();
+    let pupil = Pupil::new(values, Array2::from_elem((2, 3), 1_u8)).unwrap();
+    assert_eq!(pupil.values().as_ptr(), values_pointer);
+
+    let fortran_values =
+        Array2::from_shape_vec((2, 3).f(), vec![Complex64::new(1.0, 0.0); 6]).unwrap();
+    assert!(Pupil::new(fortran_values, Array2::from_elem((2, 3), 1_u8)).is_err());
+    assert!(
+        Pupil::new(
+            Array2::from_elem((2, 3), Complex64::new(1.0, 0.0)),
+            Array2::from_elem((3, 2), 1_u8),
+        )
+        .is_err()
+    );
+    assert!(
+        Pupil::new(
+            Array2::from_elem((2, 3), Complex64::new(f64::NAN, 0.0)),
+            Array2::from_elem((2, 3), 1_u8),
+        )
+        .is_err()
+    );
+    assert!(
+        Pupil::new(
+            Array2::from_elem((2, 3), Complex64::new(1.0, 0.0)),
+            Array2::from_elem((2, 3), 2_u8),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn non_finite_model_parameters_are_rejected() {
     let mut model = ImagePlaneModel::from_experiment(
         &optics(),
@@ -565,25 +597,30 @@ fn non_finite_model_parameters_are_rejected() {
         ReconstructionShape::Exact((16, 16)),
     )
     .unwrap();
-    model.frame_gains = Some(vec![f64::NAN]);
+    assert!(
+        model
+            .clone()
+            .with_frame_gains(Some(vec![f64::NAN]))
+            .is_err()
+    );
+
+    model.pupil_mut().values_mut()[(0, 0)] = Complex64::new(f64::INFINITY, 0.0);
     assert!(model.validate().is_err());
 
-    model.frame_gains = None;
-    model.pupil.values.as_mut_slice()[0] = Complex64::new(f64::INFINITY, 0.0);
-    assert!(model.validate().is_err());
-
-    let mut model = ImagePlaneModel::from_experiment(
+    let model = ImagePlaneModel::from_experiment(
         &optics(),
         &vec![KVector::default()],
         (8, 8),
         ReconstructionShape::Exact((16, 16)),
     )
     .unwrap();
-    model.subpixel_offsets = Some(vec![FourierOffset::new(f64::NAN, 0.0)]);
-    assert!(model.validate().is_err());
-
-    model.subpixel_offsets = Some(Vec::new());
-    assert!(model.source_offset(0).is_err());
+    assert!(
+        model
+            .clone()
+            .with_subpixel_offsets(vec![FourierOffset::new(f64::NAN, 0.0)])
+            .is_err()
+    );
+    assert!(model.with_subpixel_offsets(Vec::new()).is_err());
 
     assert!(
         ImagePlaneModel::from_experiment(
@@ -610,7 +647,7 @@ fn led_intensity_weights_compile_in_acquisition_order() {
         ReconstructionShape::Exact((32, 32)),
     )
     .unwrap();
-    assert_eq!(model.frame_gains, Some(vec![2.0, 0.5, 1.0]));
+    assert_eq!(model.frame_gains(), Some(&[2.0, 0.5, 1.0][..]));
 }
 
 #[test]
@@ -632,7 +669,7 @@ fn coded_illumination_compiles_sources_and_measured_frames_separately() {
     .unwrap();
     assert_eq!(model.source_count(), 3);
     assert_eq!(model.frame_count(), 2);
-    assert_eq!(model.crop_indices.len(), 3);
+    assert_eq!(model.crop_indices().len(), 3);
     assert!(model.is_multiplexed());
 }
 

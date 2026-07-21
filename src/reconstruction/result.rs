@@ -6,11 +6,14 @@ use std::{
 };
 
 use image::{GrayImage, Luma};
+use ndarray::{Array2, ArrayView2};
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Array2, Result,
+    Result,
+    array_layout::StandardArray2,
+    array_serde::Array2Data,
     backend::FftDirection,
     complex,
     diagnostics::ReconstructionHistory,
@@ -30,7 +33,7 @@ pub struct RuntimeInfo {
     pub algorithm: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ReconstructionResult {
     pub object: Array2<Complex64>,
     pub amplitude: Array2<f64>,
@@ -60,8 +63,8 @@ impl ReconstructionResult {
         runtime: RuntimeInfo,
     ) -> Result<Self> {
         let object = state_object(state)?;
-        let amplitude = complex::amplitude(&object);
-        let phase = complex::phase(&object);
+        let amplitude = complex::amplitude(object.view());
+        let phase = complex::phase(object.view());
         let mut diagnostics = BTreeMap::new();
         if let Some(loss) = history.final_loss() {
             diagnostics.insert("final_loss".into(), loss);
@@ -78,7 +81,7 @@ impl ReconstructionResult {
             object,
             amplitude,
             phase,
-            object_spectrum: state.object_spectrum.clone(),
+            object_spectrum: state.object_spectrum.clone().into_inner(),
             recovered_pupil: state.pupil.clone(),
             calibrated_illumination: state.illumination_corrections.clone(),
             recovered_frame_gains: state.frame_gains.clone(),
@@ -91,16 +94,16 @@ impl ReconstructionResult {
     }
 
     pub fn save_amplitude(&self, path: impl AsRef<Path>) -> Result<()> {
-        save_grayscale(&self.amplitude, path, false)
+        save_grayscale(self.amplitude.view(), path, false)
     }
 
     pub fn save_phase(&self, path: impl AsRef<Path>) -> Result<()> {
-        save_grayscale(&self.phase, path, true)
+        save_grayscale(self.phase.view(), path, true)
     }
 
     pub fn save_complex_object(&self, path: impl AsRef<Path>) -> Result<()> {
         let writer = BufWriter::new(File::create(path)?);
-        serde_json::to_writer(writer, &self.object)?;
+        serde_json::to_writer(writer, &Array2Data::from_view(self.object.view()))?;
         Ok(())
     }
 
@@ -164,10 +167,10 @@ impl ReconstructionResult {
     }
 
     pub fn validate(&self) -> Result<()> {
-        let shape = self.object.shape();
-        if self.amplitude.shape() != shape
-            || self.phase.shape() != shape
-            || self.object_spectrum.shape() != shape
+        let shape = self.object.dim();
+        if self.amplitude.dim() != shape
+            || self.phase.dim() != shape
+            || self.object_spectrum.dim() != shape
         {
             return Err(Error::InvalidShape(
                 "result object, amplitude, phase, and spectrum shapes must match".into(),
@@ -180,16 +183,14 @@ impl ReconstructionResult {
         }
         if self
             .object
-            .as_slice()
             .iter()
-            .chain(self.object_spectrum.as_slice())
+            .chain(self.object_spectrum.iter())
             .chain(self.recovered_pupil.values.as_slice())
             .any(|value| !value.re.is_finite() || !value.im.is_finite())
             || self
                 .amplitude
-                .as_slice()
                 .iter()
-                .chain(self.phase.as_slice())
+                .chain(self.phase.iter())
                 .any(|value| !value.is_finite())
         {
             return Err(Error::InvalidModel(
@@ -260,9 +261,9 @@ impl ReconstructionResult {
 
 pub(crate) fn state_object(state: &mut ReconstructionState) -> Result<Array2<Complex64>> {
     if let Some(cached) = &state.object_real_space_cache {
-        return Ok(cached.clone());
+        return Ok(cached.clone().into_inner());
     }
-    let shape = state.object_spectrum.shape();
+    let shape = state.object_spectrum.dim();
     let mut unshifted = vec![Complex64::default(); state.object_spectrum.len()];
     ifftshift_copy(state.object_spectrum.as_slice(), &mut unshifted, shape);
     state.backend.fft2(
@@ -271,37 +272,31 @@ pub(crate) fn state_object(state: &mut ReconstructionState) -> Result<Array2<Com
         FftDirection::Inverse,
         &mut state.scratch.column,
     )?;
-    let object = Array2::from_vec(shape, unshifted)?;
+    let object = StandardArray2::from_shape_vec(shape, unshifted)?;
     state.object_real_space_cache = Some(object.clone());
-    Ok(object)
+    Ok(object.into_inner())
 }
 
 pub(crate) fn save_grayscale(
-    values: &Array2<f64>,
+    values: ArrayView2<'_, f64>,
     path: impl AsRef<Path>,
     phase: bool,
 ) -> Result<()> {
     let range = if phase {
         (-std::f64::consts::PI, std::f64::consts::PI)
     } else {
-        let minimum = values
-            .as_slice()
-            .iter()
-            .copied()
-            .fold(f64::INFINITY, f64::min);
-        let maximum = values
-            .as_slice()
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, f64::max);
+        let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         (minimum, maximum)
     };
     save_grayscale_with_range(values, path, range)
 }
 
-pub(crate) fn save_signed_grayscale(values: &Array2<f64>, path: impl AsRef<Path>) -> Result<()> {
+pub(crate) fn save_signed_grayscale(
+    values: ArrayView2<'_, f64>,
+    path: impl AsRef<Path>,
+) -> Result<()> {
     let maximum_absolute = values
-        .as_slice()
         .iter()
         .map(|value| value.abs())
         .fold(0.0, f64::max)
@@ -310,20 +305,20 @@ pub(crate) fn save_signed_grayscale(values: &Array2<f64>, path: impl AsRef<Path>
 }
 
 fn save_grayscale_with_range(
-    values: &Array2<f64>,
+    values: ArrayView2<'_, f64>,
     path: impl AsRef<Path>,
     (minimum, maximum): (f64, f64),
 ) -> Result<()> {
-    let width = u32::try_from(values.width()).map_err(|_| {
+    let width = u32::try_from(values.ncols()).map_err(|_| {
         Error::InvalidShape("image width does not fit the PNG dimension type".into())
     })?;
-    let height = u32::try_from(values.height()).map_err(|_| {
+    let height = u32::try_from(values.nrows()).map_err(|_| {
         Error::InvalidShape("image height does not fit the PNG dimension type".into())
     })?;
     let range = (maximum - minimum).max(f64::EPSILON);
     let mut image = GrayImage::new(width, height);
-    for row in 0..values.height() {
-        for column in 0..values.width() {
+    for row in 0..values.nrows() {
+        for column in 0..values.ncols() {
             let normalized = ((values[(row, column)] - minimum) / range).clamp(0.0, 1.0);
             image.put_pixel(
                 column as u32,
@@ -334,4 +329,99 @@ fn save_grayscale_with_range(
     }
     image.save(path)?;
     Ok(())
+}
+
+impl Serialize for ReconstructionResult {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Representation<'a> {
+            object: Array2Data<Complex64>,
+            amplitude: Array2Data<f64>,
+            phase: Array2Data<f64>,
+            object_spectrum: Array2Data<Complex64>,
+            recovered_pupil: &'a Pupil,
+            calibrated_illumination: &'a Option<Vec<(f64, f64)>>,
+            recovered_frame_gains: &'a Option<Vec<f64>>,
+            recovered_background: &'a Option<Vec<f64>>,
+            history: &'a ReconstructionHistory,
+            diagnostics: &'a BTreeMap<String, f64>,
+            runtime: &'a RuntimeInfo,
+            metadata: &'a BTreeMap<String, String>,
+        }
+
+        Representation {
+            object: Array2Data::from_view(self.object.view()),
+            amplitude: Array2Data::from_view(self.amplitude.view()),
+            phase: Array2Data::from_view(self.phase.view()),
+            object_spectrum: Array2Data::from_view(self.object_spectrum.view()),
+            recovered_pupil: &self.recovered_pupil,
+            calibrated_illumination: &self.calibrated_illumination,
+            recovered_frame_gains: &self.recovered_frame_gains,
+            recovered_background: &self.recovered_background,
+            history: &self.history,
+            diagnostics: &self.diagnostics,
+            runtime: &self.runtime,
+            metadata: &self.metadata,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReconstructionResult {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Representation {
+            object: Array2Data<Complex64>,
+            amplitude: Array2Data<f64>,
+            phase: Array2Data<f64>,
+            object_spectrum: Array2Data<Complex64>,
+            recovered_pupil: Pupil,
+            calibrated_illumination: Option<Vec<(f64, f64)>>,
+            recovered_frame_gains: Option<Vec<f64>>,
+            recovered_background: Option<Vec<f64>>,
+            history: ReconstructionHistory,
+            diagnostics: BTreeMap<String, f64>,
+            runtime: RuntimeInfo,
+            metadata: BTreeMap<String, String>,
+        }
+
+        let representation = Representation::deserialize(deserializer)?;
+        let result = Self {
+            object: representation
+                .object
+                .into_array()
+                .map_err(D::Error::custom)?,
+            amplitude: representation
+                .amplitude
+                .into_array()
+                .map_err(D::Error::custom)?,
+            phase: representation
+                .phase
+                .into_array()
+                .map_err(D::Error::custom)?,
+            object_spectrum: representation
+                .object_spectrum
+                .into_array()
+                .map_err(D::Error::custom)?,
+            recovered_pupil: representation.recovered_pupil,
+            calibrated_illumination: representation.calibrated_illumination,
+            recovered_frame_gains: representation.recovered_frame_gains,
+            recovered_background: representation.recovered_background,
+            history: representation.history,
+            diagnostics: representation.diagnostics,
+            runtime: representation.runtime,
+            metadata: representation.metadata,
+        };
+        result.validate().map_err(D::Error::custom)?;
+        Ok(result)
+    }
 }

@@ -50,12 +50,12 @@ pub(crate) struct PyImagePlaneModel {
 impl PyImagePlaneModel {
     #[getter]
     fn image_shape(&self) -> (usize, usize) {
-        self.inner.image_shape
+        self.inner.image_shape()
     }
 
     #[getter]
     fn reconstruction_shape(&self) -> (usize, usize) {
-        self.inner.reconstruction_shape
+        self.inner.reconstruction_shape()
     }
 
     #[getter]
@@ -77,7 +77,7 @@ impl PyImagePlaneModel {
     fn k_vectors(&self, py: Python<'_>) -> PyResult<Py<PyArray2<f64>>> {
         let values = self
             .inner
-            .k_vectors
+            .k_vectors()
             .iter()
             .flat_map(|vector| [vector.kx, vector.ky])
             .collect();
@@ -86,33 +86,27 @@ impl PyImagePlaneModel {
 
     #[getter]
     fn pupil(&self, py: Python<'_>) -> PyResult<Py<PyArray2<fpm_rs::Complex64>>> {
-        complex_array2_to_py(py, self.inner.pupil.values.clone())
+        complex_array2_to_py(py, self.inner.pupil().values().to_owned())
     }
 
     #[getter]
     fn pupil_support(&self, py: Python<'_>) -> PyResult<Py<PyArray2<u8>>> {
-        let values = self
-            .inner
-            .pupil
-            .support
-            .iter()
-            .map(|&value| u8::from(value))
-            .collect();
-        vec2_to_py(py, self.inner.image_shape, values)
+        let values = self.inner.pupil().support().iter().copied().collect();
+        vec2_to_py(py, self.inner.image_shape(), values)
     }
 
     #[getter]
     fn frame_gains(&self, py: Python<'_>) -> Option<Py<PyArray1<f64>>> {
-        self.inner.frame_gains.as_ref().map(|values| {
-            PyArray1::from_owned_array(py, ndarray::Array1::from_vec(values.clone())).unbind()
+        self.inner.frame_gains().map(|values| {
+            PyArray1::from_owned_array(py, ndarray::Array1::from_vec(values.to_vec())).unbind()
         })
     }
 
     fn __repr__(&self) -> String {
         format!(
             "ImagePlaneModel(image_shape={:?}, reconstruction_shape={:?}, sources={}, frames={})",
-            self.inner.image_shape,
-            self.inner.reconstruction_shape,
+            self.inner.image_shape(),
+            self.inner.reconstruction_shape(),
             self.inner.source_count(),
             self.inner.frame_count()
         )

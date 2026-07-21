@@ -31,7 +31,8 @@ impl PySyntheticObject {
     #[pyo3(signature = (field))]
     fn new(field: PyReadonlyArray2<'_, Complex64>) -> PyResult<Self> {
         Ok(Self {
-            inner: SyntheticObject::new(core_array2(&field).map_err(to_py_err)?),
+            inner: SyntheticObject::new(core_array2(&field).map_err(to_py_err)?)
+                .map_err(to_py_err)?,
         })
     }
 
@@ -67,7 +68,8 @@ impl PySyntheticObject {
         let amplitude = core_array2(&amplitude).map_err(to_py_err)?;
         let phase = core_array2(&phase).map_err(to_py_err)?;
         Ok(Self {
-            inner: SyntheticObject::from_amplitude_phase(&amplitude, &phase).map_err(to_py_err)?,
+            inner: SyntheticObject::from_amplitude_phase(amplitude.view(), phase.view())
+                .map_err(to_py_err)?,
         })
     }
 
@@ -157,7 +159,7 @@ impl PySyntheticObject {
 
     #[getter]
     fn field(&self, py: Python<'_>) -> PyResult<Py<PyArray2<Complex64>>> {
-        complex_array2_to_py(py, self.inner.field.clone())
+        complex_array2_to_py(py, self.inner.field().to_owned())
     }
 
     #[getter]
@@ -167,7 +169,7 @@ impl PySyntheticObject {
 
     #[getter]
     fn label(&self) -> Option<String> {
-        self.inner.label.clone()
+        self.inner.label().map(str::to_owned)
     }
 
     fn __repr__(&self) -> String {
@@ -256,9 +258,7 @@ fn extract_synthetic_object(value: &Bound<'_, PyAny>) -> PyResult<SyntheticObjec
             )
         })?
         .readonly();
-    Ok(SyntheticObject::new(
-        core_array2(&array).map_err(to_py_err)?,
-    ))
+    SyntheticObject::new(core_array2(&array).map_err(to_py_err)?).map_err(to_py_err)
 }
 
 #[pyfunction]

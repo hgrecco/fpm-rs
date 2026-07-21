@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use std::sync::Arc;
 
 use crate::{
-    arrays::{copy_array3, vec3_to_py},
+    arrays::{core_array3, vec3_to_py},
     errors::to_py_err,
 };
 
@@ -48,7 +48,7 @@ impl PyMeasurementStack {
             })
             .collect();
         let mut inner =
-            MeasurementStack::from_vec(copy_array3(measurements), (shape[1], shape[2]), metadata)
+            MeasurementStack::new(core_array3(measurements).map_err(to_py_err)?, metadata)
                 .map_err(to_py_err)?;
         if let Some(masks) = masks {
             if masks.shape() != shape {
@@ -56,7 +56,9 @@ impl PyMeasurementStack {
                     "masks must have the same shape as measurements",
                 ));
             }
-            inner = inner.with_masks(copy_array3(masks)).map_err(to_py_err)?;
+            inner = inner
+                .with_per_frame_masks(core_array3(masks).map_err(to_py_err)?)
+                .map_err(to_py_err)?;
         }
         Ok(Self {
             inner: Arc::new(inner),
@@ -106,7 +108,7 @@ impl PyMeasurementStack {
     fn frame_weights(&self, py: Python<'_>) -> Py<PyArray1<f64>> {
         let values = self
             .inner
-            .frame_metadata
+            .frame_metadata()
             .iter()
             .map(|metadata| metadata.weight)
             .collect();

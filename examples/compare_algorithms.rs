@@ -21,9 +21,9 @@ fn main() -> Result<()> {
         .run(&problem)?;
     let epry = Epry::default().iterations(20).run(&problem)?;
     let admm = Admm::default().iterations(20).run(&problem)?;
-    let ap_metrics = evaluate_reconstruction(&ap, &truth, None, None)?;
-    let epry_metrics = evaluate_reconstruction(&epry, &truth, None, None)?;
-    let admm_metrics = evaluate_reconstruction(&admm, &truth, None, None)?;
+    let ap_metrics = evaluate_reconstruction(&ap, truth.view(), None, None)?;
+    let epry_metrics = evaluate_reconstruction(&epry, truth.view(), None, None)?;
+    let admm_metrics = evaluate_reconstruction(&admm, truth.view(), None, None)?;
     println!(
         "AP complex error:   {:.4e}",
         ap_metrics.object.complex_nrmse

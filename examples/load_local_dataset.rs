@@ -34,9 +34,9 @@ fn main() -> Result<()> {
         "iterations=10,object_step=1.0",
         AlternatingProjection::default().iterations(10),
         &problem,
-        dataset.ground_truth_object(),
+        dataset.ground_truth_object().map(|values| values.view()),
         Some(true_model),
-        dataset.valid_object_mask(),
+        dataset.valid_object_mask().map(|values| values.view()),
     );
     record.metadata.extend(dataset.provenance().clone());
     if let Some(units) = dataset.measurement_units() {

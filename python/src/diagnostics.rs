@@ -7,7 +7,7 @@ use pyo3::{
     types::{PyDict, PyList},
 };
 
-use crate::{arrays::core_array2, errors::to_py_err};
+use crate::errors::to_py_err;
 
 /// Calculate azimuthally averaged, normalized Fourier power in integer-radius bins.
 ///
@@ -20,9 +20,9 @@ fn radial_fourier_spectrum(
     py: Python<'_>,
     field: PyReadonlyArray2<'_, Complex64>,
 ) -> PyResult<Py<PyDict>> {
-    let field = core_array2(&field).map_err(to_py_err)?;
+    let field = field.as_array().to_owned();
     let spectrum = py
-        .detach(move || core_radial_fourier_spectrum(&field))
+        .detach(move || core_radial_fourier_spectrum(field.view()))
         .map_err(to_py_err)?;
     let output = PyDict::new(py);
     output.set_item("radius_px", PyList::new(py, spectrum.radius_px)?)?;

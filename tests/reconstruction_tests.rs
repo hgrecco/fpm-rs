@@ -2,7 +2,7 @@ mod common;
 
 use approx::assert_abs_diff_eq;
 use fpm_rs::{
-    Array2, Complex64,
+    Complex64,
     algorithms::{
         Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
         objective::{LossType, loss},
@@ -20,6 +20,7 @@ use fpm_rs::{
     simulation::{CameraModel, Simulator, SyntheticObject},
 };
 use image::{ImageBuffer, Luma};
+use ndarray::{Array2, ShapeBuilder};
 use std::sync::atomic::Ordering;
 
 #[test]
@@ -35,9 +36,9 @@ fn ap_reconstructs_and_reports_history() {
         .iterations(8)
         .run(&problem)
         .unwrap();
-    assert_eq!(result.object.shape(), (16, 16));
-    assert_eq!(result.amplitude.shape(), (16, 16));
-    assert_eq!(result.phase.shape(), (16, 16));
+    assert_eq!(result.object.dim(), (16, 16));
+    assert_eq!(result.amplitude.dim(), (16, 16));
+    assert_eq!(result.phase.dim(), (16, 16));
     assert_eq!(result.recovered_pupil.shape(), (8, 8));
     assert_eq!(result.history.iterations.len(), 8);
     let first = result.history.iterations.first().unwrap().loss;
@@ -47,7 +48,7 @@ fn ap_reconstructs_and_reports_history() {
         "expected loss decrease, got {first} -> {last}"
     );
     let metrics =
-        evaluate_reconstruction_with_problem(&result, &problem, &truth, None, None).unwrap();
+        evaluate_reconstruction_with_problem(&result, &problem, truth.view(), None, None).unwrap();
     let residuals: Vec<_> = metrics
         .intensity
         .unwrap()
@@ -57,6 +58,24 @@ fn ap_reconstructs_and_reports_history() {
         .collect();
     assert_eq!(residuals.len(), problem.model.frame_count());
     assert!(residuals.iter().all(|value| value.is_finite()));
+}
+
+#[test]
+fn reconstruction_initialization_rejects_nonstandard_owned_objects() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::resolution_target((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let shape = problem.model.reconstruction_shape();
+    let object = Array2::from_elem(shape.f(), Complex64::new(1.0, 0.0));
+    assert!(matches!(
+        ReconstructionState::from_object(&problem, object),
+        Err(fpm_rs::Error::NonStandardLayout { .. })
+    ));
 }
 
 #[test]
@@ -115,41 +134,29 @@ fn reconstruction_result_bundle_round_trips_and_validates() {
     let path = directory.path().join("result.json");
     result.save_bundle(&path).unwrap();
     let loaded = fpm_rs::reconstruction::ReconstructionResult::load_bundle(&path).unwrap();
-    for (&loaded, &original) in loaded
-        .object
-        .as_slice()
-        .iter()
-        .zip(result.object.as_slice())
-    {
+    for (&loaded, &original) in loaded.object.iter().zip(result.object.iter()) {
         assert_abs_diff_eq!(loaded.re, original.re, epsilon = 1e-14);
         assert_abs_diff_eq!(loaded.im, original.im, epsilon = 1e-14);
     }
     for (&loaded, &original) in loaded
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(result.object_spectrum.as_slice())
+        .zip(result.object_spectrum.iter())
     {
         assert_abs_diff_eq!(loaded.re, original.re, epsilon = 1e-14);
         assert_abs_diff_eq!(loaded.im, original.im, epsilon = 1e-14);
     }
-    for (&loaded, &original) in loaded
-        .amplitude
-        .as_slice()
-        .iter()
-        .zip(result.amplitude.as_slice())
-    {
+    for (&loaded, &original) in loaded.amplitude.iter().zip(result.amplitude.iter()) {
         assert_abs_diff_eq!(loaded, original, epsilon = 1e-14);
     }
-    for (&loaded, &original) in loaded.phase.as_slice().iter().zip(result.phase.as_slice()) {
+    for (&loaded, &original) in loaded.phase.iter().zip(result.phase.iter()) {
         assert_abs_diff_eq!(loaded, original, epsilon = 1e-14);
     }
     for (&loaded, &original) in loaded
         .recovered_pupil
-        .values
-        .as_slice()
+        .values()
         .iter()
-        .zip(result.recovered_pupil.values.as_slice())
+        .zip(result.recovered_pupil.values().iter())
     {
         assert_abs_diff_eq!(loaded.re, original.re, epsilon = 1e-14);
         assert_abs_diff_eq!(loaded.im, original.im, epsilon = 1e-14);
@@ -159,7 +166,7 @@ fn reconstruction_result_bundle_round_trips_and_validates() {
 
     let invalid_path = directory.path().join("invalid_result.json");
     let mut invalid = result.clone();
-    invalid.amplitude = Array2::zeros((1, 1)).unwrap();
+    invalid.amplitude = Array2::zeros((1, 1));
     assert!(invalid.save_bundle(&invalid_path).is_err());
     assert!(!invalid_path.exists());
 
@@ -182,8 +189,8 @@ fn runner_uses_injected_backend_for_initialization_updates_and_result() {
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
             .unwrap();
     let (backend, calls) = common::CountingBackend::new(
-        problem.model.image_shape,
-        problem.model.reconstruction_shape,
+        problem.model.image_shape(),
+        problem.model.reconstruction_shape(),
     )
     .unwrap();
     let result = Runner::new(
@@ -309,7 +316,7 @@ fn admm_checkpoint_resume_preserves_optimizer_state() {
         .unwrap();
     let checkpoint =
         ReconstructionCheckpoint::load(directory.path().join("checkpoint_00002.json")).unwrap();
-    assert!(checkpoint.algorithm_auxiliary.is_some());
+    assert!(checkpoint.algorithm_auxiliary().is_some());
     let resumed = Admm::default()
         .iterations(5)
         .object_step(0.6)
@@ -322,9 +329,8 @@ fn admm_checkpoint_resume_preserves_optimizer_state() {
         .unwrap();
     for (&resumed, &uninterrupted) in resumed
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(uninterrupted.object_spectrum.as_slice())
+        .zip(uninterrupted.object_spectrum.iter())
     {
         assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-12);
         assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-12);
@@ -362,7 +368,7 @@ fn multiplexed_admm_checkpoint_preserves_per_mode_state() {
     )
     .unwrap();
     let fpm_rs::reconstruction::AlgorithmAuxiliaryState::Admm(auxiliary) =
-        checkpoint.algorithm_auxiliary.as_ref().unwrap();
+        checkpoint.algorithm_auxiliary().unwrap();
     assert_eq!(
         auxiliary.auxiliary_fields.len(),
         5 * problem.measurements.frame_len()
@@ -379,9 +385,8 @@ fn multiplexed_admm_checkpoint_preserves_per_mode_state() {
         .unwrap();
     for (&resumed, &uninterrupted) in resumed
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(uninterrupted.object_spectrum.as_slice())
+        .zip(uninterrupted.object_spectrum.iter())
     {
         assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-12);
         assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-12);
@@ -390,10 +395,12 @@ fn multiplexed_admm_checkpoint_preserves_per_mode_state() {
 
 #[test]
 fn admm_honors_masks_and_known_sensor_calibration() {
-    let mut model = common::direct_model().unwrap();
-    model.frame_gains = Some(vec![3.0; model.frame_count()]);
-    model.background = Some(vec![7.0; model.image_shape.0 * model.image_shape.1]);
-    model.validate().unwrap();
+    let model = common::direct_model()
+        .unwrap()
+        .with_frame_gains(Some(vec![3.0; 5]))
+        .unwrap()
+        .with_background(Some(vec![7.0; 64]))
+        .unwrap();
     let simulation = Simulator::ideal(model)
         .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
         .simulate()
@@ -402,8 +409,8 @@ fn admm_honors_masks_and_known_sensor_calibration() {
     for frame in 0..corrupted.frame_count() {
         corrupted.frame_mut(frame).unwrap()[0] = 1e12;
     }
-    let mut mask = vec![1; corrupted.frame_len()];
-    mask[0] = 0;
+    let mut mask = Array2::from_elem(corrupted.image_shape(), 1_u8);
+    mask[(0, 0)] = 0;
     let clean = simulation.measurements.with_masks(mask.clone()).unwrap();
     let corrupted = corrupted.with_masks(mask).unwrap();
     let clean_problem =
@@ -417,9 +424,8 @@ fn admm_honors_masks_and_known_sensor_calibration() {
         .unwrap();
     for (&clean, &corrupted) in clean_result
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(corrupted_result.object_spectrum.as_slice())
+        .zip(corrupted_result.object_spectrum.iter())
     {
         assert_abs_diff_eq!(clean.re, corrupted.re, epsilon = 1e-12);
         assert_abs_diff_eq!(clean.im, corrupted.im, epsilon = 1e-12);
@@ -523,7 +529,7 @@ fn gradient_recovers_known_source_offsets_with_fixed_object() {
             .unwrap();
     }
 
-    let corrections = state.illumination_corrections.unwrap();
+    let corrections = state.illumination_corrections().unwrap();
     let initial_error: f64 = true_offsets
         .iter()
         .map(|offset| offset.row * offset.row + offset.column * offset.column)
@@ -595,7 +601,7 @@ fn joint_illumination_calibration_reduces_model_mismatch() {
     let corrected_metrics = evaluate_reconstruction_with_problem(
         &calibrated,
         &problem,
-        &simulation.ground_truth_object,
+        simulation.ground_truth_object.view(),
         Some(&simulation.true_model),
         None,
     )
@@ -616,7 +622,7 @@ fn joint_illumination_calibration_reduces_model_mismatch() {
     let uncorrected_residual: f64 = evaluate_reconstruction_with_problem(
         &ignored_corrections,
         &problem,
-        &simulation.ground_truth_object,
+        simulation.ground_truth_object.view(),
         None,
         None,
     )
@@ -673,7 +679,7 @@ fn illumination_calibration_tracks_sources_in_multiplexed_frames() {
             .unwrap();
     }
 
-    let corrections = state.illumination_corrections.unwrap();
+    let corrections = state.illumination_corrections().unwrap();
     assert_eq!(corrections.len(), problem.model.source_count());
     assert_ne!(corrections.len(), problem.model.frame_count());
     let initial_error: f64 = true_offsets
@@ -712,12 +718,11 @@ fn gradient_jointly_recovers_pupil_and_multiplexed_source_offsets() {
         .clone()
         .with_subpixel_offsets(true_offsets.clone())
         .unwrap();
-    let shape = true_model.image_shape;
+    let shape = true_model.image_shape();
     let radius_scale = (shape.0.min(shape.1) as f64 / 2.0).max(1.0);
     for row in 0..shape.0 {
         for column in 0..shape.1 {
-            let pixel = row * shape.1 + column;
-            if !true_model.pupil.support[pixel] {
+            if true_model.pupil().support()[(row, column)] == 0 {
                 continue;
             }
             let y = (row as f64 - shape.0 as f64 / 2.0) / radius_scale;
@@ -725,17 +730,17 @@ fn gradient_jointly_recovers_pupil_and_multiplexed_source_offsets() {
             let rho = x.hypot(y).min(1.0);
             let theta = y.atan2(x);
             let phase = 0.5 * rho * rho + 0.15 * rho * rho * (2.0 * theta).cos();
-            true_model.pupil.values.as_mut_slice()[pixel] *= Complex64::from_polar(1.0, phase);
+            true_model.pupil_mut().values_mut()[(row, column)] *= Complex64::from_polar(1.0, phase);
         }
     }
     true_model.validate().unwrap();
-    let initial_pupil = reconstruction_model.pupil.clone();
+    let initial_pupil = reconstruction_model.pupil().clone();
     let simulation = Simulator::new(true_model)
         .reconstruction_model(reconstruction_model)
         .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
         .simulate()
         .unwrap();
-    let true_pupil = simulation.true_model.pupil.clone();
+    let true_pupil = simulation.true_model.pupil().clone();
     let truth = simulation.ground_truth_object.clone();
     let problem =
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
@@ -756,16 +761,47 @@ fn gradient_jointly_recovers_pupil_and_multiplexed_source_offsets() {
     }
 
     let initial_pupil_error = pupil_phase_rmse(
-        initial_pupil.values.as_slice(),
-        true_pupil.values.as_slice(),
-        &true_pupil.support,
+        initial_pupil
+            .values()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        true_pupil
+            .values()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        true_pupil
+            .support()
+            .iter()
+            .map(|&value| value != 0)
+            .collect::<Vec<_>>()
+            .as_slice(),
     );
     let recovered_pupil_error = pupil_phase_rmse(
-        state.pupil.values.as_slice(),
-        true_pupil.values.as_slice(),
-        &true_pupil.support,
+        state
+            .pupil()
+            .values()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        true_pupil
+            .values()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        true_pupil
+            .support()
+            .iter()
+            .map(|&value| value != 0)
+            .collect::<Vec<_>>()
+            .as_slice(),
     );
-    let corrections = state.illumination_corrections.unwrap();
+    let corrections = state.illumination_corrections().unwrap();
     let initial_offset_error: f64 = true_offsets
         .iter()
         .map(|offset| offset.row.powi(2) + offset.column.powi(2))
@@ -852,19 +888,17 @@ fn illumination_calibration_resumes_exactly_from_checkpoint() {
     }
     for (&resumed, &uninterrupted) in resumed
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(uninterrupted.object_spectrum.as_slice())
+        .zip(uninterrupted.object_spectrum.iter())
     {
         assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-14);
         assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-14);
     }
     for (&resumed, &uninterrupted) in resumed
         .recovered_pupil
-        .values
-        .as_slice()
+        .values()
         .iter()
-        .zip(uninterrupted.recovered_pupil.values.as_slice())
+        .zip(uninterrupted.recovered_pupil.values().iter())
     {
         assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-12);
         assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-12);
@@ -956,21 +990,32 @@ fn gradient_minibatch_applies_the_mean_of_frame_gradients() {
             .unwrap();
         individual_states.push(state);
     }
-    for (pixel, &initial_value) in initial.object_spectrum.as_slice().iter().enumerate() {
+    let initial_values = initial
+        .object_spectrum()
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let first_values = individual_states[0]
+        .object_spectrum()
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let second_values = individual_states[1]
+        .object_spectrum()
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    let batched_values = batched
+        .object_spectrum()
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    for (pixel, &initial_value) in initial_values.iter().enumerate() {
         let expected = initial_value
-            + ((individual_states[0].object_spectrum.as_slice()[pixel] - initial_value)
-                + (individual_states[1].object_spectrum.as_slice()[pixel] - initial_value))
+            + ((first_values[pixel] - initial_value) + (second_values[pixel] - initial_value))
                 / 2.0;
-        assert_abs_diff_eq!(
-            batched.object_spectrum.as_slice()[pixel].re,
-            expected.re,
-            epsilon = 1e-12
-        );
-        assert_abs_diff_eq!(
-            batched.object_spectrum.as_slice()[pixel].im,
-            expected.im,
-            epsilon = 1e-12
-        );
+        assert_abs_diff_eq!(batched_values[pixel].re, expected.re, epsilon = 1e-12);
+        assert_abs_diff_eq!(batched_values[pixel].im, expected.im, epsilon = 1e-12);
     }
 }
 
@@ -1020,20 +1065,18 @@ fn parallel_gradient_reduction_matches_sequential_for_multiplexed_pupil_updates(
         epsilon = 1e-14
     );
     for (&parallel, &sequential) in parallel
-        .object_spectrum
-        .as_slice()
+        .object_spectrum()
         .iter()
-        .zip(sequential.object_spectrum.as_slice())
+        .zip(sequential.object_spectrum().iter())
     {
         assert_abs_diff_eq!(parallel.re, sequential.re, epsilon = 1e-12);
         assert_abs_diff_eq!(parallel.im, sequential.im, epsilon = 1e-12);
     }
     for (&parallel, &sequential) in parallel
-        .pupil
-        .values
-        .as_slice()
+        .pupil()
+        .values()
         .iter()
-        .zip(sequential.pupil.values.as_slice())
+        .zip(sequential.pupil().values().iter())
     {
         assert_abs_diff_eq!(parallel.re, sequential.re, epsilon = 1e-12);
         assert_abs_diff_eq!(parallel.im, sequential.im, epsilon = 1e-12);
@@ -1102,45 +1145,36 @@ fn parallel_illumination_reduction_matches_sequential_with_shared_sources() {
         epsilon = 1e-14
     );
     for (&parallel, &sequential) in parallel
-        .object_spectrum
-        .as_slice()
+        .object_spectrum()
         .iter()
-        .zip(sequential.object_spectrum.as_slice())
+        .zip(sequential.object_spectrum().iter())
     {
         assert_abs_diff_eq!(parallel.re, sequential.re, epsilon = 1e-12);
         assert_abs_diff_eq!(parallel.im, sequential.im, epsilon = 1e-12);
     }
     for (&parallel, &sequential) in parallel
-        .pupil
-        .values
-        .as_slice()
+        .pupil()
+        .values()
         .iter()
-        .zip(sequential.pupil.values.as_slice())
+        .zip(sequential.pupil().values().iter())
     {
         assert_abs_diff_eq!(parallel.re, sequential.re, epsilon = 1e-12);
         assert_abs_diff_eq!(parallel.im, sequential.im, epsilon = 1e-12);
     }
     for (&parallel, &sequential) in parallel
-        .illumination_corrections
-        .as_ref()
+        .illumination_corrections()
         .unwrap()
         .iter()
-        .zip(sequential.illumination_corrections.as_ref().unwrap())
+        .zip(sequential.illumination_corrections().unwrap())
     {
         assert_abs_diff_eq!(parallel.0, sequential.0, epsilon = 1e-12);
         assert_abs_diff_eq!(parallel.1, sequential.1, epsilon = 1e-12);
     }
+    assert_eq!(parallel.object_spectrum(), repeated.object_spectrum());
+    assert_eq!(parallel.pupil().values(), repeated.pupil().values());
     assert_eq!(
-        parallel.object_spectrum.as_slice(),
-        repeated.object_spectrum.as_slice()
-    );
-    assert_eq!(
-        parallel.pupil.values.as_slice(),
-        repeated.pupil.values.as_slice()
-    );
-    assert_eq!(
-        parallel.illumination_corrections,
-        repeated.illumination_corrections
+        parallel.illumination_corrections(),
+        repeated.illumination_corrections()
     );
 }
 
@@ -1182,23 +1216,25 @@ fn object_and_pupil_gradients_match_finite_differences_for_all_losses_and_masks(
         .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
         .simulate()
         .unwrap();
-    let mut mask = vec![1; simulation.measurements.frame_len()];
-    for pixel in (0..mask.len()).step_by(5) {
-        mask[pixel] = 0;
+    let mut mask = Array2::from_elem(simulation.measurements.image_shape(), 1_u8);
+    for (pixel, value) in mask.iter_mut().enumerate() {
+        if pixel % 5 == 0 {
+            *value = 0;
+        }
     }
     let measurements = simulation.measurements.with_masks(mask).unwrap();
     let problem =
         ReconstructionProblem::new(measurements, simulation.reconstruction_model).unwrap();
     let mut initial_object = simulation.ground_truth_object;
-    for (index, value) in initial_object.as_mut_slice().iter_mut().enumerate() {
+    for (index, value) in initial_object.iter_mut().enumerate() {
         let amplitude = 0.78 + 0.03 * (index % 7) as f64 / 7.0;
         let phase = 0.08 * ((index % 11) as f64 / 11.0 - 0.5);
         *value *= Complex64::from_polar(amplitude, phase);
     }
     let initial = ReconstructionState::from_object(&problem, initial_object).unwrap();
     let frame = 2;
-    let object_direction = complex_test_direction(initial.object_spectrum.len(), 0.07);
-    let pupil_direction = complex_test_direction(initial.pupil.values.len(), 0.05);
+    let object_direction = complex_test_direction(initial.object_spectrum().len(), 0.07);
+    let pupil_direction = complex_test_direction(initial.pupil().values().len(), 0.05);
 
     for loss_type in [
         LossType::AmplitudeMse,
@@ -1207,8 +1243,8 @@ fn object_and_pupil_gradients_match_finite_differences_for_all_losses_and_masks(
         LossType::HuberAmplitude,
     ] {
         let mut state = initial.clone();
-        let object_before = state.object_spectrum.clone();
-        let pupil_before = state.pupil.clone();
+        let object_before = state.object_spectrum().to_owned();
+        let pupil_before = state.pupil().clone();
         let mut algorithm = GradientDescent::default()
             .object_step(1.0)
             .loss_type(loss_type)
@@ -1221,17 +1257,15 @@ fn object_and_pupil_gradients_match_finite_differences_for_all_losses_and_masks(
             .unwrap();
 
         let object_denominator = pupil_before
-            .values
-            .as_slice()
+            .values()
             .iter()
             .map(|value| value.norm_sqr())
             .fold(0.0, f64::max)
             .max(algorithm.epsilon)
             + algorithm.epsilon;
         let object_gradient: Vec<_> = object_before
-            .as_slice()
             .iter()
-            .zip(state.object_spectrum.as_slice())
+            .zip(state.object_spectrum().iter())
             .map(|(&before, &after)| (before - after) * object_denominator)
             .collect();
         let analytical_object = complex_directional_derivative(&object_gradient, &object_direction);
@@ -1251,10 +1285,10 @@ fn object_and_pupil_gradients_match_finite_differences_for_all_losses_and_masks(
             2e-5,
         );
 
-        let mut patch = vec![Complex64::default(); pupil_before.values.len()];
+        let mut patch = vec![Complex64::default(); pupil_before.values().len()];
         problem
             .model
-            .extract_patch(&object_before, frame, &mut patch)
+            .extract_patch(object_before.view(), frame, &mut patch)
             .unwrap();
         let pupil_denominator = patch
             .iter()
@@ -1263,10 +1297,9 @@ fn object_and_pupil_gradients_match_finite_differences_for_all_losses_and_masks(
             .max(algorithm.epsilon)
             + algorithm.epsilon;
         let pupil_gradient: Vec<_> = pupil_before
-            .values
-            .as_slice()
+            .values()
             .iter()
-            .zip(state.pupil.values.as_slice())
+            .zip(state.pupil().values().iter())
             .map(|(&before, &after)| (before - after) * pupil_denominator)
             .collect();
         let analytical_pupil = complex_directional_derivative(&pupil_gradient, &pupil_direction);
@@ -1295,15 +1328,17 @@ fn illumination_gradients_match_direct_loss_differences_for_all_losses_and_masks
         .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
         .simulate()
         .unwrap();
-    let mut mask = vec![1; simulation.measurements.frame_len()];
-    for pixel in (1..mask.len()).step_by(6) {
-        mask[pixel] = 0;
+    let mut mask = Array2::from_elem(simulation.measurements.image_shape(), 1_u8);
+    for (pixel, value) in mask.iter_mut().enumerate() {
+        if pixel % 6 == 1 {
+            *value = 0;
+        }
     }
     let measurements = simulation.measurements.with_masks(mask).unwrap();
     let problem =
         ReconstructionProblem::new(measurements, simulation.reconstruction_model).unwrap();
     let mut initial_object = simulation.ground_truth_object;
-    for (index, value) in initial_object.as_mut_slice().iter_mut().enumerate() {
+    for (index, value) in initial_object.iter_mut().enumerate() {
         *value *= Complex64::from_polar(0.82, 0.04 * (index % 9) as f64 / 9.0);
     }
     let initial = ReconstructionState::from_object(&problem, initial_object).unwrap();
@@ -1317,8 +1352,8 @@ fn illumination_gradients_match_direct_loss_differences_for_all_losses_and_masks
         LossType::HuberAmplitude,
     ] {
         let mut state = initial.clone();
-        let object = state.object_spectrum.clone();
-        let pupil = state.pupil.clone();
+        let object = state.object_spectrum().to_owned();
+        let pupil = state.pupil().clone();
         let mut algorithm = GradientDescent::default()
             .object_step(1e-12)
             .loss_type(loss_type)
@@ -1329,7 +1364,7 @@ fn illumination_gradients_match_direct_loss_differences_for_all_losses_and_masks
         algorithm
             .step(&problem, &mut state, &Batch::single(frame), 0)
             .unwrap();
-        let analytical = state.scratch.illumination_gradient[frame];
+        let analytical = state.illumination_gradient()[frame];
         let numerical_row = finite_difference_illumination_loss(
             &problem,
             &object,
@@ -1390,12 +1425,7 @@ fn finite_difference_object_loss<M: MeasurementRead>(
 ) -> f64 {
     let mut plus = object.clone();
     let mut minus = object.clone();
-    for ((plus, minus), &direction) in plus
-        .as_mut_slice()
-        .iter_mut()
-        .zip(minus.as_mut_slice())
-        .zip(direction)
-    {
+    for ((plus, minus), &direction) in plus.iter_mut().zip(minus.iter_mut()).zip(direction) {
         *plus += distance * direction;
         *minus -= distance * direction;
     }
@@ -1416,10 +1446,9 @@ fn finite_difference_pupil_loss<M: MeasurementRead>(
     let mut plus = pupil.clone();
     let mut minus = pupil.clone();
     for ((plus, minus), &direction) in plus
-        .values
-        .as_mut_slice()
+        .values_mut()
         .iter_mut()
-        .zip(minus.values.as_mut_slice())
+        .zip(minus.values_mut().iter_mut())
         .zip(direction)
     {
         *plus += distance * direction;
@@ -1480,7 +1509,7 @@ fn masked_frame_loss<M: MeasurementRead>(
 ) -> f64 {
     let predicted = ForwardModel::new(&problem.model)
         .unwrap()
-        .forward_intensity(object, pupil, frame)
+        .forward_intensity(object.view(), pupil, frame)
         .unwrap();
     let measured = problem.measurements.frame(frame).unwrap();
     let mask = problem.measurements.frame_mask(frame).unwrap();
@@ -1490,7 +1519,7 @@ fn masked_frame_loss<M: MeasurementRead>(
         if mask.is_some_and(|mask| mask[pixel] == 0) {
             continue;
         }
-        valid_prediction.push(predicted.as_slice()[pixel]);
+        valid_prediction.push(predicted.iter().nth(pixel).copied().unwrap());
         valid_measurement.push(measured[pixel]);
     }
     loss(&valid_prediction, &valid_measurement, loss_type).unwrap()
@@ -1514,7 +1543,7 @@ fn object_tv_regularization_reduces_complex_variation_across_batch_sizes() {
     let problem =
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
             .unwrap();
-    let initial_object = Array2::from_vec(
+    let initial_object = Array2::from_shape_vec(
         (16, 16),
         (0..16)
             .flat_map(|row| {
@@ -1557,16 +1586,20 @@ fn object_tv_regularization_reduces_complex_variation_across_batch_sizes() {
 #[test]
 fn pupil_smoothing_reduces_roughness_and_preserves_support() {
     let mut model = common::direct_model().unwrap();
-    for row in 0..model.image_shape.0 {
-        for column in 0..model.image_shape.1 {
+    let shape = model.image_shape();
+    let mut pupil_values = model.pupil().values().to_owned();
+    let mut pupil_support = model.pupil().support().to_owned();
+    for row in 0..shape.0 {
+        for column in 0..shape.1 {
             let sign = if (row + column) % 2 == 0 { 1.0 } else { -1.0 };
-            model.pupil.values[(row, column)] = Complex64::from_polar(1.0, 0.35 * sign);
+            pupil_values[(row, column)] = Complex64::from_polar(1.0, 0.35 * sign);
         }
     }
-    model.pupil.support[0] = false;
-    model.pupil.values.as_mut_slice()[0] = Complex64::default();
+    pupil_support[(0, 0)] = 0;
+    pupil_values[(0, 0)] = Complex64::default();
+    *model.pupil_mut() = Pupil::new(pupil_values, pupil_support).unwrap();
     model.validate().unwrap();
-    let initial_roughness = complex_roughness(&model.pupil.values);
+    let initial_roughness = complex_roughness(&model.pupil().values().to_owned());
     let simulation = Simulator::ideal(model)
         .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
         .simulate()
@@ -1583,9 +1616,9 @@ fn pupil_smoothing_reduces_roughness_and_preserves_support() {
         .pupil_smoothing(0.02)
         .run(&problem)
         .unwrap();
-    assert!(complex_roughness(&result.recovered_pupil.values) < initial_roughness);
+    assert!(complex_roughness(&result.recovered_pupil.values().to_owned()) < initial_roughness);
     assert_eq!(
-        result.recovered_pupil.values.as_slice()[0],
+        result.recovered_pupil.values()[(0, 0)],
         Complex64::default()
     );
 }
@@ -1634,9 +1667,8 @@ fn gradient_loss_is_invariant_to_known_linear_camera_response() {
     }
     for (&ideal, &camera) in ideal_result
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(camera_result.object_spectrum.as_slice())
+        .zip(camera_result.object_spectrum.iter())
     {
         assert_abs_diff_eq!(ideal.re, camera.re, epsilon = 1e-11);
         assert_abs_diff_eq!(ideal.im, camera.im, epsilon = 1e-11);
@@ -1657,7 +1689,7 @@ fn epry_runs_joint_object_pupil_updates() {
         .pupil_step(0.05)
         .run(&problem)
         .unwrap();
-    let metrics = evaluate_reconstruction(&result, &truth, None, None).unwrap();
+    let metrics = evaluate_reconstruction(&result, truth.view(), None, None).unwrap();
     assert!(metrics.object.amplitude_rmse.is_finite());
     assert!(metrics.object.phase_rmse.is_finite());
     assert_eq!(result.runtime.completed_iterations, 4);
@@ -1665,9 +1697,12 @@ fn epry_runs_joint_object_pupil_updates() {
 
 #[test]
 fn initialization_undoes_known_frame_gain_and_background() {
-    let mut model = common::direct_model().unwrap();
-    model.frame_gains = Some(vec![4.0; model.frame_count()]);
-    model.background = Some(vec![9.0; model.image_shape.0 * model.image_shape.1]);
+    let model = common::direct_model()
+        .unwrap()
+        .with_frame_gains(Some(vec![4.0; 5]))
+        .unwrap()
+        .with_background(Some(vec![9.0; 64]))
+        .unwrap();
     let simulation = Simulator::ideal(model)
         .object(SyntheticObject::constant((16, 16), 2.0, 0.0).unwrap())
         .simulate()
@@ -1679,7 +1714,7 @@ fn initialization_undoes_known_frame_gain_and_background() {
         .iterations(0)
         .run(&problem)
         .unwrap();
-    for amplitude in result.amplitude.as_slice() {
+    for amplitude in &result.amplitude {
         assert_abs_diff_eq!(*amplitude, 2.0, epsilon = 1e-10);
     }
 }
@@ -1700,12 +1735,12 @@ fn camera_counts_reconstruct_in_compiled_sensor_units() {
         .simulate()
         .unwrap();
     assert_eq!(
-        simulation.reconstruction_model.frame_gains,
-        Some(vec![200.0; simulation.reconstruction_model.frame_count()])
+        simulation.reconstruction_model.frame_gains(),
+        Some(&vec![200.0; simulation.reconstruction_model.frame_count()][..])
     );
     assert_eq!(
-        simulation.reconstruction_model.background,
-        Some(vec![11.0; 64])
+        simulation.reconstruction_model.background(),
+        Some(&vec![11.0; 64][..])
     );
     assert!(
         simulation
@@ -1724,7 +1759,6 @@ fn camera_counts_reconstruct_in_compiled_sensor_units() {
     assert!(
         result
             .amplitude
-            .as_slice()
             .iter()
             .all(|&value| (value - 2.0).abs() < 1e-10)
     );
@@ -1739,11 +1773,9 @@ fn zero_weight_frames_do_not_affect_reconstruction() {
         .unwrap();
     let mut clean = simulation.measurements.clone();
     let mut corrupted = simulation.measurements;
-    for metadata in &mut clean.frame_metadata[1..] {
-        metadata.weight = 0.0;
-    }
-    for metadata in &mut corrupted.frame_metadata[1..] {
-        metadata.weight = 0.0;
+    for frame in 1..clean.frame_count() {
+        clean.set_frame_weight(frame, 0.0).unwrap();
+        corrupted.set_frame_weight(frame, 0.0).unwrap();
     }
     for frame in 1..corrupted.frame_count() {
         corrupted.frame_mut(frame).unwrap().fill(1.0e12);
@@ -1762,9 +1794,8 @@ fn zero_weight_frames_do_not_affect_reconstruction() {
         .unwrap();
     for (&clean, &corrupted) in clean_result
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(corrupted_result.object_spectrum.as_slice())
+        .zip(corrupted_result.object_spectrum.iter())
     {
         assert_abs_diff_eq!(clean.re, corrupted.re, epsilon = 1e-12);
         assert_abs_diff_eq!(clean.im, corrupted.im, epsilon = 1e-12);
@@ -1782,8 +1813,8 @@ fn masked_pixels_do_not_affect_reconstruction() {
     for frame in 0..corrupted.frame_count() {
         corrupted.frame_mut(frame).unwrap()[0] = 1.0e12;
     }
-    let mut mask = vec![1; corrupted.frame_len()];
-    mask[0] = 0;
+    let mut mask = Array2::from_elem(corrupted.image_shape(), 1_u8);
+    mask[(0, 0)] = 0;
     let clean = simulation.measurements.with_masks(mask.clone()).unwrap();
     let corrupted = corrupted.with_masks(mask).unwrap();
     let clean_problem =
@@ -1905,9 +1936,26 @@ fn epry_reduces_known_pupil_phase_error() {
         .simulate()
         .unwrap();
     let initial_error = pupil_phase_rmse(
-        reconstruction_model.pupil.values.as_slice(),
-        simulation.true_model.pupil.values.as_slice(),
-        &simulation.true_model.pupil.support,
+        &reconstruction_model
+            .pupil()
+            .values()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        &simulation
+            .true_model
+            .pupil()
+            .values()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        &simulation
+            .true_model
+            .pupil()
+            .support()
+            .iter()
+            .map(|&value| value != 0)
+            .collect::<Vec<_>>(),
     );
     let truth = simulation.ground_truth_object.clone();
     let true_model = simulation.true_model.clone();
@@ -1919,7 +1967,7 @@ fn epry_reduces_known_pupil_phase_error() {
         .pupil_step(0.05)
         .run(&problem)
         .unwrap();
-    let recovered_error = evaluate_reconstruction(&result, &truth, Some(&true_model), None)
+    let recovered_error = evaluate_reconstruction(&result, truth.view(), Some(&true_model), None)
         .unwrap()
         .pupil
         .unwrap()
@@ -1947,20 +1995,21 @@ fn pupil_metrics_remove_global_complex_scale() {
         .run(&problem)
         .unwrap();
     let ambiguity = Complex64::from_polar(3.0, 0.7);
-    for value in result.recovered_pupil.values.as_mut_slice() {
+    for value in result.recovered_pupil.values_mut() {
         *value *= ambiguity;
     }
-    let metrics = evaluate_reconstruction(&result, &truth, Some(&true_model), None).unwrap();
+    let metrics = evaluate_reconstruction(&result, truth.view(), Some(&true_model), None).unwrap();
     assert!(metrics.pupil.as_ref().unwrap().amplitude_rmse < 1e-12);
     assert!(metrics.pupil.as_ref().unwrap().phase_rmse < 1e-12);
 }
 
 #[test]
 fn epry_recovers_relative_frame_gain_mismatch() {
-    let mut true_model = common::direct_model().unwrap();
     let true_gains = vec![0.5, 1.0, 1.5, 2.0, 0.75];
-    true_model.frame_gains = Some(true_gains.clone());
-    true_model.validate().unwrap();
+    let true_model = common::direct_model()
+        .unwrap()
+        .with_frame_gains(Some(true_gains.clone()))
+        .unwrap();
     let reconstruction_model = common::direct_model().unwrap();
     let simulation = Simulator::new(true_model)
         .object(SyntheticObject::constant((16, 16), 2.0, 0.0).unwrap())
@@ -1980,7 +2029,7 @@ fn epry_recovers_relative_frame_gain_mismatch() {
         .gain_step(1.0)
         .run(&problem)
         .unwrap();
-    let recovered_error = evaluate_reconstruction(&result, &truth, Some(&true_model), None)
+    let recovered_error = evaluate_reconstruction(&result, truth.view(), Some(&true_model), None)
         .unwrap()
         .frame_gains
         .unwrap()
@@ -2000,16 +2049,17 @@ fn epry_recovers_relative_frame_gain_mismatch() {
 
 #[test]
 fn epry_recovers_relative_per_frame_background() {
-    let mut true_model = common::direct_model().unwrap();
     let true_backgrounds = [0.0, 1.0, 2.0, 3.0, 0.5];
-    let image_len = true_model.image_shape.0 * true_model.image_shape.1;
-    true_model.background = Some(
-        true_backgrounds
-            .iter()
-            .flat_map(|&value| vec![value; image_len])
-            .collect(),
-    );
-    true_model.validate().unwrap();
+    let image_len = 64;
+    let true_model = common::direct_model()
+        .unwrap()
+        .with_background(Some(
+            true_backgrounds
+                .iter()
+                .flat_map(|&value| vec![value; image_len])
+                .collect(),
+        ))
+        .unwrap();
     let reconstruction_model = common::direct_model().unwrap();
     let simulation = Simulator::new(true_model)
         .object(SyntheticObject::constant((16, 16), 2.0, 0.0).unwrap())
@@ -2070,15 +2120,16 @@ fn pupil_phase_rmse(recovered: &[Complex64], truth: &[Complex64], support: &[boo
 
 fn complex_variation(values: &Array2<Complex64>) -> f64 {
     let mut variation = 0.0;
-    for row in 0..values.height() {
-        for column in 0..values.width() {
+    let shape = values.dim();
+    for row in 0..shape.0 {
+        for column in 0..shape.1 {
             let value = values[(row, column)];
-            let horizontal = if column + 1 < values.width() {
+            let horizontal = if column + 1 < shape.1 {
                 (values[(row, column + 1)] - value).norm_sqr()
             } else {
                 0.0
             };
-            let vertical = if row + 1 < values.height() {
+            let vertical = if row + 1 < shape.0 {
                 (values[(row + 1, column)] - value).norm_sqr()
             } else {
                 0.0
@@ -2091,13 +2142,14 @@ fn complex_variation(values: &Array2<Complex64>) -> f64 {
 
 fn complex_roughness(values: &Array2<Complex64>) -> f64 {
     let mut roughness = 0.0;
-    for row in 0..values.height() {
-        for column in 0..values.width() {
+    let shape = values.dim();
+    for row in 0..shape.0 {
+        for column in 0..shape.1 {
             let value = values[(row, column)];
-            if column + 1 < values.width() {
+            if column + 1 < shape.1 {
                 roughness += (values[(row, column + 1)] - value).norm_sqr();
             }
-            if row + 1 < values.height() {
+            if row + 1 < shape.0 {
                 roughness += (values[(row + 1, column)] - value).norm_sqr();
             }
         }

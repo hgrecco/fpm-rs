@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 
 use approx::assert_abs_diff_eq;
 use fpm_rs::{
-    Array2, Complex64, Result,
+    Result,
     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
     callbacks::CheckpointEvery,
     callbacks::{
@@ -207,8 +207,8 @@ fn callback_forward_diagnostics_use_the_injected_backend() {
     let problem = problem();
     let frame_count = problem.model.frame_count();
     let (backend, calls) = common::CountingBackend::new(
-        problem.model.image_shape,
-        problem.model.reconstruction_shape,
+        problem.model.image_shape(),
+        problem.model.reconstruction_shape(),
     )
     .unwrap();
     let result = Runner::new(
@@ -256,8 +256,8 @@ fn file_callbacks_obey_frequency_and_log_rows() {
 fn residual_callback_only_computes_and_saves_at_its_frequency() {
     let problem = problem();
     let (baseline_backend, baseline_calls) = common::CountingBackend::new(
-        problem.model.image_shape,
-        problem.model.reconstruction_shape,
+        problem.model.image_shape(),
+        problem.model.reconstruction_shape(),
     )
     .unwrap();
     Runner::new(
@@ -274,8 +274,8 @@ fn residual_callback_only_computes_and_saves_at_its_frequency() {
     let directory = tempfile::tempdir().unwrap();
     let residual_directory = directory.path().join("residuals");
     let (callback_backend, callback_calls) = common::CountingBackend::new(
-        problem.model.image_shape,
-        problem.model.reconstruction_shape,
+        problem.model.image_shape(),
+        problem.model.reconstruction_shape(),
     )
     .unwrap();
     Runner::new(
@@ -344,8 +344,8 @@ fn checkpoint_round_trip_resumes_exactly() {
         .unwrap();
     let checkpoint =
         ReconstructionCheckpoint::load(directory.path().join("checkpoint_00002.json")).unwrap();
-    assert_eq!(checkpoint.completed_iterations, 2);
-    assert_eq!(checkpoint.history.iterations.len(), 2);
+    assert_eq!(checkpoint.completed_iterations(), 2);
+    assert_eq!(checkpoint.history().iterations.len(), 2);
 
     let resumed = AlternatingProjection::default()
         .iterations(4)
@@ -357,16 +357,15 @@ fn checkpoint_round_trip_resumes_exactly() {
         .unwrap();
     for (&resumed, &uninterrupted) in resumed
         .object_spectrum
-        .as_slice()
         .iter()
-        .zip(uninterrupted.object_spectrum.as_slice())
+        .zip(uninterrupted.object_spectrum.iter())
     {
         assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-14);
         assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-14);
     }
     assert_eq!(
-        resumed.recovered_pupil.values,
-        uninterrupted.recovered_pupil.values
+        resumed.recovered_pupil.values(),
+        uninterrupted.recovered_pupil.values()
     );
     assert_eq!(resumed.runtime.completed_iterations, 4);
     assert_eq!(resumed.history.iterations.len(), 4);
@@ -384,10 +383,10 @@ fn checkpoint_io_rejects_corruption_and_problem_mismatch_early() {
     let directory = tempfile::tempdir().unwrap();
 
     let invalid_path = directory.path().join("invalid.json");
-    let mut invalid = checkpoint.clone();
-    invalid.completed_iterations = 1;
-    assert!(invalid.save(&invalid_path).is_err());
-    assert!(!invalid_path.exists());
+    let mut invalid = serde_json::to_value(&checkpoint).unwrap();
+    invalid["completed_iterations"] = serde_json::json!(1);
+    std::fs::write(&invalid_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+    assert!(ReconstructionCheckpoint::load(&invalid_path).is_err());
 
     let valid_path = directory.path().join("valid.json");
     checkpoint.save(&valid_path).unwrap();
@@ -400,8 +399,19 @@ fn checkpoint_io_rejects_corruption_and_problem_mismatch_early() {
     assert!(ReconstructionCheckpoint::load(&corrupted_path).is_err());
 
     let incompatible_path = directory.path().join("incompatible.json");
-    let mut incompatible = checkpoint;
-    incompatible.object_spectrum = Array2::filled((2, 2), Complex64::default()).unwrap();
-    incompatible.save(&incompatible_path).unwrap();
+    let mut incompatible = serde_json::to_value(&checkpoint).unwrap();
+    incompatible["object_spectrum"]["height"] = serde_json::json!(2);
+    incompatible["object_spectrum"]["width"] = serde_json::json!(2);
+    incompatible["object_spectrum"]["data"] = serde_json::json!([
+        {"re": 0.0, "im": 0.0},
+        {"re": 0.0, "im": 0.0},
+        {"re": 0.0, "im": 0.0},
+        {"re": 0.0, "im": 0.0}
+    ]);
+    std::fs::write(
+        &incompatible_path,
+        serde_json::to_vec(&incompatible).unwrap(),
+    )
+    .unwrap();
     assert!(ReconstructionCheckpoint::load_for_problem(&incompatible_path, &problem).is_err());
 }

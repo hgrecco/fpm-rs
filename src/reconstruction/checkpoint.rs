@@ -4,11 +4,12 @@ use std::{
     path::Path,
 };
 
+use ndarray::{Array2, ArrayView2};
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Array2, Result, diagnostics::ReconstructionHistory, error::Error,
+    Result, array_serde::Array2Data, diagnostics::ReconstructionHistory, error::Error,
     measurements::MeasurementRead, model::Pupil,
 };
 
@@ -17,19 +18,18 @@ use super::{AlgorithmAuxiliaryState, ReconstructionProblem, ReconstructionState}
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
 
 /// Serializable algorithm state used to resume a reconstruction exactly.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ReconstructionCheckpoint {
-    pub format_version: u32,
-    pub completed_iterations: usize,
-    pub object_spectrum: Array2<Complex64>,
-    pub pupil: Pupil,
+    pub(crate) format_version: u32,
+    pub(crate) completed_iterations: usize,
+    pub(crate) object_spectrum: Array2<Complex64>,
+    pub(crate) pupil: Pupil,
     /// Per-source `(row, column)` corrections in Fourier-grid pixels.
-    pub illumination_corrections: Option<Vec<(f64, f64)>>,
-    pub frame_gains: Option<Vec<f64>>,
-    pub background: Option<Vec<f64>>,
-    #[serde(default)]
-    pub algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
-    pub history: ReconstructionHistory,
+    pub(crate) illumination_corrections: Option<Vec<(f64, f64)>>,
+    pub(crate) frame_gains: Option<Vec<f64>>,
+    pub(crate) background: Option<Vec<f64>>,
+    pub(crate) algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
+    pub(crate) history: ReconstructionHistory,
 }
 
 impl ReconstructionCheckpoint {
@@ -41,7 +41,7 @@ impl ReconstructionCheckpoint {
         Self {
             format_version: CHECKPOINT_FORMAT_VERSION,
             completed_iterations,
-            object_spectrum: state.object_spectrum.clone(),
+            object_spectrum: state.object_spectrum.clone().into_inner(),
             pupil: state.pupil.clone(),
             illumination_corrections: state.illumination_corrections.clone(),
             frame_gains: state.frame_gains.clone(),
@@ -49,6 +49,42 @@ impl ReconstructionCheckpoint {
             algorithm_auxiliary: state.algorithm_auxiliary.clone(),
             history: history.clone(),
         }
+    }
+
+    pub const fn format_version(&self) -> u32 {
+        self.format_version
+    }
+
+    pub const fn completed_iterations(&self) -> usize {
+        self.completed_iterations
+    }
+
+    pub fn object_spectrum(&self) -> ArrayView2<'_, Complex64> {
+        self.object_spectrum.view()
+    }
+
+    pub fn pupil(&self) -> &Pupil {
+        &self.pupil
+    }
+
+    pub fn illumination_corrections(&self) -> Option<&[(f64, f64)]> {
+        self.illumination_corrections.as_deref()
+    }
+
+    pub fn frame_gains(&self) -> Option<&[f64]> {
+        self.frame_gains.as_deref()
+    }
+
+    pub fn background(&self) -> Option<&[f64]> {
+        self.background.as_deref()
+    }
+
+    pub fn algorithm_auxiliary(&self) -> Option<&AlgorithmAuxiliaryState> {
+        self.algorithm_auxiliary.as_ref()
+    }
+
+    pub const fn history(&self) -> &ReconstructionHistory {
+        &self.history
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -94,7 +130,6 @@ impl ReconstructionCheckpoint {
         }
         if self
             .object_spectrum
-            .as_slice()
             .iter()
             .chain(self.pupil.values.as_slice())
             .any(|value| !value.re.is_finite() || !value.im.is_finite())
@@ -184,10 +219,10 @@ impl ReconstructionCheckpoint {
     ) -> Result<()> {
         problem.validate()?;
         self.validate()?;
-        if self.object_spectrum.shape() != problem.model.reconstruction_shape {
+        if self.object_spectrum.dim() != problem.model.reconstruction_shape {
             return Err(Error::InvalidShape(format!(
                 "checkpoint spectrum shape {:?} differs from reconstruction shape {:?}",
-                self.object_spectrum.shape(),
+                self.object_spectrum.dim(),
                 problem.model.reconstruction_shape
             )));
         }
@@ -252,5 +287,80 @@ impl ReconstructionCheckpoint {
             ));
         }
         Ok(())
+    }
+}
+
+impl Serialize for ReconstructionCheckpoint {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct Representation<'a> {
+            format_version: u32,
+            completed_iterations: usize,
+            object_spectrum: Array2Data<Complex64>,
+            pupil: &'a Pupil,
+            illumination_corrections: &'a Option<Vec<(f64, f64)>>,
+            frame_gains: &'a Option<Vec<f64>>,
+            background: &'a Option<Vec<f64>>,
+            algorithm_auxiliary: &'a Option<AlgorithmAuxiliaryState>,
+            history: &'a ReconstructionHistory,
+        }
+
+        Representation {
+            format_version: self.format_version,
+            completed_iterations: self.completed_iterations,
+            object_spectrum: Array2Data::from_view(self.object_spectrum.view()),
+            pupil: &self.pupil,
+            illumination_corrections: &self.illumination_corrections,
+            frame_gains: &self.frame_gains,
+            background: &self.background,
+            algorithm_auxiliary: &self.algorithm_auxiliary,
+            history: &self.history,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReconstructionCheckpoint {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Representation {
+            format_version: u32,
+            completed_iterations: usize,
+            object_spectrum: Array2Data<Complex64>,
+            pupil: Pupil,
+            illumination_corrections: Option<Vec<(f64, f64)>>,
+            frame_gains: Option<Vec<f64>>,
+            background: Option<Vec<f64>>,
+            #[serde(default)]
+            algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
+            history: ReconstructionHistory,
+        }
+
+        let representation = Representation::deserialize(deserializer)?;
+        let checkpoint = Self {
+            format_version: representation.format_version,
+            completed_iterations: representation.completed_iterations,
+            object_spectrum: representation
+                .object_spectrum
+                .into_array()
+                .map_err(D::Error::custom)?,
+            pupil: representation.pupil,
+            illumination_corrections: representation.illumination_corrections,
+            frame_gains: representation.frame_gains,
+            background: representation.background,
+            algorithm_auxiliary: representation.algorithm_auxiliary,
+            history: representation.history,
+        };
+        checkpoint.validate().map_err(D::Error::custom)?;
+        Ok(checkpoint)
     }
 }

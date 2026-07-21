@@ -47,7 +47,7 @@ impl Callback for SaveImageEvery {
         if context.iteration.is_multiple_of(self.frequency) {
             if let Some(amplitude) = &context.diagnostics.object_amplitude {
                 save_grayscale(
-                    amplitude,
+                    amplitude.view(),
                     self.directory
                         .join(format!("amplitude_{:05}.png", context.iteration)),
                     false,
@@ -55,7 +55,7 @@ impl Callback for SaveImageEvery {
             }
             if let Some(phase) = &context.diagnostics.object_phase {
                 save_grayscale(
-                    phase,
+                    phase.view(),
                     self.directory
                         .join(format!("phase_{:05}.png", context.iteration)),
                     true,
@@ -102,7 +102,7 @@ impl Callback for SavePupilEvery {
         if context.iteration.is_multiple_of(self.frequency) {
             if let Some(amplitude) = &context.diagnostics.pupil_amplitude {
                 save_grayscale(
-                    amplitude,
+                    amplitude.view(),
                     self.directory
                         .join(format!("pupil_amplitude_{:05}.png", context.iteration)),
                     false,
@@ -110,7 +110,7 @@ impl Callback for SavePupilEvery {
             }
             if let Some(phase) = &context.diagnostics.pupil_phase {
                 save_grayscale(
-                    phase,
+                    phase.view(),
                     self.directory
                         .join(format!("pupil_phase_{:05}.png", context.iteration)),
                     true,
@@ -163,7 +163,7 @@ impl Callback for SaveResidualsEvery {
         {
             for (frame, residual) in images.iter().enumerate() {
                 save_signed_grayscale(
-                    residual,
+                    residual.view(),
                     self.directory.join(format!(
                         "residual_{:05}_frame_{frame:05}.png",
                         context.iteration

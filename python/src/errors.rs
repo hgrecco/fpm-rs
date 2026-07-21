@@ -17,11 +17,16 @@ create_exception!(fpm_rs, SerializationError, FpmError);
 pub(crate) fn to_py_err(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
-        Error::InvalidShape(_) => InvalidShapeError::new_err(message),
+        Error::InvalidShape(_) | Error::ShapeOverflow { .. } | Error::NdarrayShape(_) => {
+            InvalidShapeError::new_err(message)
+        }
         Error::InvalidParameter { .. } => InvalidParameterError::new_err(message),
         Error::InvalidModel(_) => InvalidModelError::new_err(message),
         Error::InvalidMeasurements(_) => InvalidMeasurementsError::new_err(message),
-        Error::LengthMismatch { .. } => LengthMismatchError::new_err(message),
+        Error::LengthMismatch { .. } | Error::ArrayLengthMismatch { .. } => {
+            LengthMismatchError::new_err(message)
+        }
+        Error::NonStandardLayout { .. } => InvalidShapeError::new_err(message),
         Error::FrameOutOfRange { .. } => FrameOutOfRangeError::new_err(message),
         Error::Numerical(_) => NumericalError::new_err(message),
         Error::Unsupported(_) => UnsupportedError::new_err(message),

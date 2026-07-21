@@ -6,61 +6,50 @@ use fpm_rs::{
             compare_complex_fields, compare_complex_fields_masked, radial_fourier_spectrum,
         },
         intensity::{
-            IntensityMetricError, amplitude_nrmse, bias, compare_intensity,
-            compare_intensity_masked, correlation, fitted_gain, intensity_statistics, mae,
-            mean_poisson_deviance, mse, nrmse, poisson_deviance, psnr, relative_l1, rmse, ssim,
+            IntensityMetricError, amplitude_nrmse, bias, compare_intensity, correlation,
+            fitted_gain, mae, mean_poisson_deviance, mse, nrmse, poisson_deviance, psnr,
+            relative_l1, rmse, ssim, stats,
         },
     },
 };
 use numpy::{PyReadonlyArray2, ndarray};
 use pyo3::{prelude::*, types::PyDict};
 
-use crate::{arrays::core_array2, errors::to_py_err};
+use crate::errors::to_py_err;
 
 #[pyfunction]
-fn intensity_statistics_py(
+fn stats_py(
     py: Python<'_>,
     frame: PyReadonlyArray2<'_, f64>,
     saturation_value: Option<f64>,
 ) -> PyResult<Py<PyDict>> {
-    let frame = core_array2(&frame).map_err(to_py_err)?;
+    let frame: Vec<_> = frame.as_array().iter().copied().collect();
     let metrics = py
-        .detach(move || intensity_statistics(frame.as_slice(), saturation_value))
+        .detach(move || stats(&frame, saturation_value))
         .map_err(to_py_err)?;
-    intensity_statistics_to_py(py, &metrics)
+    intensity_stats_to_py(py, &metrics)
 }
 
 #[pyfunction]
-#[pyo3(signature = (reference, candidate, *, mask=None, saturation_value=None))]
+#[pyo3(signature = (reference, estimate, *, valid_mask=None, saturation_value=None))]
 fn compare_intensity_py(
     py: Python<'_>,
     reference: PyReadonlyArray2<'_, f64>,
-    candidate: PyReadonlyArray2<'_, f64>,
-    mask: Option<PyReadonlyArray2<'_, u8>>,
+    estimate: PyReadonlyArray2<'_, f64>,
+    valid_mask: Option<PyReadonlyArray2<'_, bool>>,
     saturation_value: Option<f64>,
 ) -> PyResult<Py<PyDict>> {
-    let reference = core_array2(&reference).map_err(to_py_err)?;
-    let candidate = core_array2(&candidate).map_err(to_py_err)?;
-    if reference.shape() != candidate.shape() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "reference and candidate must have the same shape",
-        ));
-    }
-    let mask = mask
-        .map(|mask| core_array2(&mask))
-        .transpose()
-        .map_err(to_py_err)?;
+    let (reference, estimate, valid_mask) = scalar_metric_inputs(reference, estimate, valid_mask);
     let metrics = py
-        .detach(move || match mask.as_ref() {
-            Some(mask) => compare_intensity_masked(
-                reference.as_slice(),
-                candidate.as_slice(),
-                Some(mask.as_slice()),
+        .detach(move || {
+            compare_intensity(
+                reference.view(),
+                estimate.view(),
+                valid_mask.as_ref().map(|mask| mask.view()),
                 saturation_value,
-            ),
-            None => compare_intensity(reference.as_slice(), candidate.as_slice(), saturation_value),
+            )
         })
-        .map_err(to_py_err)?;
+        .map_err(intensity_metric_to_py_err)?;
     intensity_comparison_to_py(py, &metrics)
 }
 
@@ -68,19 +57,19 @@ macro_rules! scalar_intensity_metric {
     ($name:ident, $metric:path, $doc:literal) => {
         #[doc = $doc]
         #[pyfunction]
-        #[pyo3(signature = (reference, candidate, *, valid_mask=None))]
+        #[pyo3(signature = (reference, estimate, *, valid_mask=None))]
         fn $name(
             py: Python<'_>,
             reference: PyReadonlyArray2<'_, f64>,
-            candidate: PyReadonlyArray2<'_, f64>,
+            estimate: PyReadonlyArray2<'_, f64>,
             valid_mask: Option<PyReadonlyArray2<'_, bool>>,
         ) -> PyResult<f64> {
-            let (reference, candidate, valid_mask) =
-                scalar_metric_inputs(reference, candidate, valid_mask);
+            let (reference, estimate, valid_mask) =
+                scalar_metric_inputs(reference, estimate, valid_mask);
             py.detach(move || {
                 $metric(
                     reference.view(),
-                    candidate.view(),
+                    estimate.view(),
                     valid_mask.as_ref().map(|mask| mask.view()),
                 )
             })
@@ -92,7 +81,7 @@ macro_rules! scalar_intensity_metric {
 scalar_intensity_metric!(
     bias_py,
     bias,
-    "Return the mean signed residual, candidate minus reference."
+    "Return the mean signed residual, estimate minus reference."
 );
 scalar_intensity_metric!(mae_py, mae, "Return mean absolute error.");
 scalar_intensity_metric!(mse_py, mse, "Return mean squared error.");
@@ -120,24 +109,24 @@ scalar_intensity_metric!(
 scalar_intensity_metric!(
     fitted_gain_py,
     fitted_gain,
-    "Fit gain in candidate approximately equal to gain times reference."
+    "Fit gain in estimate approximately equal to gain times reference."
 );
 
 #[pyfunction]
-#[pyo3(signature = (reference, candidate, *, valid_mask=None, data_range))]
+#[pyo3(signature = (reference, estimate, *, valid_mask=None, data_range))]
 /// Return PSNR in dB using an explicit positive intensity range.
 fn psnr_py(
     py: Python<'_>,
     reference: PyReadonlyArray2<'_, f64>,
-    candidate: PyReadonlyArray2<'_, f64>,
+    estimate: PyReadonlyArray2<'_, f64>,
     valid_mask: Option<PyReadonlyArray2<'_, bool>>,
     data_range: f64,
 ) -> PyResult<f64> {
-    let (reference, candidate, valid_mask) = scalar_metric_inputs(reference, candidate, valid_mask);
+    let (reference, estimate, valid_mask) = scalar_metric_inputs(reference, estimate, valid_mask);
     py.detach(move || {
         psnr(
             reference.view(),
-            candidate.view(),
+            estimate.view(),
             valid_mask.as_ref().map(|mask| mask.view()),
             data_range,
         )
@@ -146,20 +135,20 @@ fn psnr_py(
 }
 
 #[pyfunction]
-#[pyo3(signature = (reference, candidate, *, valid_mask=None, data_range))]
+#[pyo3(signature = (reference, estimate, *, valid_mask=None, data_range))]
 /// Return canonical single-scale SSIM with an 11 by 11 Gaussian window.
 fn ssim_py(
     py: Python<'_>,
     reference: PyReadonlyArray2<'_, f64>,
-    candidate: PyReadonlyArray2<'_, f64>,
+    estimate: PyReadonlyArray2<'_, f64>,
     valid_mask: Option<PyReadonlyArray2<'_, bool>>,
     data_range: f64,
 ) -> PyResult<f64> {
-    let (reference, candidate, valid_mask) = scalar_metric_inputs(reference, candidate, valid_mask);
+    let (reference, estimate, valid_mask) = scalar_metric_inputs(reference, estimate, valid_mask);
     py.detach(move || {
         ssim(
             reference.view(),
-            candidate.view(),
+            estimate.view(),
             valid_mask.as_ref().map(|mask| mask.view()),
             data_range,
         )
@@ -168,20 +157,20 @@ fn ssim_py(
 }
 
 #[pyfunction]
-#[pyo3(signature = (reference, candidate, *, valid_mask=None, epsilon))]
-/// Return summed Poisson deviance with a positive candidate-intensity floor.
+#[pyo3(signature = (reference, estimate, *, valid_mask=None, epsilon))]
+/// Return summed Poisson deviance with a positive estimate-intensity floor.
 fn poisson_deviance_py(
     py: Python<'_>,
     reference: PyReadonlyArray2<'_, f64>,
-    candidate: PyReadonlyArray2<'_, f64>,
+    estimate: PyReadonlyArray2<'_, f64>,
     valid_mask: Option<PyReadonlyArray2<'_, bool>>,
     epsilon: f64,
 ) -> PyResult<f64> {
-    let (reference, candidate, valid_mask) = scalar_metric_inputs(reference, candidate, valid_mask);
+    let (reference, estimate, valid_mask) = scalar_metric_inputs(reference, estimate, valid_mask);
     py.detach(move || {
         poisson_deviance(
             reference.view(),
-            candidate.view(),
+            estimate.view(),
             valid_mask.as_ref().map(|mask| mask.view()),
             epsilon,
         )
@@ -190,20 +179,20 @@ fn poisson_deviance_py(
 }
 
 #[pyfunction]
-#[pyo3(signature = (reference, candidate, *, valid_mask=None, epsilon))]
-/// Return mean Poisson deviance with a positive candidate-intensity floor.
+#[pyo3(signature = (reference, estimate, *, valid_mask=None, epsilon))]
+/// Return mean Poisson deviance with a positive estimate-intensity floor.
 fn mean_poisson_deviance_py(
     py: Python<'_>,
     reference: PyReadonlyArray2<'_, f64>,
-    candidate: PyReadonlyArray2<'_, f64>,
+    estimate: PyReadonlyArray2<'_, f64>,
     valid_mask: Option<PyReadonlyArray2<'_, bool>>,
     epsilon: f64,
 ) -> PyResult<f64> {
-    let (reference, candidate, valid_mask) = scalar_metric_inputs(reference, candidate, valid_mask);
+    let (reference, estimate, valid_mask) = scalar_metric_inputs(reference, estimate, valid_mask);
     py.detach(move || {
         mean_poisson_deviance(
             reference.view(),
-            candidate.view(),
+            estimate.view(),
             valid_mask.as_ref().map(|mask| mask.view()),
             epsilon,
         )
@@ -219,16 +208,15 @@ fn compare_complex_fields_py(
     candidate: PyReadonlyArray2<'_, Complex64>,
     valid_mask: Option<PyReadonlyArray2<'_, u8>>,
 ) -> PyResult<Py<PyDict>> {
-    let reference = core_array2(&reference).map_err(to_py_err)?;
-    let candidate = core_array2(&candidate).map_err(to_py_err)?;
-    let valid_mask = valid_mask
-        .map(|mask| core_array2(&mask))
-        .transpose()
-        .map_err(to_py_err)?;
+    let reference = reference.as_array().to_owned();
+    let candidate = candidate.as_array().to_owned();
+    let valid_mask = valid_mask.map(|mask| mask.as_array().to_owned());
     let metrics = py
         .detach(move || match valid_mask.as_ref() {
-            Some(mask) => compare_complex_fields_masked(&reference, &candidate, Some(mask)),
-            None => compare_complex_fields(&reference, &candidate),
+            Some(mask) => {
+                compare_complex_fields_masked(reference.view(), candidate.view(), Some(mask.view()))
+            }
+            None => compare_complex_fields(reference.view(), candidate.view()),
         })
         .map_err(to_py_err)?;
     complex_field_to_py(py, &metrics)
@@ -239,9 +227,9 @@ fn radial_fourier_spectrum_py(
     py: Python<'_>,
     field: PyReadonlyArray2<'_, Complex64>,
 ) -> PyResult<Py<PyDict>> {
-    let field = core_array2(&field).map_err(to_py_err)?;
+    let field = field.as_array().to_owned();
     let spectrum = py
-        .detach(move || radial_fourier_spectrum(&field))
+        .detach(move || radial_fourier_spectrum(field.view()))
         .map_err(to_py_err)?;
     let output = PyDict::new(py);
     output.set_item("radius_px", spectrum.radius_px)?;
@@ -256,9 +244,9 @@ fn intensity_loss(
     candidate: PyReadonlyArray2<'_, f64>,
     loss_type: &str,
 ) -> PyResult<f64> {
-    let reference = core_array2(&reference).map_err(to_py_err)?;
-    let candidate = core_array2(&candidate).map_err(to_py_err)?;
-    if reference.shape() != candidate.shape() {
+    let reference: Vec<_> = reference.as_array().iter().copied().collect();
+    let candidate: Vec<_> = candidate.as_array().iter().copied().collect();
+    if reference.len() != candidate.len() {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "reference and candidate must have the same shape",
         ));
@@ -270,12 +258,12 @@ fn intensity_loss(
         "huber_amplitude" => LossType::HuberAmplitude,
         _ => return Err(pyo3::exceptions::PyValueError::new_err("unknown loss_type")),
     };
-    loss(candidate.as_slice(), reference.as_slice(), loss_type).map_err(to_py_err)
+    loss(&candidate, &reference, loss_type).map_err(to_py_err)
 }
 
 fn scalar_metric_inputs(
     reference: PyReadonlyArray2<'_, f64>,
-    candidate: PyReadonlyArray2<'_, f64>,
+    estimate: PyReadonlyArray2<'_, f64>,
     valid_mask: Option<PyReadonlyArray2<'_, bool>>,
 ) -> (
     ndarray::Array2<f64>,
@@ -284,7 +272,7 @@ fn scalar_metric_inputs(
 ) {
     (
         reference.as_array().to_owned(),
-        candidate.as_array().to_owned(),
+        estimate.as_array().to_owned(),
         valid_mask.map(|mask| mask.as_array().to_owned()),
     )
 }
@@ -293,9 +281,9 @@ fn intensity_metric_to_py_err(error: IntensityMetricError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(error.to_string())
 }
 
-fn intensity_statistics_to_py(
+fn intensity_stats_to_py(
     py: Python<'_>,
-    value: &fpm_rs::metrics::intensity::IntensityStatistics,
+    value: &fpm_rs::metrics::intensity::IntensityStats,
 ) -> PyResult<Py<PyDict>> {
     let output = PyDict::new(py);
     output.set_item("mean", value.mean)?;
@@ -314,7 +302,7 @@ fn intensity_comparison_to_py(
 ) -> PyResult<Py<PyDict>> {
     let output = PyDict::new(py);
     output.set_item("reference_sum", value.reference_sum)?;
-    output.set_item("candidate_sum", value.candidate_sum)?;
+    output.set_item("estimate_sum", value.estimate_sum)?;
     output.set_item("residual_l1", value.residual_l1)?;
     output.set_item("residual_l2", value.residual_l2)?;
     output.set_item("residual_mean", value.residual_mean)?;
@@ -342,7 +330,7 @@ fn complex_field_to_py(
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(intensity_statistics_py, module)?)?;
+    module.add_function(wrap_pyfunction!(stats_py, module)?)?;
     module.add_function(wrap_pyfunction!(compare_intensity_py, module)?)?;
     module.add_function(wrap_pyfunction!(bias_py, module)?)?;
     module.add_function(wrap_pyfunction!(mae_py, module)?)?;

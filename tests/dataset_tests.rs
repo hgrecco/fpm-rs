@@ -1,13 +1,14 @@
 use std::fs;
 
 use fpm_rs::{
-    Array2, Complex64, Result,
+    Complex64, Result,
     configuration::{ExperimentDescription, SimulationConfiguration},
     datasets::{Dataset, DatasetLoader, DatasetManifest, FrameSelector},
     experiment::{Illumination, KVector, Optics},
     measurements::{FrameSpec, MeasurementSpec, MeasurementStack},
     model::ReconstructionShape,
 };
+use ndarray::Array2;
 use tempfile::TempDir;
 
 #[test]
@@ -93,7 +94,7 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
         ReconstructionShape::Exact((8, 8)),
     )?
     .save(derived.join("configuration.json"))?;
-    let ground_truth = Array2::from_vec(
+    let ground_truth = Array2::from_shape_vec(
         (8, 8),
         (0..64)
             .map(|index| Complex64::new(1.0 + index as f64 / 100.0, 0.1))
@@ -101,7 +102,11 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
     )?;
     serde_json::to_writer_pretty(
         fs::File::create(derived.join("ground-truth.json"))?,
-        &ground_truth,
+        &serde_json::json!({
+            "height": 8,
+            "width": 8,
+            "data": ground_truth.iter().copied().collect::<Vec<_>>(),
+        }),
     )?;
     let mut mask_values = vec![0_u8; 64];
     for row in 2..6 {
@@ -109,8 +114,15 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
             mask_values[row * 8 + column] = 1;
         }
     }
-    let mask = Array2::from_vec((8, 8), mask_values)?;
-    serde_json::to_writer_pretty(fs::File::create(derived.join("mask.json"))?, &mask)?;
+    let mask = Array2::from_shape_vec((8, 8), mask_values)?;
+    serde_json::to_writer_pretty(
+        fs::File::create(derived.join("mask.json"))?,
+        &serde_json::json!({
+            "height": 8,
+            "width": 8,
+            "data": mask.iter().copied().collect::<Vec<_>>(),
+        }),
+    )?;
     let manifest = DatasetManifest {
         format_version: 1,
         measurement_manifest: "measurements.json".into(),
@@ -138,9 +150,8 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
         dataset
             .ground_truth_object()
             .unwrap()
-            .as_slice()
             .iter()
-            .zip(ground_truth.as_slice())
+            .zip(ground_truth.iter())
             .all(|(loaded, expected)| (*loaded - *expected).norm() < 1e-14)
     );
     assert_eq!(dataset.valid_object_mask().unwrap(), &mask);
@@ -148,13 +159,12 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
     assert_eq!(dataset.provenance()["license"], "CC0");
 
     let subset = dataset.subset().crop_pixels(1, 1, 2, 2)?.build()?;
-    assert_eq!(subset.ground_truth_object().unwrap().shape(), (4, 4));
-    assert_eq!(subset.valid_object_mask().unwrap().shape(), (4, 4));
+    assert_eq!(subset.ground_truth_object().unwrap().dim(), (4, 4));
+    assert_eq!(subset.valid_object_mask().unwrap().dim(), (4, 4));
     assert!(
         subset
             .valid_object_mask()
             .unwrap()
-            .as_slice()
             .iter()
             .all(|&value| value == 1)
     );
@@ -162,18 +172,30 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
 
     serde_json::to_writer_pretty(
         fs::File::create(derived.join("ground-truth.json"))?,
-        &Array2::filled((4, 4), Complex64::new(1.0, 0.0))?,
+        &serde_json::json!({
+            "height": 4,
+            "width": 4,
+            "data": vec![Complex64::new(1.0, 0.0); 16],
+        }),
     )?;
     let error = load().unwrap_err();
     assert!(error.to_string().contains("ground-truth shape"));
 
     serde_json::to_writer_pretty(
         fs::File::create(derived.join("ground-truth.json"))?,
-        &ground_truth,
+        &serde_json::json!({
+            "height": 8,
+            "width": 8,
+            "data": ground_truth.iter().copied().collect::<Vec<_>>(),
+        }),
     )?;
     serde_json::to_writer_pretty(
         fs::File::create(derived.join("mask.json"))?,
-        &Array2::filled((4, 4), 1_u8)?,
+        &serde_json::json!({
+            "height": 4,
+            "width": 4,
+            "data": vec![1_u8; 16],
+        }),
     )?;
     let error = load().unwrap_err();
     assert!(error.to_string().contains("valid-object mask shape"));
@@ -226,7 +248,7 @@ fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
     assert_eq!(
         subset
             .measurements()
-            .frame_metadata
+            .frame_metadata()
             .iter()
             .map(|metadata| metadata.original_frame_index)
             .collect::<Vec<_>>(),
@@ -235,7 +257,7 @@ fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
     assert_eq!(
         subset
             .measurements()
-            .frame_metadata
+            .frame_metadata()
             .iter()
             .map(|metadata| metadata.original_illumination_index)
             .collect::<Vec<_>>(),
@@ -291,11 +313,8 @@ fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
         .crop_pixels(1, 1, 2, 2)?
         .build()?;
     let ordinary_model = &ordinary_subset.configuration().compiled_models.true_model;
-    assert_eq!(ordinary_model.frame_gains.as_deref(), Some(&[3.0, 1.0][..]));
-    assert_eq!(
-        ordinary_model.background.as_deref(),
-        Some(&[9.0, 9.0, 9.0, 9.0][..])
-    );
+    assert_eq!(ordinary_model.frame_gains(), Some(&[3.0, 1.0][..]));
+    assert_eq!(ordinary_model.background(), Some(&[9.0, 9.0, 9.0, 9.0][..]));
     ordinary_subset.reconstruction_problem()?;
 
     let multiplexing = vec![
@@ -328,22 +347,19 @@ fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
     assert_eq!(multiplexed_model.source_count(), 3);
     assert_eq!(multiplexed_model.frame_count(), 2);
     assert_eq!(
-        multiplexed_model.multiplexing_matrix.as_deref(),
+        multiplexed_model.multiplexing_matrix().map(Vec::as_slice),
         Some(&multiplexing[1..])
     );
-    assert_eq!(
-        multiplexed_model.frame_gains.as_deref(),
-        Some(&[1.2, 1.3][..])
-    );
+    assert_eq!(multiplexed_model.frame_gains(), Some(&[1.2, 1.3][..]));
     let expected_background: Vec<f64> = [vec![11.0; 16], vec![12.0; 16]].concat();
     assert_eq!(
-        multiplexed_model.background.as_deref(),
+        multiplexed_model.background(),
         Some(expected_background.as_slice())
     );
     assert!(
         multiplexed_subset
             .measurements()
-            .frame_metadata
+            .frame_metadata()
             .iter()
             .all(|metadata| metadata.illumination_index.is_none())
     );

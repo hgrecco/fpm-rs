@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         )?;
     result.save_amplitude("output/amplitude.png")?;
     result.save_phase("output/phase.png")?;
-    let metrics = evaluate_reconstruction(&result, &truth, None, None)?;
+    let metrics = evaluate_reconstruction(&result, truth.view(), None, None)?;
     println!(
         "final loss {:.4e}, amplitude RMSE {:.4e}",
         result.history.final_loss().unwrap_or(f64::NAN),

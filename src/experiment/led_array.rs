@@ -154,7 +154,15 @@ impl IlluminationSource for LEDArray {
         }
         let wavenumber = std::f64::consts::TAU * optics.medium_index / wavelength;
         let (sin_rotation, cos_rotation) = self.rotation_radians.sin_cos();
-        let mut natural = Vec::with_capacity(self.grid_shape.0 * self.grid_shape.1);
+        let count = self
+            .grid_shape
+            .0
+            .checked_mul(self.grid_shape.1)
+            .ok_or_else(|| Error::InvalidParameter {
+                name: "grid_shape",
+                reason: "LED count overflows".into(),
+            })?;
+        let mut natural = Vec::with_capacity(count);
         for row in 0..self.grid_shape.0 {
             for column in 0..self.grid_shape.1 {
                 let x = (column as f64 - self.center.0) * self.pitch;

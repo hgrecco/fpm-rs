@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         .pupil_step(0.05)
         .recover_pupil(true)
         .run(&problem)?;
-    let metrics = evaluate_reconstruction(&result, &truth, Some(&true_model), None)?;
+    let metrics = evaluate_reconstruction(&result, truth.view(), Some(&true_model), None)?;
     println!(
         "pupil phase RMSE: {:?}",
         metrics.pupil.map(|value| value.phase_rmse)

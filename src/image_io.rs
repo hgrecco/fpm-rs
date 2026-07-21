@@ -1,8 +1,9 @@
 use std::{fs::File, io::BufReader, path::Path};
 
 use image::{ColorType, DynamicImage, ImageDecoder, ImageReader};
+use ndarray::Array2;
 
-use crate::{Array2, Result, error::Error};
+use crate::{Result, array_layout::checked_len_2d, error::Error};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum GrayscaleScaling {
@@ -41,7 +42,7 @@ pub(crate) fn load_grayscale(
                 GrayscaleScaling::NativeCounts => 1.0,
                 GrayscaleScaling::Unit => 1.0 / u8::MAX as f64,
             };
-            Array2::from_vec(
+            array_from_values(
                 shape,
                 buffer
                     .into_raw()
@@ -56,7 +57,7 @@ pub(crate) fn load_grayscale(
                 GrayscaleScaling::NativeCounts => 1.0,
                 GrayscaleScaling::Unit => 1.0 / u16::MAX as f64,
             };
-            Array2::from_vec(
+            array_from_values(
                 shape,
                 buffer
                     .into_raw()
@@ -124,7 +125,10 @@ pub(crate) fn load_grayscale_tiff_pages(
                 });
             }
         };
-        pages.push(Array2::from_vec((height as usize, width as usize), values)?);
+        pages.push(array_from_values(
+            (height as usize, width as usize),
+            values,
+        )?);
         if !decoder.more_images() {
             break;
         }
@@ -164,7 +168,7 @@ pub(crate) fn load_grayscale_tiff_page(
         validate_grayscale_tiff_color(path, decoder.colortype()?)?;
         if current_page == page_index {
             let values = decode_grayscale_tiff_values(path, decoder.read_image()?, scaling)?;
-            return Array2::from_vec((height as usize, width as usize), values);
+            return array_from_values((height as usize, width as usize), values);
         }
         if !decoder.more_images() {
             return Err(Error::InvalidMeasurements(format!(
@@ -175,6 +179,18 @@ pub(crate) fn load_grayscale_tiff_page(
         decoder.next_image()?;
         current_page += 1;
     }
+}
+
+fn array_from_values(shape: (usize, usize), values: Vec<f64>) -> Result<Array2<f64>> {
+    let expected = checked_len_2d(shape)?;
+    if values.len() != expected {
+        return Err(Error::LengthMismatch {
+            actual: values.len(),
+            expected,
+            shape,
+        });
+    }
+    Ok(Array2::from_shape_vec(shape, values)?)
 }
 
 fn validate_grayscale_tiff_color(path: &Path, color_type: tiff::ColorType) -> Result<()> {

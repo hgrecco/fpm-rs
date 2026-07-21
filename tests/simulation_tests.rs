@@ -8,6 +8,7 @@ use fpm_rs::{
     model::{ForwardModel, ImagePlaneModel, ReconstructionShape},
 };
 use image::GrayImage;
+use ndarray::{Array2, ShapeBuilder};
 use rand::{SeedableRng, rngs::StdRng};
 
 #[test]
@@ -20,11 +21,14 @@ fn ideal_simulation_uses_shared_forward_model() {
         .simulate()
         .unwrap();
     assert_eq!(simulation.measurements.frame_count(), model.frame_count());
-    assert_eq!(simulation.measurements.image_shape(), model.image_shape);
-    assert_eq!(simulation.true_model.pupil.values, model.pupil.values);
+    assert_eq!(simulation.measurements.image_shape(), model.image_shape());
     assert_eq!(
-        simulation.reconstruction_model.pupil.values,
-        model.pupil.values
+        simulation.true_model.pupil().values(),
+        model.pupil().values()
+    );
+    assert_eq!(
+        simulation.reconstruction_model.pupil().values(),
+        model.pupil().values()
     );
     assert!(
         simulation
@@ -33,6 +37,13 @@ fn ideal_simulation_uses_shared_forward_model() {
             .iter()
             .all(|value| value.is_finite() && *value >= 0.0)
     );
+}
+
+#[test]
+fn synthetic_object_rejects_nonstandard_owned_fields_without_copying() {
+    let field =
+        Array2::from_shape_vec((4, 4).f(), vec![fpm_rs::Complex64::new(1.0, 0.0); 16]).unwrap();
+    assert!(SyntheticObject::new(field).is_err());
 }
 
 #[test]
@@ -280,11 +291,11 @@ fn illumination_mismatch_keeps_true_and_reconstruction_models_distinct() {
         .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
         .simulate()
         .unwrap();
-    assert_ne!(true_model.k_vectors, reconstruction_model.k_vectors);
-    assert_eq!(simulation.true_model.k_vectors, true_model.k_vectors);
+    assert_ne!(true_model.k_vectors(), reconstruction_model.k_vectors());
+    assert_eq!(simulation.true_model.k_vectors(), true_model.k_vectors());
     assert_eq!(
-        simulation.reconstruction_model.k_vectors,
-        reconstruction_model.k_vectors
+        simulation.reconstruction_model.k_vectors(),
+        reconstruction_model.k_vectors()
     );
     assert!(simulation.illumination_acquisition_errors.is_none());
 }
@@ -332,22 +343,30 @@ fn pupil_mismatch_comes_from_the_provided_models() {
         .simulate()
         .unwrap();
 
-    assert_ne!(true_model.pupil.values, reconstruction_model.pupil.values);
-    assert_eq!(simulation.true_model.pupil.values, true_model.pupil.values);
+    assert_ne!(
+        true_model.pupil().values(),
+        reconstruction_model.pupil().values()
+    );
     assert_eq!(
-        simulation.reconstruction_model.pupil.values,
-        reconstruction_model.pupil.values
+        simulation.true_model.pupil().values(),
+        true_model.pupil().values()
+    );
+    assert_eq!(
+        simulation.reconstruction_model.pupil().values(),
+        reconstruction_model.pupil().values()
     );
 }
 
 #[test]
 fn source_weights_encode_angle_dependent_transmission() {
-    let mut reconstruction_model = common::direct_model().unwrap();
-    reconstruction_model.frame_gains = Some(vec![2.0; reconstruction_model.frame_count()]);
-    reconstruction_model.validate().unwrap();
-    let mut true_model = reconstruction_model.clone();
-    true_model.frame_gains = Some(vec![1.0, 1.0, 2.0, 1.0, 1.0]);
-    true_model.validate().unwrap();
+    let reconstruction_model = common::direct_model()
+        .unwrap()
+        .with_frame_gains(Some(vec![2.0; 5]))
+        .unwrap();
+    let true_model = reconstruction_model
+        .clone()
+        .with_frame_gains(Some(vec![1.0, 1.0, 2.0, 1.0, 1.0]))
+        .unwrap();
     let object = SyntheticObject::mixed_test_pattern((16, 16)).unwrap();
     let baseline = Simulator::ideal(reconstruction_model.clone())
         .object(object.clone())
@@ -358,7 +377,7 @@ fn source_weights_encode_angle_dependent_transmission() {
         .object(object)
         .simulate()
         .unwrap();
-    let true_gains = ordinary.true_model.frame_gains.as_ref().unwrap();
+    let true_gains = ordinary.true_model.frame_gains().unwrap();
     assert!((true_gains[2] - 2.0).abs() < 1e-14);
     for frame in [0, 1, 3, 4] {
         assert!((true_gains[frame] - 1.0).abs() < 1e-14);
@@ -373,8 +392,8 @@ fn source_weights_encode_angle_dependent_transmission() {
         }
     }
     assert_eq!(
-        ordinary.reconstruction_model.frame_gains,
-        Some(vec![2.0; 5])
+        ordinary.reconstruction_model.frame_gains(),
+        Some(&vec![2.0; 5][..])
     );
 
     let reconstruction_model = common::direct_model()
@@ -390,14 +409,14 @@ fn source_weights_encode_angle_dependent_transmission() {
         .object(SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap())
         .simulate()
         .unwrap();
-    let true_matrix = multiplexed.true_model.multiplexing_matrix.as_ref().unwrap();
+    let true_matrix = multiplexed.true_model.multiplexing_matrix().unwrap();
     assert!((true_matrix[0][0].1 - 0.5).abs() < 1e-14);
     assert!((true_matrix[0][1].1 - 1.0).abs() < 1e-14);
     assert!((true_matrix[1][0].1 - 0.125).abs() < 1e-14);
     assert!((true_matrix[1][1].1 - 0.375).abs() < 1e-14);
     assert_eq!(
-        multiplexed.reconstruction_model.multiplexing_matrix,
-        Some(vec![vec![(0, 1.0), (2, 1.0)], vec![(1, 0.25), (4, 0.75)]])
+        multiplexed.reconstruction_model.multiplexing_matrix(),
+        Some(&vec![vec![(0, 1.0), (2, 1.0)], vec![(1, 0.25), (4, 0.75)]])
     );
 }
 
@@ -439,19 +458,23 @@ fn source_permutation_reorders_true_sources_only() {
         .unwrap();
     for (frame, &source) in order.iter().enumerate() {
         assert_eq!(
-            simulation.true_model.k_vectors[frame],
-            model.k_vectors[source]
+            simulation.true_model.k_vectors()[frame],
+            model.k_vectors()[source]
         );
     }
-    assert_eq!(simulation.reconstruction_model.k_vectors, model.k_vectors);
+    assert_eq!(
+        simulation.reconstruction_model.k_vectors(),
+        model.k_vectors()
+    );
     assert!(simulation.illumination_acquisition_errors.is_some());
 }
 
 #[test]
 fn frame_gain_variation_multiplies_existing_source_gains() {
-    let mut weighted_model = common::direct_model().unwrap();
-    weighted_model.frame_gains = Some(vec![2.0; weighted_model.frame_count()]);
-    weighted_model.validate().unwrap();
+    let weighted_model = common::direct_model()
+        .unwrap()
+        .with_frame_gains(Some(vec![2.0; 5]))
+        .unwrap();
     let unweighted_model = common::direct_model().unwrap();
     let object = SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap();
     let errors = IlluminationAcquisitionErrors::new().frame_gain_relative_std(0.2);
@@ -469,14 +492,14 @@ fn frame_gain_variation_multiplies_existing_source_gains() {
         .simulate()
         .unwrap();
 
-    let weighted_gains = weighted.true_model.frame_gains.as_ref().unwrap();
-    let unweighted_gains = unweighted.true_model.frame_gains.as_ref().unwrap();
+    let weighted_gains = weighted.true_model.frame_gains().unwrap();
+    let unweighted_gains = unweighted.true_model.frame_gains().unwrap();
     for (&weighted_gain, &unweighted_gain) in weighted_gains.iter().zip(unweighted_gains) {
         assert!((weighted_gain - 2.0 * unweighted_gain).abs() < 1e-12);
     }
     assert_eq!(
-        weighted.reconstruction_model.frame_gains,
-        Some(vec![2.0; weighted.reconstruction_model.frame_count()])
+        weighted.reconstruction_model.frame_gains(),
+        Some(&vec![2.0; weighted.reconstruction_model.frame_count()][..])
     );
 }
 
@@ -537,9 +560,10 @@ fn camera_applies_dark_current_and_fixed_bad_pixels() {
 
 #[test]
 fn optical_background_remains_in_the_model_and_detector_offset_stays_in_the_camera() {
-    let mut true_model = common::direct_model().unwrap();
-    true_model.background = Some(vec![2.0; 64]);
-    true_model.validate().unwrap();
+    let true_model = common::direct_model()
+        .unwrap()
+        .with_background(Some(vec![2.0; 64]))
+        .unwrap();
     let reconstruction_model = true_model.clone();
     let object = SyntheticObject::constant((16, 16), 1.0, 0.0).unwrap();
     let optical = Simulator::ideal(true_model.clone())
@@ -565,38 +589,25 @@ fn optical_background_remains_in_the_model_and_detector_offset_stays_in_the_came
     {
         assert!((counts - intensity - 8.0).abs() < 1e-12);
     }
-    assert_eq!(measured.true_model.background, Some(vec![2.0; 64]));
+    assert_eq!(measured.true_model.background(), Some(&vec![2.0; 64][..]));
     assert_eq!(
-        measured.reconstruction_model.background,
-        Some(vec![10.0; 64])
+        measured.reconstruction_model.background(),
+        Some(&vec![10.0; 64][..])
     );
 }
 
 #[test]
 fn mixed_and_biological_objects_are_finite_and_reproducible() {
     let mixed = SyntheticObject::mixed_test_pattern((32, 32)).unwrap();
-    assert!(
-        mixed
-            .field
-            .as_slice()
-            .iter()
-            .any(|value| value.norm() < 0.9)
-    );
-    assert!(
-        mixed
-            .field
-            .as_slice()
-            .iter()
-            .any(|value| value.arg().abs() > 0.1)
-    );
+    assert!(mixed.field().iter().any(|value| value.norm() < 0.9));
+    assert!(mixed.field().iter().any(|value| value.arg().abs() > 0.1));
 
     let first = SyntheticObject::biological_like((32, 32), 12, 99).unwrap();
     let second = SyntheticObject::biological_like((32, 32), 12, 99).unwrap();
-    assert_eq!(first.field, second.field);
+    assert_eq!(first.field(), second.field());
     assert!(
         first
-            .field
-            .as_slice()
+            .field()
             .iter()
             .all(|value| { value.re.is_finite() && value.im.is_finite() && value.norm() >= 0.1 })
     );
@@ -638,12 +649,12 @@ fn multiplexed_simulation_is_an_incoherent_weighted_intensity_sum() {
     assert!(
         forward
             .forward_field(
-                &fpm_rs::Array2::filled(
-                    problem.model.reconstruction_shape,
+                Array2::from_elem(
+                    problem.model.reconstruction_shape(),
                     fpm_rs::Complex64::default(),
                 )
-                .unwrap(),
-                &problem.model.pupil,
+                .view(),
+                problem.model.pupil(),
                 0,
             )
             .is_err()
@@ -669,7 +680,7 @@ fn synthetic_object_import_maps_normalized_amplitude_and_phase() {
         std::f64::consts::PI,
     )
     .unwrap();
-    assert!(object.field.as_slice()[0].norm() < 1e-12);
-    assert!((object.field.as_slice()[1].norm() - 1.0).abs() < 1e-12);
-    assert!((object.field.as_slice()[1].arg().abs() - std::f64::consts::PI).abs() < 1e-12);
+    assert!(object.field()[(0, 0)].norm() < 1e-12);
+    assert!((object.field()[(0, 1)].norm() - 1.0).abs() < 1e-12);
+    assert!((object.field()[(0, 1)].arg().abs() - std::f64::consts::PI).abs() < 1e-12);
 }

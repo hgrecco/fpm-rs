@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
-use crate::Array2;
+use ndarray::Array2;
 
 use super::{FrameDiagnosticRecord, RawFrameStatisticsRecord};
 

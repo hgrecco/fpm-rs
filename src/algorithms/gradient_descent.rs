@@ -4,6 +4,7 @@ use std::thread;
 use crate::{
     Result,
     algorithms::objective::{LossType, point_loss},
+    array_layout::checked_len_2d,
     backend::FftDirection,
     diagnostics::StepDiagnostics,
     error::Error,
@@ -274,7 +275,7 @@ impl ReconstructionAlgorithm for GradientDescent {
         }
         let model = &problem.model;
         let shape = model.image_shape;
-        let image_len = shape.0 * shape.1;
+        let image_len = checked_len_2d(shape)?;
         let maximum_pupil_power = state
             .pupil
             .values
@@ -453,7 +454,7 @@ impl ReconstructionAlgorithm for GradientDescent {
             let step = self.object_step / active_frames as f64;
             for (object, &gradient) in state
                 .object_spectrum
-                .as_mut_slice()
+                .as_slice_mut()
                 .iter_mut()
                 .zip(&state.scratch.object_gradient)
             {
@@ -464,7 +465,7 @@ impl ReconstructionAlgorithm for GradientDescent {
                 for (pupil, &gradient) in state
                     .pupil
                     .values
-                    .as_mut_slice()
+                    .as_slice_mut()
                     .iter_mut()
                     .zip(&state.scratch.pupil_gradient)
                 {
@@ -488,7 +489,7 @@ impl ReconstructionAlgorithm for GradientDescent {
         }
         if self.recover_pupil && self.pupil_smoothing_weight > 0.0 {
             apply_quadratic_smoothing_step(
-                state.pupil.values.as_mut_slice(),
+                state.pupil.values.as_slice_mut(),
                 model.image_shape,
                 batch_fraction * self.pupil_smoothing_weight,
                 &mut state.scratch.pupil_gradient,
@@ -584,13 +585,13 @@ impl GradientDescent {
                         for &frame in frames {
                             local_state
                                 .object_spectrum
-                                .as_mut_slice()
+                                .as_slice_mut()
                                 .copy_from_slice(base_state.object_spectrum.as_slice());
                             if self.recover_pupil {
                                 local_state
                                     .pupil
                                     .values
-                                    .as_mut_slice()
+                                    .as_slice_mut()
                                     .copy_from_slice(base_state.pupil.values.as_slice());
                             }
                             if self.recover_illumination {
@@ -711,7 +712,7 @@ impl GradientDescent {
             let normalization = active_frames as f64;
             for (object, &sum) in state
                 .object_spectrum
-                .as_mut_slice()
+                .as_slice_mut()
                 .iter_mut()
                 .zip(&state.scratch.object_gradient)
             {
@@ -721,7 +722,7 @@ impl GradientDescent {
                 for (pupil, &sum) in state
                     .pupil
                     .values
-                    .as_mut_slice()
+                    .as_slice_mut()
                     .iter_mut()
                     .zip(&state.scratch.pupil_gradient)
                 {
@@ -747,7 +748,7 @@ impl GradientDescent {
         }
         if self.recover_pupil && self.pupil_smoothing_weight > 0.0 {
             apply_quadratic_smoothing_step(
-                state.pupil.values.as_mut_slice(),
+                state.pupil.values.as_slice_mut(),
                 model.image_shape,
                 batch_fraction * self.pupil_smoothing_weight,
                 &mut state.scratch.pupil_gradient,
@@ -879,7 +880,7 @@ fn apply_object_tv(
     )?;
     fftshift_copy(
         &state.scratch.regularization_field,
-        state.object_spectrum.as_mut_slice(),
+        state.object_spectrum.as_slice_mut(),
         shape,
     );
     Ok(())
@@ -907,7 +908,7 @@ fn compute_source_field<M: MeasurementRead>(
     let model = &problem.model;
     let shape = model.image_shape;
     model.extract_patch_at_offset(
-        &state.object_spectrum,
+        state.object_spectrum.view(),
         source,
         offset,
         &mut state.scratch.patch,

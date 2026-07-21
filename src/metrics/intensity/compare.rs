@@ -1,12 +1,12 @@
-//! Atomic, domain-agnostic metrics for comparing scalar intensity images.
+//! Domain-agnostic metrics comparing reference and estimate intensity images.
 //!
-//! Inputs use `reference` and `candidate` terminology.  Signed quantities use
-//! the residual `candidate - reference`; `valid_mask`, when supplied, includes
-//! pixels whose value is `true`.  These functions are for evaluation, not
-//! optimization objectives.
+//! Signed quantities use the residual `estimate - reference`; `valid_mask`,
+//! when supplied, includes pixels whose value is `true`. These functions are
+//! evaluation metrics, not reconstruction optimization objectives.
 
 use ndarray::ArrayView2;
 use num_traits::ToPrimitive;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SSIM_WINDOW_SIZE: usize = 11;
@@ -14,13 +14,13 @@ const SSIM_GAUSSIAN_SIGMA: f64 = 1.5;
 const SSIM_K1: f64 = 0.01;
 const SSIM_K2: f64 = 0.03;
 
-/// Errors returned by atomic intensity metrics.
+/// Errors returned by intensity comparison metrics.
 #[derive(Debug, Error, PartialEq)]
 pub enum IntensityMetricError {
-    #[error("reference and candidate shapes differ: {reference:?} and {candidate:?}")]
+    #[error("reference and estimate shapes differ: {reference:?} and {estimate:?}")]
     ShapeMismatch {
         reference: (usize, usize),
-        candidate: (usize, usize),
+        estimate: (usize, usize),
     },
     #[error("valid_mask shape {actual:?} does not match image shape {expected:?}")]
     MaskShapeMismatch {
@@ -53,18 +53,147 @@ pub enum IntensityMetricError {
     NoValidSsimWindow,
 }
 
-/// Return the mean signed residual, `candidate - reference`.
+/// Aggregate residual statistics comparing an estimate with a reference image.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IntensityComparisonMetrics {
+    pub reference_sum: f64,
+    pub estimate_sum: f64,
+    pub residual_l1: f64,
+    pub residual_l2: f64,
+    pub residual_mean: f64,
+    pub residual_std: f64,
+    pub residual_max_abs: f64,
+    pub normalized_l2: f64,
+    pub saturated_pixels: Option<usize>,
+}
+
+/// Calculate aggregate residual statistics for a reference/estimate pair.
+///
+/// Signed residuals are `estimate - reference`. `saturation_value`, when
+/// present, counts valid reference pixels greater than or equal to that value.
+pub fn compare_intensity<T>(
+    reference: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
+    valid_mask: Option<ArrayView2<'_, bool>>,
+    saturation_value: Option<f64>,
+) -> Result<IntensityComparisonMetrics, IntensityMetricError>
+where
+    T: ToPrimitive,
+{
+    let mut accumulator = ComparisonAccumulator::default();
+    let count = for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        accumulator.push(reference, estimate, saturation_value);
+    })?;
+    Ok(accumulator.finish(count, saturation_value))
+}
+
+/// Adapter for the reconstruction diagnostics' flat slices and byte masks.
+///
+/// This remains crate-private so the public metric API consistently uses
+/// two-dimensional ndarray views and Boolean masks.
+pub(crate) fn compare_intensity_u8_masked(
+    reference: &[f64],
+    estimate: &[f64],
+    valid_mask: Option<&[u8]>,
+    saturation_value: Option<f64>,
+) -> crate::Result<IntensityComparisonMetrics> {
+    if reference.len() != estimate.len() || reference.is_empty() {
+        return Err(crate::Error::InvalidShape(format!(
+            "intensity comparison inputs have lengths {} and {}",
+            reference.len(),
+            estimate.len()
+        )));
+    }
+    if valid_mask.is_some_and(|mask| mask.len() != reference.len()) {
+        return Err(crate::Error::LengthMismatch {
+            actual: valid_mask.map_or(0, <[u8]>::len),
+            expected: reference.len(),
+            shape: (1, reference.len()),
+        });
+    }
+
+    let mut accumulator = ComparisonAccumulator::default();
+    let mut count = 0;
+    for (index, (&reference, &estimate)) in reference.iter().zip(estimate).enumerate() {
+        if valid_mask.is_some_and(|mask| mask[index] == 0) {
+            continue;
+        }
+        if !reference.is_finite() || !estimate.is_finite() {
+            return Err(crate::Error::Numerical(
+                "intensity comparison contains a non-finite value".into(),
+            ));
+        }
+        accumulator.push(reference, estimate, saturation_value);
+        count += 1;
+    }
+    if count == 0 {
+        return Err(crate::Error::InvalidParameter {
+            name: "valid_mask",
+            reason: "must select at least one pixel".into(),
+        });
+    }
+    Ok(accumulator.finish(count, saturation_value))
+}
+
+#[derive(Default)]
+struct ComparisonAccumulator {
+    reference_sum: f64,
+    estimate_sum: f64,
+    residual_l1: f64,
+    residual_squared: f64,
+    residual_sum: f64,
+    residual_max_abs: f64,
+    reference_squared: f64,
+    saturated_pixels: usize,
+}
+
+impl ComparisonAccumulator {
+    fn push(&mut self, reference: f64, estimate: f64, saturation_value: Option<f64>) {
+        let residual = estimate - reference;
+        self.reference_sum += reference;
+        self.estimate_sum += estimate;
+        self.residual_l1 += residual.abs();
+        self.residual_squared += residual * residual;
+        self.residual_sum += residual;
+        self.residual_max_abs = self.residual_max_abs.max(residual.abs());
+        self.reference_squared += reference * reference;
+        self.saturated_pixels +=
+            usize::from(saturation_value.is_some_and(|limit| reference >= limit));
+    }
+
+    fn finish(self, count: usize, saturation_value: Option<f64>) -> IntensityComparisonMetrics {
+        debug_assert!(count > 0);
+        let count = count as f64;
+        let residual_mean = self.residual_sum / count;
+        IntensityComparisonMetrics {
+            reference_sum: self.reference_sum,
+            estimate_sum: self.estimate_sum,
+            residual_l1: self.residual_l1,
+            residual_l2: self.residual_squared.sqrt(),
+            residual_mean,
+            residual_std: (self.residual_squared / count - residual_mean * residual_mean)
+                .max(0.0)
+                .sqrt(),
+            residual_max_abs: self.residual_max_abs,
+            normalized_l2: self.residual_squared.sqrt()
+                / (self.reference_squared.sqrt() + f64::EPSILON),
+            saturated_pixels: saturation_value.map(|_| self.saturated_pixels),
+        }
+    }
+}
+
+/// Return the mean signed residual, `estimate - reference`.
 pub fn bias<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
     T: ToPrimitive,
 {
     let mut sum = 0.0;
-    let count = for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        sum += candidate - reference;
+    let count = for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        sum += estimate - reference;
     })?;
     Ok(sum / count as f64)
 }
@@ -72,15 +201,15 @@ where
 /// Return the mean absolute error.
 pub fn mae<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
     T: ToPrimitive,
 {
     let mut sum = 0.0;
-    let count = for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        sum += (candidate - reference).abs();
+    let count = for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        sum += (estimate - reference).abs();
     })?;
     Ok(sum / count as f64)
 }
@@ -88,32 +217,32 @@ where
 /// Return the mean squared error.
 pub fn mse<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
     T: ToPrimitive,
 {
-    let (sum, count) = squared_error_sum(reference, candidate, valid_mask)?;
+    let (sum, count) = squared_error_sum(reference, estimate, valid_mask)?;
     Ok(sum / count as f64)
 }
 
 /// Return the root mean squared error.
 pub fn rmse<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
     T: ToPrimitive,
 {
-    Ok(mse(reference, candidate, valid_mask)?.sqrt())
+    Ok(mse(reference, estimate, valid_mask)?.sqrt())
 }
 
-/// Return `sum(abs(candidate - reference)) / sum(abs(reference))`.
+/// Return `sum(abs(estimate - reference)) / sum(abs(reference))`.
 pub fn relative_l1<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
@@ -121,8 +250,8 @@ where
 {
     let mut residual_sum = 0.0;
     let mut reference_sum = 0.0;
-    for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        residual_sum += (candidate - reference).abs();
+    for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        residual_sum += (estimate - reference).abs();
         reference_sum += reference.abs();
     })?;
     if reference_sum == 0.0 {
@@ -133,10 +262,10 @@ where
     Ok(residual_sum / reference_sum)
 }
 
-/// Return `||candidate - reference||_2 / ||reference||_2`.
+/// Return `||estimate - reference||_2 / ||reference||_2`.
 pub fn nrmse<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
@@ -144,8 +273,8 @@ where
 {
     let mut residual_squared = 0.0;
     let mut reference_squared = 0.0;
-    for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        residual_squared += (candidate - reference).powi(2);
+    for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        residual_squared += (estimate - reference).powi(2);
         reference_squared += reference.powi(2);
     })?;
     if reference_squared == 0.0 {
@@ -157,19 +286,19 @@ where
 /// Compare square-root intensities, normalized by the reference amplitude L2 norm.
 pub fn amplitude_nrmse<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
     T: ToPrimitive,
 {
-    validate_non_negative(reference, candidate, valid_mask.clone(), "amplitude_nrmse")?;
+    validate_non_negative(reference, estimate, valid_mask, "amplitude_nrmse")?;
     let mut residual_squared = 0.0;
     let mut reference_squared = 0.0;
-    for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
+    for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
         let reference_amplitude = reference.sqrt();
-        let candidate_amplitude = candidate.sqrt();
-        residual_squared += (candidate_amplitude - reference_amplitude).powi(2);
+        let estimate_amplitude = estimate.sqrt();
+        residual_squared += (estimate_amplitude - reference_amplitude).powi(2);
         reference_squared += reference;
     })?;
     if reference_squared == 0.0 {
@@ -183,37 +312,37 @@ where
 /// Return the Pearson correlation coefficient of valid pixels.
 pub fn correlation<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
     T: ToPrimitive,
 {
     let mut reference_sum = 0.0;
-    let mut candidate_sum = 0.0;
+    let mut estimate_sum = 0.0;
     let mut reference_squared = 0.0;
-    let mut candidate_squared = 0.0;
+    let mut estimate_squared = 0.0;
     let mut product_sum = 0.0;
-    let count = for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
+    let count = for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
         reference_sum += reference;
-        candidate_sum += candidate;
+        estimate_sum += estimate;
         reference_squared += reference * reference;
-        candidate_squared += candidate * candidate;
-        product_sum += reference * candidate;
+        estimate_squared += estimate * estimate;
+        product_sum += reference * estimate;
     })? as f64;
     let reference_variance = reference_squared - reference_sum * reference_sum / count;
-    let candidate_variance = candidate_squared - candidate_sum * candidate_sum / count;
-    if reference_variance <= 0.0 || candidate_variance <= 0.0 {
+    let estimate_variance = estimate_squared - estimate_sum * estimate_sum / count;
+    if reference_variance <= 0.0 || estimate_variance <= 0.0 {
         return Err(IntensityMetricError::ZeroVariance);
     }
-    let covariance = product_sum - reference_sum * candidate_sum / count;
-    Ok(covariance / (reference_variance * candidate_variance).sqrt())
+    let covariance = product_sum - reference_sum * estimate_sum / count;
+    Ok(covariance / (reference_variance * estimate_variance).sqrt())
 }
 
 /// Return peak signal-to-noise ratio in dB for an explicit intensity range.
 pub fn psnr<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
     data_range: f64,
 ) -> Result<f64, IntensityMetricError>
@@ -221,7 +350,7 @@ where
     T: ToPrimitive,
 {
     validate_data_range(data_range)?;
-    let value = mse(reference, candidate, valid_mask)?;
+    let value = mse(reference, estimate, valid_mask)?;
     if value == 0.0 {
         Ok(f64::INFINITY)
     } else {
@@ -232,7 +361,7 @@ where
 /// Return canonical single-scale SSIM using an 11×11 Gaussian window (σ=1.5).
 pub fn ssim<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
     data_range: f64,
 ) -> Result<f64, IntensityMetricError>
@@ -243,14 +372,14 @@ where
     let shape = reference.dim();
     validate_shapes(
         shape,
-        candidate.dim(),
+        estimate.dim(),
         valid_mask.as_ref().map(|mask| mask.dim()),
     )?;
     if shape.0 < SSIM_WINDOW_SIZE || shape.1 < SSIM_WINDOW_SIZE {
         return Err(IntensityMetricError::SsimImageTooSmall { shape });
     }
     // Validate every included pixel even if the mask leaves no complete SSIM window.
-    for_each_valid_pair(reference, candidate, valid_mask.clone(), |_, _| {})?;
+    for_each_valid_pair(reference, estimate, valid_mask, |_, _| {})?;
 
     let weights = gaussian_weights();
     let c1 = (SSIM_K1 * data_range).powi(2);
@@ -267,7 +396,7 @@ where
             }) {
                 continue;
             }
-            let (mut reference_mean, mut candidate_mean) = (0.0, 0.0);
+            let (mut reference_mean, mut estimate_mean) = (0.0, 0.0);
             for window_row in 0..SSIM_WINDOW_SIZE {
                 for window_column in 0..SSIM_WINDOW_SIZE {
                     let weight = weights[window_row * SSIM_WINDOW_SIZE + window_column];
@@ -276,14 +405,14 @@ where
                             &reference[(row + window_row, column + window_column)],
                             "reference",
                         )?;
-                    candidate_mean += weight
+                    estimate_mean += weight
                         * value_as_f64(
-                            &candidate[(row + window_row, column + window_column)],
-                            "candidate",
+                            &estimate[(row + window_row, column + window_column)],
+                            "estimate",
                         )?;
                 }
             }
-            let (mut reference_variance, mut candidate_variance, mut covariance) = (0.0, 0.0, 0.0);
+            let (mut reference_variance, mut estimate_variance, mut covariance) = (0.0, 0.0, 0.0);
             for window_row in 0..SSIM_WINDOW_SIZE {
                 for window_column in 0..SSIM_WINDOW_SIZE {
                     let weight = weights[window_row * SSIM_WINDOW_SIZE + window_column];
@@ -291,18 +420,18 @@ where
                         &reference[(row + window_row, column + window_column)],
                         "reference",
                     )? - reference_mean;
-                    let candidate_value = value_as_f64(
-                        &candidate[(row + window_row, column + window_column)],
-                        "candidate",
-                    )? - candidate_mean;
+                    let estimate_value = value_as_f64(
+                        &estimate[(row + window_row, column + window_column)],
+                        "estimate",
+                    )? - estimate_mean;
                     reference_variance += weight * reference_value * reference_value;
-                    candidate_variance += weight * candidate_value * candidate_value;
-                    covariance += weight * reference_value * candidate_value;
+                    estimate_variance += weight * estimate_value * estimate_value;
+                    covariance += weight * reference_value * estimate_value;
                 }
             }
-            score_sum += ((2.0 * reference_mean * candidate_mean + c1) * (2.0 * covariance + c2))
-                / ((reference_mean.powi(2) + candidate_mean.powi(2) + c1)
-                    * (reference_variance + candidate_variance + c2));
+            score_sum += ((2.0 * reference_mean * estimate_mean + c1) * (2.0 * covariance + c2))
+                / ((reference_mean.powi(2) + estimate_mean.powi(2) + c1)
+                    * (reference_variance + estimate_variance + c2));
             window_count += 1;
         }
     }
@@ -312,10 +441,10 @@ where
     Ok(score_sum / window_count as f64)
 }
 
-/// Return summed Poisson deviance, flooring candidate intensities at `epsilon`.
+/// Return summed Poisson deviance, flooring estimate intensities at `epsilon`.
 pub fn poisson_deviance<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
     epsilon: f64,
 ) -> Result<f64, IntensityMetricError>
@@ -323,27 +452,27 @@ where
     T: ToPrimitive,
 {
     validate_epsilon(epsilon)?;
-    validate_non_negative(reference, candidate, valid_mask.clone(), "poisson_deviance")?;
+    validate_non_negative(reference, estimate, valid_mask, "poisson_deviance")?;
     let mut sum = 0.0;
-    for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        if reference == 0.0 && candidate == 0.0 {
+    for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        if reference == 0.0 && estimate == 0.0 {
             return;
         }
-        let candidate = candidate.max(epsilon);
+        let estimate = estimate.max(epsilon);
         let log_term = if reference == 0.0 {
             0.0
         } else {
-            reference * (reference / candidate).ln()
+            reference * (reference / estimate).ln()
         };
-        sum += 2.0 * (candidate - reference + log_term);
+        sum += 2.0 * (estimate - reference + log_term);
     })?;
     Ok(sum)
 }
 
-/// Return mean Poisson deviance, flooring candidate intensities at `epsilon`.
+/// Return mean Poisson deviance, flooring estimate intensities at `epsilon`.
 pub fn mean_poisson_deviance<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
     epsilon: f64,
 ) -> Result<f64, IntensityMetricError>
@@ -351,32 +480,27 @@ where
     T: ToPrimitive,
 {
     validate_epsilon(epsilon)?;
-    validate_non_negative(
-        reference,
-        candidate,
-        valid_mask.clone(),
-        "mean_poisson_deviance",
-    )?;
+    validate_non_negative(reference, estimate, valid_mask, "mean_poisson_deviance")?;
     let mut sum = 0.0;
-    let count = for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        if reference == 0.0 && candidate == 0.0 {
+    let count = for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        if reference == 0.0 && estimate == 0.0 {
             return;
         }
-        let candidate = candidate.max(epsilon);
+        let estimate = estimate.max(epsilon);
         let log_term = if reference == 0.0 {
             0.0
         } else {
-            reference * (reference / candidate).ln()
+            reference * (reference / estimate).ln()
         };
-        sum += 2.0 * (candidate - reference + log_term);
+        sum += 2.0 * (estimate - reference + log_term);
     })?;
     Ok(sum / count as f64)
 }
 
-/// Fit the least-squares scalar `gain` in `candidate ≈ gain × reference`.
+/// Fit the least-squares scalar `gain` in `estimate ≈ gain × reference`.
 pub fn fitted_gain<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<f64, IntensityMetricError>
 where
@@ -384,8 +508,8 @@ where
 {
     let mut numerator = 0.0;
     let mut denominator = 0.0;
-    for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        numerator += reference * candidate;
+    for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        numerator += reference * estimate;
         denominator += reference * reference;
     })?;
     if denominator == 0.0 {
@@ -398,22 +522,22 @@ where
 
 fn squared_error_sum<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
 ) -> Result<(f64, usize), IntensityMetricError>
 where
     T: ToPrimitive,
 {
     let mut sum = 0.0;
-    let count = for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        sum += (candidate - reference).powi(2);
+    let count = for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        sum += (estimate - reference).powi(2);
     })?;
     Ok((sum, count))
 }
 
 fn for_each_valid_pair<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
     mut function: impl FnMut(f64, f64),
 ) -> Result<usize, IntensityMetricError>
@@ -423,7 +547,7 @@ where
     let shape = reference.dim();
     validate_shapes(
         shape,
-        candidate.dim(),
+        estimate.dim(),
         valid_mask.as_ref().map(|mask| mask.dim()),
     )?;
     let mut count = 0usize;
@@ -433,8 +557,8 @@ where
                 continue;
             }
             let reference = value_as_f64(&reference[(row, column)], "reference")?;
-            let candidate = value_as_f64(&candidate[(row, column)], "candidate")?;
-            function(reference, candidate);
+            let estimate = value_as_f64(&estimate[(row, column)], "estimate")?;
+            function(reference, estimate);
             count += 1;
         }
     }
@@ -446,7 +570,7 @@ where
 
 fn validate_non_negative<T>(
     reference: ArrayView2<'_, T>,
-    candidate: ArrayView2<'_, T>,
+    estimate: ArrayView2<'_, T>,
     valid_mask: Option<ArrayView2<'_, bool>>,
     metric: &'static str,
 ) -> Result<(), IntensityMetricError>
@@ -454,8 +578,8 @@ where
     T: ToPrimitive,
 {
     let mut negative = false;
-    for_each_valid_pair(reference, candidate, valid_mask, |reference, candidate| {
-        negative |= reference < 0.0 || candidate < 0.0;
+    for_each_valid_pair(reference, estimate, valid_mask, |reference, estimate| {
+        negative |= reference < 0.0 || estimate < 0.0;
     })?;
     if negative {
         return Err(IntensityMetricError::NegativeIntensity { metric });
@@ -465,13 +589,13 @@ where
 
 fn validate_shapes(
     reference: (usize, usize),
-    candidate: (usize, usize),
+    estimate: (usize, usize),
     valid_mask: Option<(usize, usize)>,
 ) -> Result<(), IntensityMetricError> {
-    if reference != candidate {
+    if reference != estimate {
         return Err(IntensityMetricError::ShapeMismatch {
             reference,
-            candidate,
+            estimate,
         });
     }
     if let Some(actual) = valid_mask
@@ -536,29 +660,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn residual_metrics_use_candidate_minus_reference_and_support_integers() {
+    fn residual_metrics_use_estimate_minus_reference_and_support_integers() {
         let reference = array![[1u8, 2u8]];
-        let candidate = array![[2u8, 0u8]];
+        let estimate = array![[2u8, 0u8]];
+        assert_relative_eq!(bias(reference.view(), estimate.view(), None).unwrap(), -0.5);
+        assert_relative_eq!(mae(reference.view(), estimate.view(), None).unwrap(), 1.5);
+        assert_relative_eq!(mse(reference.view(), estimate.view(), None).unwrap(), 2.5);
         assert_relative_eq!(
-            bias(reference.view(), candidate.view(), None).unwrap(),
-            -0.5
-        );
-        assert_relative_eq!(mae(reference.view(), candidate.view(), None).unwrap(), 1.5);
-        assert_relative_eq!(mse(reference.view(), candidate.view(), None).unwrap(), 2.5);
-        assert_relative_eq!(
-            rmse(reference.view(), candidate.view(), None).unwrap(),
+            rmse(reference.view(), estimate.view(), None).unwrap(),
             2.5f64.sqrt()
         );
         assert_relative_eq!(
-            relative_l1(reference.view(), candidate.view(), None).unwrap(),
+            relative_l1(reference.view(), estimate.view(), None).unwrap(),
             1.0
         );
+        assert_relative_eq!(nrmse(reference.view(), estimate.view(), None).unwrap(), 1.0);
         assert_relative_eq!(
-            nrmse(reference.view(), candidate.view(), None).unwrap(),
-            1.0
-        );
-        assert_relative_eq!(
-            correlation(reference.view(), candidate.view(), None).unwrap(),
+            correlation(reference.view(), estimate.view(), None).unwrap(),
             -1.0
         );
     }
@@ -566,10 +684,10 @@ mod tests {
     #[test]
     fn mask_selects_valid_pixels() {
         let reference = array![[1.0, 20.0]];
-        let candidate = array![[2.0, 0.0]];
+        let estimate = array![[2.0, 0.0]];
         let mask = array![[true, false]];
         assert_relative_eq!(
-            bias(reference.view(), candidate.view(), Some(mask.view())).unwrap(),
+            bias(reference.view(), estimate.view(), Some(mask.view())).unwrap(),
             1.0
         );
     }
@@ -577,9 +695,9 @@ mod tests {
     #[test]
     fn quality_metrics_have_documented_reference_values() {
         let reference = array![[0.0, 1.0]];
-        let candidate = array![[0.0, 0.0]];
+        let estimate = array![[0.0, 0.0]];
         assert_relative_eq!(
-            psnr(reference.view(), candidate.view(), None, 1.0).unwrap(),
+            psnr(reference.view(), estimate.view(), None, 1.0).unwrap(),
             10.0 * 2.0f64.log10()
         );
 
@@ -590,13 +708,13 @@ mod tests {
     #[test]
     fn poisson_deviance_and_gain_are_well_defined() {
         let reference = array![[0.0, 2.0]];
-        let candidate = array![[0.0, 2.0]];
+        let estimate = array![[0.0, 2.0]];
         assert_relative_eq!(
-            poisson_deviance(reference.view(), candidate.view(), None, 1e-12).unwrap(),
+            poisson_deviance(reference.view(), estimate.view(), None, 1e-12).unwrap(),
             0.0
         );
         assert_relative_eq!(
-            mean_poisson_deviance(reference.view(), candidate.view(), None, 1e-12).unwrap(),
+            mean_poisson_deviance(reference.view(), estimate.view(), None, 1e-12).unwrap(),
             0.0
         );
 
@@ -610,28 +728,28 @@ mod tests {
     #[test]
     fn validation_covers_masks_ranges_and_intensity_domains() {
         let reference = array![[1.0, 2.0]];
-        let candidate = array![[2.0, 0.0]];
+        let estimate = array![[2.0, 0.0]];
         let wrong_mask = array![[true], [false]];
         assert!(matches!(
-            mae(reference.view(), candidate.view(), Some(wrong_mask.view())),
+            mae(reference.view(), estimate.view(), Some(wrong_mask.view())),
             Err(IntensityMetricError::MaskShapeMismatch { .. })
         ));
         assert!(matches!(
-            psnr(reference.view(), candidate.view(), None, 0.0),
+            psnr(reference.view(), estimate.view(), None, 0.0),
             Err(IntensityMetricError::InvalidDataRange)
         ));
         assert!(matches!(
-            ssim(reference.view(), candidate.view(), None, 1.0),
+            ssim(reference.view(), estimate.view(), None, 1.0),
             Err(IntensityMetricError::SsimImageTooSmall { .. })
         ));
 
         let negative = array![[-1.0, 2.0]];
         assert!(matches!(
-            amplitude_nrmse(negative.view(), candidate.view(), None),
+            amplitude_nrmse(negative.view(), estimate.view(), None),
             Err(IntensityMetricError::NegativeIntensity { .. })
         ));
         assert!(matches!(
-            poisson_deviance(negative.view(), candidate.view(), None, 1e-12),
+            poisson_deviance(negative.view(), estimate.view(), None, 1e-12),
             Err(IntensityMetricError::NegativeIntensity { .. })
         ));
     }

@@ -1,33 +1,45 @@
+use ndarray::{Array2, ArrayView2, Zip};
 use num_complex::Complex64;
 
-use crate::{Array2, Result};
+use crate::{Error, Result};
 
 pub type Complex = Complex64;
-pub type ComplexArray = Array2<Complex64>;
 
-pub fn amplitude(field: &ComplexArray) -> Array2<f64> {
-    field.map(|value| value.norm())
+/// Computes amplitude from any logical two-dimensional layout.
+///
+/// The returned array is newly allocated in standard row-major order.
+pub fn amplitude(field: ArrayView2<'_, Complex64>) -> Array2<f64> {
+    field.mapv(|value| value.norm())
 }
 
-pub fn phase(field: &ComplexArray) -> Array2<f64> {
-    field.map(|value| value.arg())
+/// Computes phase from any logical two-dimensional layout.
+///
+/// The returned array is newly allocated in standard row-major order.
+pub fn phase(field: ArrayView2<'_, Complex64>) -> Array2<f64> {
+    field.mapv(|value| value.arg())
 }
 
-pub fn from_amplitude_phase(amplitude: &Array2<f64>, phase: &Array2<f64>) -> Result<ComplexArray> {
-    if amplitude.shape() != phase.shape() {
-        return Err(crate::Error::InvalidShape(format!(
+/// Combines amplitude and phase from arbitrary, matching ndarray layouts.
+///
+/// The inputs are borrowed without copying. The output allocation is standard
+/// row-major and follows their logical traversal order.
+pub fn from_amplitude_phase(
+    amplitude: ArrayView2<'_, f64>,
+    phase: ArrayView2<'_, f64>,
+) -> Result<Array2<Complex64>> {
+    if amplitude.dim() != phase.dim() {
+        return Err(Error::InvalidShape(format!(
             "amplitude {:?} and phase {:?} differ",
-            amplitude.shape(),
-            phase.shape()
+            amplitude.dim(),
+            phase.dim()
         )));
     }
-    ComplexArray::from_vec(
-        amplitude.shape(),
-        amplitude
-            .as_slice()
-            .iter()
-            .zip(phase.as_slice())
-            .map(|(&amplitude, &phase)| Complex64::from_polar(amplitude, phase))
-            .collect(),
-    )
+    let mut output = Array2::from_elem(amplitude.dim(), Complex64::default());
+    Zip::from(&mut output)
+        .and(amplitude)
+        .and(phase)
+        .for_each(|destination, &amplitude, &phase| {
+            *destination = Complex64::from_polar(amplitude, phase);
+        });
+    Ok(output)
 }

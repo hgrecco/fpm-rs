@@ -1,3 +1,4 @@
+use ndarray::Array2;
 use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use crate::{
@@ -12,7 +13,7 @@ use crate::{
     },
     error::Error,
     measurements::MeasurementRead,
-    metrics::intensity::{compare_intensity_masked, intensity_statistics},
+    metrics::intensity::{compare_intensity_u8_masked, stats},
     model::ForwardModel,
 };
 
@@ -286,7 +287,7 @@ fn build_diagnostics<M: MeasurementRead>(
             let measured = problem.measurements.frame(frame)?;
             values.push(RawFrameStatisticsRecord {
                 frame_index: frame,
-                metrics: intensity_statistics(&measured, None)?,
+                metrics: stats(&measured, None)?,
             });
         }
         diagnostics.raw_frame_stats = Some(values);
@@ -306,8 +307,9 @@ fn build_diagnostics<M: MeasurementRead>(
     {
         let diagnostic_model = model_with_state_calibration(problem, state)?;
         let forward = ForwardModel::with_backend(&diagnostic_model, state.backend.clone())?;
-        let mut workspace = forward.workspace();
-        let mut predicted = vec![0.0; problem.model.image_shape.0 * problem.model.image_shape.1];
+        let mut workspace = forward.workspace()?;
+        let mut predicted =
+            vec![0.0; crate::array_layout::checked_len_2d(problem.model.image_shape)?];
         let mut frame_diagnostics = Vec::with_capacity(problem.model.frame_count());
         let mut residual_images = if requests.contains(&DiagnosticRequest::ResidualImages) {
             Some(Vec::with_capacity(problem.model.frame_count()))
@@ -321,8 +323,8 @@ fn build_diagnostics<M: MeasurementRead>(
                 None
             };
         for frame in 0..problem.model.frame_count() {
-            forward.forward_intensity_into(
-                &state.object_spectrum,
+            forward.forward_intensity_standard_into(
+                state.object_spectrum_standard_view(),
                 &state.pupil,
                 frame,
                 &mut workspace,
@@ -366,13 +368,10 @@ fn build_diagnostics<M: MeasurementRead>(
                         }
                     }
                 }
-                images.push(crate::Array2::from_vec(
-                    problem.model.image_shape,
-                    residual,
-                )?);
+                images.push(Array2::from_shape_vec(problem.model.image_shape, residual)?);
             }
             if requests.contains(&DiagnosticRequest::FrameSummaries) {
-                let metrics = compare_intensity_masked(&measured, &predicted, mask, None)?;
+                let metrics = compare_intensity_u8_masked(&measured, &predicted, mask, None)?;
                 frame_diagnostics.push(FrameDiagnosticRecord {
                     iteration: Some(iteration),
                     frame_index: frame,
@@ -394,15 +393,15 @@ fn build_diagnostics<M: MeasurementRead>(
     {
         let object = state_object(state)?;
         if requests.contains(&DiagnosticRequest::ObjectAmplitude) {
-            diagnostics.object_amplitude = Some(complex::amplitude(&object));
+            diagnostics.object_amplitude = Some(complex::amplitude(object.view()));
         }
         if requests.contains(&DiagnosticRequest::ObjectPhase) {
-            diagnostics.object_phase = Some(complex::phase(&object));
+            diagnostics.object_phase = Some(complex::phase(object.view()));
         }
     }
     if requests.contains(&DiagnosticRequest::Pupil) {
-        diagnostics.pupil_amplitude = Some(complex::amplitude(&state.pupil.values));
-        diagnostics.pupil_phase = Some(complex::phase(&state.pupil.values));
+        diagnostics.pupil_amplitude = Some(complex::amplitude(state.pupil.values()));
+        diagnostics.pupil_phase = Some(complex::phase(state.pupil.values()));
     }
     Ok(diagnostics)
 }

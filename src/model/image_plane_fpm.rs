@@ -1,8 +1,10 @@
+use ndarray::{ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Array2, Result,
+    Result,
+    array_layout::{StandardView2, checked_len_2d},
     error::Error,
     experiment::{IlluminationSource, KVector, MultiplexingMatrix, Optics},
 };
@@ -49,19 +51,19 @@ pub(crate) struct CropDisplacementBounds {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImagePlaneModel {
     /// One transverse wave vector per illumination source.
-    pub k_vectors: Vec<KVector>,
-    pub pupil: Pupil,
-    pub crop_indices: CropIndices,
+    pub(crate) k_vectors: Vec<KVector>,
+    pub(crate) pupil: Pupil,
+    pub(crate) crop_indices: CropIndices,
     /// Fractional `(row, column)` Fourier-grid offsets relative to each crop.
     #[serde(default)]
-    pub subpixel_offsets: Option<Vec<FourierOffset>>,
-    pub sampling: Sampling,
-    pub image_shape: (usize, usize),
-    pub reconstruction_shape: (usize, usize),
-    pub frame_gains: Option<Vec<f64>>,
-    pub background: Option<Vec<f64>>,
+    pub(crate) subpixel_offsets: Option<Vec<FourierOffset>>,
+    pub(crate) sampling: Sampling,
+    pub(crate) image_shape: (usize, usize),
+    pub(crate) reconstruction_shape: (usize, usize),
+    pub(crate) frame_gains: Option<Vec<f64>>,
+    pub(crate) background: Option<Vec<f64>>,
     /// Optional measured-frame rows of `(source_index, incoherent_weight)`.
-    pub multiplexing_matrix: Option<MultiplexingMatrix>,
+    pub(crate) multiplexing_matrix: Option<MultiplexingMatrix>,
 }
 
 impl ImagePlaneModel {
@@ -257,7 +259,11 @@ impl ImagePlaneModel {
                                 "no supported power-of-two reconstruction multiplier exists".into(),
                             )
                         })?,
-                    ReconstructionShape::Exact(_) => unreachable!(),
+                    ReconstructionShape::Exact(shape) => {
+                        return Err(Error::InvalidShape(format!(
+                            "unexpected exact reconstruction shape {shape:?} during automatic sizing"
+                        )));
+                    }
                 };
                 candidate_shape((aspect_height, aspect_width), multiplier)
             }
@@ -276,6 +282,76 @@ impl ImagePlaneModel {
 
     pub fn is_multiplexed(&self) -> bool {
         self.multiplexing_matrix.is_some()
+    }
+
+    pub fn k_vectors(&self) -> &[KVector] {
+        &self.k_vectors
+    }
+
+    pub fn pupil(&self) -> &Pupil {
+        &self.pupil
+    }
+
+    pub fn pupil_mut(&mut self) -> &mut Pupil {
+        &mut self.pupil
+    }
+
+    pub fn crop_indices(&self) -> &CropIndices {
+        &self.crop_indices
+    }
+
+    pub fn subpixel_offsets(&self) -> Option<&[FourierOffset]> {
+        self.subpixel_offsets.as_deref()
+    }
+
+    pub const fn sampling(&self) -> &Sampling {
+        &self.sampling
+    }
+
+    pub const fn image_shape(&self) -> (usize, usize) {
+        self.image_shape
+    }
+
+    pub const fn reconstruction_shape(&self) -> (usize, usize) {
+        self.reconstruction_shape
+    }
+
+    pub fn frame_gains(&self) -> Option<&[f64]> {
+        self.frame_gains.as_deref()
+    }
+
+    pub fn background(&self) -> Option<&[f64]> {
+        self.background.as_deref()
+    }
+
+    pub fn multiplexing_matrix(&self) -> Option<&MultiplexingMatrix> {
+        self.multiplexing_matrix.as_ref()
+    }
+
+    pub fn with_frame_gains(mut self, values: Option<Vec<f64>>) -> Result<Self> {
+        self.frame_gains = values;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Replaces the source wave vectors while preserving the compiled crops.
+    ///
+    /// This is intended for calibrated models whose replacement vectors use
+    /// the same Fourier sampling and source ordering. The full model invariant
+    /// set is revalidated before the replacement is committed.
+    pub fn replace_k_vectors(&mut self, values: Vec<KVector>) -> Result<()> {
+        let previous = std::mem::replace(&mut self.k_vectors, values);
+        if let Err(error) = self.validate() {
+            self.k_vectors = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn with_background(mut self, values: Option<Vec<f64>>) -> Result<Self> {
+        self.background = values;
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn with_multiplexing(mut self, matrix: MultiplexingMatrix) -> Result<Self> {
@@ -302,7 +378,17 @@ impl ImagePlaneModel {
 
     pub fn extract_patch(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
+        source: usize,
+        destination: &mut [Complex64],
+    ) -> Result<()> {
+        let object_spectrum = StandardView2::try_from(object_spectrum)?;
+        self.extract_patch_standard(object_spectrum, source, destination)
+    }
+
+    pub(crate) fn extract_patch_standard(
+        &self,
+        object_spectrum: StandardView2<'_, Complex64>,
         source: usize,
         destination: &mut [Complex64],
     ) -> Result<()> {
@@ -314,27 +400,38 @@ impl ImagePlaneModel {
         )
     }
 
-    pub fn extract_patch_at_offset(
+    pub(crate) fn extract_patch_at_offset(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: StandardView2<'_, Complex64>,
         source: usize,
         offset: FourierOffset,
         destination: &mut [Complex64],
     ) -> Result<()> {
-        if object_spectrum.shape() != self.reconstruction_shape {
+        if object_spectrum.dim() != self.reconstruction_shape {
             return Err(Error::InvalidShape(format!(
                 "object spectrum shape {:?} does not match {:?}",
-                object_spectrum.shape(),
+                object_spectrum.dim(),
                 self.reconstruction_shape
             )));
         }
         let crop = self.crop_indices.get(source)?;
-        crop.extract_subpixel(object_spectrum, destination, offset)
+        crop.extract_subpixel_standard(object_spectrum, destination, offset)
     }
 
     pub fn insert_patch_adjoint(
         &self,
-        destination: &mut Array2<Complex64>,
+        destination: ArrayViewMut2<'_, Complex64>,
+        source: usize,
+        update: &[Complex64],
+        scale: f64,
+    ) -> Result<()> {
+        let destination = crate::array_layout::StandardViewMut2::try_from(destination)?;
+        self.insert_patch_adjoint_standard(destination, source, update, scale)
+    }
+
+    pub(crate) fn insert_patch_adjoint_standard(
+        &self,
+        destination: crate::array_layout::StandardViewMut2<'_, Complex64>,
         source: usize,
         update: &[Complex64],
         scale: f64,
@@ -348,23 +445,29 @@ impl ImagePlaneModel {
         )
     }
 
-    pub fn insert_patch_adjoint_at_offset(
+    pub(crate) fn insert_patch_adjoint_at_offset(
         &self,
-        destination: &mut Array2<Complex64>,
+        mut destination: crate::array_layout::StandardViewMut2<'_, Complex64>,
         source: usize,
         update: &[Complex64],
         scale: f64,
         offset: FourierOffset,
     ) -> Result<()> {
-        if destination.shape() != self.reconstruction_shape {
+        if destination.dim() != self.reconstruction_shape {
             return Err(Error::InvalidShape(format!(
                 "object spectrum shape {:?} does not match {:?}",
-                destination.shape(),
+                destination.dim(),
                 self.reconstruction_shape
             )));
         }
         let crop = self.crop_indices.get(source)?;
-        crop.insert_subpixel_adjoint(destination, update, scale, offset)
+        crop.insert_subpixel_adjoint_slice(
+            destination.as_slice_mut(),
+            self.reconstruction_shape,
+            update,
+            scale,
+            offset,
+        )
     }
 
     pub(crate) fn insert_patch_adjoint_slice_at_offset(
@@ -460,7 +563,7 @@ impl ImagePlaneModel {
                 frames: self.frame_count(),
             });
         }
-        let image_len = self.image_shape.0 * self.image_shape.1;
+        let image_len = checked_len_2d(self.image_shape)?;
         if pixel >= image_len {
             return Err(Error::InvalidParameter {
                 name: "pixel",
@@ -555,10 +658,18 @@ impl ImagePlaneModel {
                 ));
             }
         }
-        let image_len = self.image_shape.0 * self.image_shape.1;
-        if self.background.as_ref().is_some_and(|values| {
-            values.len() != image_len && values.len() != image_len * self.frame_count()
-        }) {
+        let image_len = checked_len_2d(self.image_shape)?;
+        let stack_len =
+            image_len
+                .checked_mul(self.frame_count())
+                .ok_or_else(|| Error::ShapeOverflow {
+                    shape: vec![self.frame_count(), self.image_shape.0, self.image_shape.1],
+                })?;
+        if self
+            .background
+            .as_ref()
+            .is_some_and(|values| values.len() != image_len && values.len() != stack_len)
+        {
             return Err(Error::InvalidModel(
                 "background must be one image or one image per frame".into(),
             ));

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Result,
+    array_layout::checked_len_2d,
     error::Error,
     experiment::{Illumination, IlluminationSource, Optics},
     model::{ImagePlaneModel, ReconstructionShape},
@@ -250,7 +251,7 @@ impl SimulationConfiguration {
             self.reconstruction_shape,
         )?;
         if let Some(camera) = &self.camera {
-            camera.validate_for_frame(self.image_shape.0 * self.image_shape.1)?;
+            camera.validate_for_frame(checked_len_2d(self.image_shape)?)?;
         }
         if let Some(errors) = &self.illumination_acquisition_errors {
             validate_acquisition_errors(errors, &self.compiled_models.true_model)?;

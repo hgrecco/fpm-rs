@@ -3,6 +3,7 @@ use num_complex::Complex64;
 use crate::{
     Result,
     algorithms::objective::{LossType, point_loss},
+    array_layout::checked_len_2d,
     backend::FftDirection,
     diagnostics::StepDiagnostics,
     error::Error,
@@ -174,7 +175,7 @@ impl Admm {
     ) -> Result<StepDiagnostics> {
         let model = &problem.model;
         let shape = model.image_shape;
-        let image_len = shape.0 * shape.1;
+        let image_len = checked_len_2d(shape)?;
         let expected = admm_auxiliary_len(model)?;
         if auxiliary.auxiliary_fields.len() != expected || auxiliary.dual_fields.len() != expected {
             return Err(Error::InvalidModel(
@@ -208,7 +209,12 @@ impl Admm {
             let sources = frame_sources(model, frame, &single_source);
             let source_weight_sum: f64 = sources.iter().map(|&(_, weight)| weight).sum();
             let mode_start = frame_mode_start(model, frame);
-            let multiplex_len = image_len * sources.len();
+            let multiplex_len =
+                image_len
+                    .checked_mul(sources.len())
+                    .ok_or_else(|| Error::ShapeOverflow {
+                        shape: vec![sources.len(), shape.0, shape.1],
+                    })?;
             state
                 .scratch
                 .multiplex_fields
@@ -326,7 +332,7 @@ impl Admm {
             let step = self.object_step / active_frames as f64;
             for (object, &update) in state
                 .object_spectrum
-                .as_mut_slice()
+                .as_slice_mut()
                 .iter_mut()
                 .zip(&state.scratch.object_gradient)
             {
@@ -375,7 +381,7 @@ pub(crate) fn admm_auxiliary_len(model: &ImagePlaneModel) -> Result<usize> {
             })
         },
     )?;
-    (model.image_shape.0 * model.image_shape.1)
+    checked_len_2d(model.image_shape)?
         .checked_mul(mode_count)
         .ok_or_else(|| Error::InvalidShape("ADMM auxiliary length overflows".into()))
 }
@@ -407,7 +413,7 @@ fn compute_source_field<M: MeasurementRead>(
     let model = &problem.model;
     let shape = model.image_shape;
     model.extract_patch_at_offset(
-        &state.object_spectrum,
+        state.object_spectrum.view(),
         source,
         offset,
         &mut state.scratch.patch,

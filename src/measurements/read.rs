@@ -53,7 +53,7 @@ impl MeasurementRead for MeasurementStack {
     }
 
     fn frame_metadata(&self) -> &[FrameMetadata] {
-        &self.frame_metadata
+        MeasurementStack::frame_metadata(self)
     }
 
     fn validate(&self) -> Result<()> {

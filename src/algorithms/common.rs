@@ -3,6 +3,7 @@ use num_complex::Complex64;
 use crate::{
     Result,
     algorithms::objective::{LossType, point_loss},
+    array_layout::checked_len_2d,
     backend::FftDirection,
     diagnostics::StepDiagnostics,
     error::Error,
@@ -51,7 +52,7 @@ pub(crate) fn projection_update<M: MeasurementRead>(
 ) -> Result<StepDiagnostics> {
     let model = &problem.model;
     let shape = model.image_shape;
-    let image_len = shape.0 * shape.1;
+    let image_len = checked_len_2d(shape)?;
     let mut diagnostics = StepDiagnostics::default();
     for &frame in &batch.indices {
         let frame_weight = problem.measurements.frame_weight(frame)?;
@@ -84,7 +85,7 @@ pub(crate) fn projection_update<M: MeasurementRead>(
             let offset = state.effective_source_offset(model, source)?;
             state.scratch.multiplex_offsets.push(offset);
             model.extract_patch_at_offset(
-                &state.object_spectrum,
+                state.object_spectrum.view(),
                 source,
                 offset,
                 &mut state.scratch.patch,
@@ -248,12 +249,13 @@ pub(crate) fn projection_update<M: MeasurementRead>(
                 state.scratch.exit_spectrum[pixel] =
                     pupil.conj() * state.scratch.difference[pixel] / denominator;
             }
+            let offset = state.scratch.multiplex_offsets[mode];
             model.insert_patch_adjoint_at_offset(
-                &mut state.object_spectrum,
+                state.object_spectrum.view_mut(),
                 source,
                 &state.scratch.exit_spectrum,
                 frame_weight * configuration.object_step * normalized_source_weight,
-                state.scratch.multiplex_offsets[mode],
+                offset,
             )?;
 
             if configuration.pupil_step.is_some() {
@@ -276,7 +278,7 @@ pub(crate) fn projection_update<M: MeasurementRead>(
             for (pupil, &gradient) in state
                 .pupil
                 .values
-                .as_mut_slice()
+                .as_slice_mut()
                 .iter_mut()
                 .zip(&state.scratch.pupil_gradient)
             {
@@ -351,24 +353,41 @@ fn update_background(
         return Ok(());
     }
     let correction = configuration.step * residual_sum / residual_count as f64;
+    let stack_len = image_len
+        .checked_mul(frame_count)
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![frame_count, image_len],
+        })?;
     let mut background = match state.background.take() {
-        None => vec![0.0; image_len * frame_count],
+        None => vec![0.0; stack_len],
         Some(values) if values.len() == image_len => {
-            let mut expanded = Vec::with_capacity(image_len * frame_count);
+            let mut expanded = Vec::with_capacity(stack_len);
             for _ in 0..frame_count {
                 expanded.extend_from_slice(&values);
             }
             expanded
         }
-        Some(values) if values.len() == image_len * frame_count => values,
+        Some(values) if values.len() == stack_len => values,
         Some(_) => {
             return Err(Error::InvalidModel(
                 "state background length is inconsistent with the model".into(),
             ));
         }
     };
-    let start = frame * image_len;
-    for value in &mut background[start..start + image_len] {
+    let start = frame
+        .checked_mul(image_len)
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![frame, image_len],
+        })?;
+    let end = start
+        .checked_add(image_len)
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![frame.saturating_add(1), image_len],
+        })?;
+    let frame_background = background
+        .get_mut(start..end)
+        .ok_or_else(|| Error::InvalidModel("state background frame is out of range".into()))?;
+    for value in frame_background {
         *value = (*value + correction).clamp(configuration.minimum, configuration.maximum);
     }
     state.background = Some(background);

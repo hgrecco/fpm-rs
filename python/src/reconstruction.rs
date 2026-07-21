@@ -68,7 +68,7 @@ impl MeasurementRead for SharedMeasurementStack {
     }
 
     fn frame_metadata(&self) -> &[FrameMetadata] {
-        &self.0.frame_metadata
+        self.0.frame_metadata()
     }
 
     fn validate(&self) -> fpm_rs::Result<()> {
@@ -135,12 +135,12 @@ impl PyReconstructionProblem {
 
     #[getter]
     fn image_shape(&self) -> (usize, usize) {
-        self.inner.model.image_shape
+        self.inner.model.image_shape()
     }
 
     #[getter]
     fn reconstruction_shape(&self) -> (usize, usize) {
-        self.inner.model.reconstruction_shape
+        self.inner.model.reconstruction_shape()
     }
 }
 
@@ -176,12 +176,12 @@ impl PyReconstructionCheckpoint {
 
     #[getter]
     fn format_version(&self) -> u32 {
-        self.inner.format_version
+        self.inner.format_version()
     }
 
     #[getter]
     fn completed_iterations(&self) -> usize {
-        self.inner.completed_iterations
+        self.inner.completed_iterations()
     }
 }
 
@@ -218,13 +218,8 @@ pub(crate) struct PyReconstructionResult {
 
 impl PyReconstructionResult {
     fn from_core(py: Python<'_>, result: ReconstructionResult) -> PyResult<Self> {
-        let pupil_shape = result.recovered_pupil.values.shape();
-        let pupil_support = result
-            .recovered_pupil
-            .support
-            .iter()
-            .map(|&value| u8::from(value))
-            .collect();
+        let pupil_shape = result.recovered_pupil.shape();
+        let pupil_support = result.recovered_pupil.support().iter().copied().collect();
         let calibrated_illumination = result
             .calibrated_illumination
             .map(|values| {
@@ -271,7 +266,7 @@ impl PyReconstructionResult {
             amplitude: array2_to_py(py, result.amplitude)?,
             phase: array2_to_py(py, result.phase)?,
             object_spectrum: complex_array2_to_py(py, result.object_spectrum)?,
-            recovered_pupil: complex_array2_to_py(py, result.recovered_pupil.values)?,
+            recovered_pupil: complex_array2_to_py(py, result.recovered_pupil.values().to_owned())?,
             pupil_support: vec2_to_py(py, pupil_shape, pupil_support)?,
             calibrated_illumination,
             recovered_frame_gains,
@@ -295,10 +290,8 @@ impl PyReconstructionResult {
             .map_err(to_py_err)?;
         let pupil_values = crate::arrays::core_array2(&self.recovered_pupil.bind(py).readonly())
             .map_err(to_py_err)?;
-        let pupil_support = copy_array2(&self.pupil_support.bind(py).readonly())
-            .into_iter()
-            .map(|value| value != 0)
-            .collect();
+        let pupil_support = crate::arrays::core_array2(&self.pupil_support.bind(py).readonly())
+            .map_err(to_py_err)?;
         let recovered_pupil = Pupil::new(pupil_values, pupil_support).map_err(to_py_err)?;
         let calibrated_illumination = self
             .calibrated_illumination
@@ -381,11 +374,10 @@ fn evaluate_reconstruction_py(
     valid_object_mask: Option<numpy::PyReadonlyArray2<'_, u8>>,
 ) -> PyResult<Py<PyDict>> {
     let result = result.to_core_for_evaluation(py)?;
-    let truth = crate::arrays::core_array2(&truth).map_err(to_py_err)?;
-    let mask = valid_object_mask
-        .map(|value| crate::arrays::core_array2(&value))
-        .transpose()
-        .map_err(to_py_err)?;
+    // Evaluation is layout-independent. Copying here releases the Python
+    // borrow before detaching while preserving the input's logical order.
+    let truth = truth.as_array().to_owned();
+    let mask = valid_object_mask.map(|value| value.as_array().to_owned());
     let reference_model = reference_model.map(|value| (*value.inner).clone());
     let evaluation = if let Some(problem) = problem {
         let problem = problem.inner.clone();
@@ -393,18 +385,18 @@ fn evaluate_reconstruction_py(
             fpm_rs::evaluation::evaluate_reconstruction_with_problem(
                 &result,
                 &problem,
-                &truth,
+                truth.view(),
                 reference_model.as_ref(),
-                mask.as_ref(),
+                mask.as_ref().map(|mask| mask.view()),
             )
         })
     } else {
         py.detach(move || {
             fpm_rs::evaluation::evaluate_reconstruction(
                 &result,
-                &truth,
+                truth.view(),
                 reference_model.as_ref(),
-                mask.as_ref(),
+                mask.as_ref().map(|mask| mask.view()),
             )
         })
     }
@@ -455,7 +447,7 @@ fn evaluation_to_py(
         for frame in &value.per_frame {
             let item = PyDict::new(py);
             item.set_item("reference_sum", frame.reference_sum)?;
-            item.set_item("candidate_sum", frame.candidate_sum)?;
+            item.set_item("estimate_sum", frame.estimate_sum)?;
             item.set_item("residual_l1", frame.residual_l1)?;
             item.set_item("residual_l2", frame.residual_l2)?;
             item.set_item("residual_mean", frame.residual_mean)?;
@@ -661,7 +653,7 @@ fn diagnostics_to_py(
         value.set_item("frame_index", entry.frame_index)?;
         value.set_item("illumination_index", entry.illumination_index)?;
         value.set_item("measured_sum", entry.metrics.reference_sum)?;
-        value.set_item("predicted_sum", entry.metrics.candidate_sum)?;
+        value.set_item("predicted_sum", entry.metrics.estimate_sum)?;
         value.set_item("residual_l1", entry.metrics.residual_l1)?;
         value.set_item("residual_l2", entry.metrics.residual_l2)?;
         value.set_item("residual_mean", entry.metrics.residual_mean)?;

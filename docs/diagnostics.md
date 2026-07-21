@@ -6,14 +6,19 @@ Recording does not invoke Python or acquire the GIL inside the reconstruction
 loop.
 
 Reusable calculations are split by responsibility. Rust `metrics` contains
-domain-agnostic reference/candidate comparisons; `algorithms::objective`
+domain-agnostic reference/estimate comparisons; `algorithms::objective`
 contains losses optimized by reconstruction algorithms; and `evaluation`
 combines a reconstruction with optional reference model and measurement stack.
 Python exposes the direct equivalents under `fpm.metrics` and
 `fpm.evaluation`. This module focuses only on run-scoped diagnostic requests,
 Fourier coverage, convergence records, recorder cadence, and serialization.
-See [intensity metrics](metrics.md) for standalone reference/candidate image
+See [intensity metrics](metrics.md) for standalone reference/estimate image
 calculations such as NRMSE, PSNR, SSIM, and Poisson deviance.
+
+The reusable metric result uses `reference_sum` and `estimate_sum`. Recorder
+dictionaries and persisted diagnostic JSON retain their acquisition-specific
+`measured_sum` and `predicted_sum` keys; the diagnostic adapter performs this
+translation without changing the pure metric type.
 
 ## End-to-end report
 

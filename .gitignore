@@ -1,5 +1,5 @@
 .DS_Store
-LOCAL_TODO.md
+LOCAL_*.md
 target/
 site/
 .pixi/

@@ -1,3 +1,4 @@
+use ndarray::{Array2, Array3};
 use std::{
     collections::{HashMap, VecDeque},
     mem::size_of,
@@ -402,16 +403,37 @@ impl LazyMeasurementStack {
             }
             None => load_grayscale(path, GrayscaleScaling::NativeCounts)?,
         };
-        if values.shape() != self.image_shape {
+        if values.dim() != self.image_shape {
             return Err(Error::InvalidMeasurements(format!(
                 "image {} changed shape to {:?}, expected {:?}",
                 path.display(),
-                values.shape(),
+                values.dim(),
                 self.image_shape
             )));
         }
-        self.preprocess_frame(index, values.as_mut_slice())?;
-        let loaded = Arc::new(values.into_vec());
+        if !values.is_standard_layout() {
+            return Err(Error::NonStandardLayout {
+                context: "decoded lazy measurement frame",
+                shape: values.shape().to_vec(),
+                strides: values.strides().to_vec(),
+            });
+        }
+        let decoded_strides = values.strides().to_vec();
+        let values_slice = values
+            .as_slice_mut()
+            .ok_or_else(|| Error::NonStandardLayout {
+                context: "decoded lazy measurement frame",
+                shape: vec![self.image_shape.0, self.image_shape.1],
+                strides: decoded_strides,
+            })?;
+        self.preprocess_frame(index, values_slice)?;
+        let (values, offset) = values.into_raw_vec_and_offset();
+        if offset.unwrap_or(0) != 0 || values.len() != self.frame_len() {
+            return Err(Error::InvalidMeasurements(
+                "decoded lazy frame allocation does not match its logical image".into(),
+            ));
+        }
+        let loaded = Arc::new(values);
         let loaded_bytes = loaded.len().checked_mul(size_of::<f64>()).ok_or_else(|| {
             Error::InvalidMeasurements("decoded lazy frame byte length overflows".into())
         })?;
@@ -475,7 +497,15 @@ impl LazyMeasurementStack {
         let mut stack =
             MeasurementStack::from_vec(data, self.image_shape, self.frame_metadata.clone())?;
         if let Some(masks) = &self.masks {
-            stack = stack.with_masks(masks.clone())?;
+            if masks.len() == self.frame_len() {
+                stack =
+                    stack.with_masks(Array2::from_shape_vec(self.image_shape, masks.clone())?)?;
+            } else {
+                stack = stack.with_per_frame_masks(Array3::from_shape_vec(
+                    (self.frame_count(), self.image_shape.0, self.image_shape.1),
+                    masks.clone(),
+                )?)?;
+            }
         }
         Ok(stack)
     }

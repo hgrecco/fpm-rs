@@ -83,14 +83,14 @@ fn k_vector_na(vector: &KVector, wavelength: f64) -> f64 {
 }
 
 fn pupil_radius_px(pupil: &crate::model::Pupil) -> f64 {
-    let shape = pupil.values.shape();
+    let shape = pupil.shape();
     let center_y = shape.0 as f64 / 2.0;
     let center_x = shape.1 as f64 / 2.0;
     let mut max_radius: f64 = 0.0;
     for row in 0..shape.0 {
         for col in 0..shape.1 {
             let index = row * shape.1 + col;
-            if pupil.support[index] {
+            if pupil.support.as_slice()[index] != 0 {
                 let radius = (row as f64 - center_y).hypot(col as f64 - center_x);
                 max_radius = max_radius.max(radius);
             }

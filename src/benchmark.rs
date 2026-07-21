@@ -12,10 +12,11 @@ use std::{
     time::Instant,
 };
 
+use ndarray::ArrayView2;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Array2, Complex64, Result,
+    Complex64, Result,
     algorithms::ReconstructionAlgorithm,
     evaluation::{evaluate_frame_intensity, evaluate_reconstruction_with_problem},
     measurements::MeasurementRead,
@@ -146,9 +147,9 @@ pub fn run_benchmark_case<A, M>(
     algorithm_configuration: impl Into<String>,
     algorithm: A,
     problem: &ReconstructionProblem<M>,
-    ground_truth: Option<&Array2<Complex64>>,
+    ground_truth: Option<ArrayView2<'_, Complex64>>,
     true_model: Option<&ImagePlaneModel>,
-    valid_object_mask: Option<&Array2<u8>>,
+    valid_object_mask: Option<ArrayView2<'_, u8>>,
 ) -> (BenchmarkRecord, Option<ReconstructionResult>)
 where
     A: ReconstructionAlgorithm,

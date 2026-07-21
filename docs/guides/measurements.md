@@ -9,14 +9,17 @@ description.
 import numpy as np
 import fpm_rs as fpm
 
-frames = np.asarray(raw_frames, dtype=np.float64)  # (frames, height, width)
+frames = np.ascontiguousarray(raw_frames, dtype=np.float64)  # (frames, height, width)
 measurements = fpm.MeasurementStack(frames)
 problem = fpm.ReconstructionProblem(measurements, model)
 ```
 
-Input arrays are copied once because their storage is Python-owned. Every frame
-must have the same `(height, width)` as `model.image_shape`. Values represent
-intensity, not amplitude. Use `frame_weights` to down-weight or disable complete
+Input arrays must be C-contiguous; transposed, reversed, and stepped views are
+rejected without an implicit repair copy. Call `np.ascontiguousarray` explicitly
+when that copy is appropriate. Accepted arrays are copied once into Rust-owned
+storage. Every frame must have the same `(height, width)` as
+`model.image_shape`. Values represent intensity, not amplitude. Masks follow
+the same contiguity rule. Use `frame_weights` to down-weight or disable complete
 frames and `masks` to exclude detector pixels.
 
 The Rust API additionally provides resident and lazy stacks, image-stack

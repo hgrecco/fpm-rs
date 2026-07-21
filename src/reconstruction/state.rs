@@ -1,9 +1,11 @@
+use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::{
-    Array2, Result,
+    Result,
+    array_layout::{StandardArray2, StandardView2, checked_len_2d},
     backend::{Backend, CpuBackend, FftDirection},
     error::Error,
     measurements::MeasurementRead,
@@ -24,33 +26,34 @@ pub enum AlgorithmAuxiliaryState {
 }
 
 #[derive(Clone, Debug)]
-pub struct ReconstructionScratch {
-    pub patch: Vec<Complex64>,
-    pub exit_spectrum: Vec<Complex64>,
-    pub field: Vec<Complex64>,
-    pub projected_field: Vec<Complex64>,
-    pub projected_spectrum: Vec<Complex64>,
-    pub difference: Vec<Complex64>,
+pub(crate) struct ReconstructionScratch {
+    pub(crate) patch: Vec<Complex64>,
+    pub(crate) exit_spectrum: Vec<Complex64>,
+    pub(crate) field: Vec<Complex64>,
+    pub(crate) projected_field: Vec<Complex64>,
+    pub(crate) projected_spectrum: Vec<Complex64>,
+    pub(crate) difference: Vec<Complex64>,
     /// High-resolution accumulator used by mini-batch algorithms.
-    pub object_gradient: Vec<Complex64>,
-    pub regularization_field: Vec<Complex64>,
-    pub pupil_gradient: Vec<Complex64>,
-    pub calibration_reference: Vec<f64>,
-    pub illumination_gradient: Vec<(f64, f64)>,
-    pub illumination_curvature: Vec<(f64, f64)>,
-    pub illumination_weight: Vec<f64>,
+    pub(crate) object_gradient: Vec<Complex64>,
+    pub(crate) regularization_field: Vec<Complex64>,
+    pub(crate) pupil_gradient: Vec<Complex64>,
+    pub(crate) calibration_reference: Vec<f64>,
+    pub(crate) illumination_gradient: Vec<(f64, f64)>,
+    pub(crate) illumination_curvature: Vec<(f64, f64)>,
+    pub(crate) illumination_weight: Vec<f64>,
     /// Per-source low-resolution fields for an incoherently multiplexed frame.
-    pub multiplex_fields: Vec<Complex64>,
+    pub(crate) multiplex_fields: Vec<Complex64>,
     /// Matching pre-update object patches for multiplexed projection updates.
-    pub multiplex_patches: Vec<Complex64>,
-    pub multiplex_offsets: Vec<FourierOffset>,
-    pub column: Vec<Complex64>,
+    pub(crate) multiplex_patches: Vec<Complex64>,
+    pub(crate) multiplex_offsets: Vec<FourierOffset>,
+    pub(crate) column: Vec<Complex64>,
 }
 
 impl ReconstructionScratch {
-    fn new(low_shape: (usize, usize), high_shape: (usize, usize)) -> Self {
-        let low_len = low_shape.0 * low_shape.1;
-        Self {
+    fn new(low_shape: (usize, usize), high_shape: (usize, usize)) -> Result<Self> {
+        let low_len = checked_len_2d(low_shape)?;
+        checked_len_2d(high_shape)?;
+        Ok(Self {
             patch: vec![Complex64::default(); low_len],
             exit_spectrum: vec![Complex64::default(); low_len],
             field: vec![Complex64::default(); low_len],
@@ -68,21 +71,21 @@ impl ReconstructionScratch {
             multiplex_patches: Vec::new(),
             multiplex_offsets: Vec::new(),
             column: vec![Complex64::default(); low_shape.0.max(high_shape.0)],
-        }
+        })
     }
 }
 
 #[derive(Clone)]
 pub struct ReconstructionState {
-    pub object_spectrum: Array2<Complex64>,
-    pub object_real_space_cache: Option<Array2<Complex64>>,
-    pub pupil: Pupil,
+    pub(crate) object_spectrum: StandardArray2<Complex64>,
+    pub(crate) object_real_space_cache: Option<StandardArray2<Complex64>>,
+    pub(crate) pupil: Pupil,
     /// Per-source `(row, column)` corrections in Fourier-grid pixels.
-    pub illumination_corrections: Option<Vec<(f64, f64)>>,
-    pub frame_gains: Option<Vec<f64>>,
-    pub background: Option<Vec<f64>>,
-    pub algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
-    pub scratch: ReconstructionScratch,
+    pub(crate) illumination_corrections: Option<Vec<(f64, f64)>>,
+    pub(crate) frame_gains: Option<Vec<f64>>,
+    pub(crate) background: Option<Vec<f64>>,
+    pub(crate) algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
+    pub(crate) scratch: ReconstructionScratch,
     pub(crate) backend: Arc<dyn Backend>,
 }
 
@@ -101,6 +104,40 @@ impl std::fmt::Debug for ReconstructionState {
 }
 
 impl ReconstructionState {
+    pub fn object_spectrum(&self) -> ArrayView2<'_, Complex64> {
+        self.object_spectrum.ndarray_view()
+    }
+
+    pub fn object_spectrum_mut(&mut self) -> ArrayViewMut2<'_, Complex64> {
+        self.object_real_space_cache = None;
+        self.object_spectrum.ndarray_view_mut()
+    }
+
+    pub fn pupil(&self) -> &Pupil {
+        &self.pupil
+    }
+
+    pub fn illumination_corrections(&self) -> Option<&[(f64, f64)]> {
+        self.illumination_corrections.as_deref()
+    }
+
+    pub fn frame_gains(&self) -> Option<&[f64]> {
+        self.frame_gains.as_deref()
+    }
+
+    pub fn background(&self) -> Option<&[f64]> {
+        self.background.as_deref()
+    }
+
+    /// Most recently accumulated per-source illumination gradient.
+    pub fn illumination_gradient(&self) -> &[(f64, f64)] {
+        &self.scratch.illumination_gradient
+    }
+
+    pub(crate) fn object_spectrum_standard_view(&self) -> StandardView2<'_, Complex64> {
+        self.object_spectrum.view()
+    }
+
     pub fn effective_source_offset(
         &self,
         model: &ImagePlaneModel,
@@ -140,7 +177,7 @@ impl ReconstructionState {
         problem.validate()?;
         let low_shape = problem.model.image_shape;
         let high_shape = problem.model.reconstruction_shape;
-        let low_len = low_shape.0 * low_shape.1;
+        let low_len = checked_len_2d(low_shape)?;
         let mut average_amplitude = vec![0.0; low_len];
         let mut amplitude_weight = vec![0.0; low_len];
         let mut total_amplitude = 0.0;
@@ -180,7 +217,8 @@ impl ReconstructionState {
                 fallback_amplitude
             };
         }
-        let mut object = vec![Complex64::default(); high_shape.0 * high_shape.1];
+        let high_len = checked_len_2d(high_shape)?;
+        let mut object = vec![Complex64::default(); high_len];
         for row in 0..high_shape.0 {
             let low_row = row * low_shape.0 / high_shape.0;
             for column in 0..high_shape.1 {
@@ -193,7 +231,7 @@ impl ReconstructionState {
         backend.fft2(&mut object, high_shape, FftDirection::Forward, &mut column)?;
         let mut centered = vec![Complex64::default(); object.len()];
         fftshift_copy(&object, &mut centered, high_shape);
-        let object_spectrum = Array2::from_vec(high_shape, centered)?;
+        let object_spectrum = StandardArray2::from_shape_vec(high_shape, centered)?;
         Ok(Self {
             object_spectrum,
             object_real_space_cache: None,
@@ -202,7 +240,7 @@ impl ReconstructionState {
             frame_gains: problem.model.frame_gains.clone(),
             background: problem.model.background.clone(),
             algorithm_auxiliary: None,
-            scratch: ReconstructionScratch::new(low_shape, high_shape),
+            scratch: ReconstructionScratch::new(low_shape, high_shape)?,
             backend,
         })
     }
@@ -211,24 +249,24 @@ impl ReconstructionState {
         problem: &ReconstructionProblem<M>,
         object: Array2<Complex64>,
     ) -> Result<Self> {
-        if object.shape() != problem.model.reconstruction_shape {
+        let mut object = StandardArray2::try_from(object)?;
+        if object.dim() != problem.model.reconstruction_shape {
             return Err(Error::InvalidShape(format!(
                 "initial object shape {:?} differs from reconstruction shape {:?}",
-                object.shape(),
+                object.dim(),
                 problem.model.reconstruction_shape
             )));
         }
         let mut state = Self::initialize(problem)?;
-        let mut raw_spectrum = object.into_vec();
         state.backend.fft2(
-            &mut raw_spectrum,
+            object.as_slice_mut(),
             problem.model.reconstruction_shape,
             FftDirection::Forward,
             &mut state.scratch.column,
         )?;
         fftshift_copy(
-            &raw_spectrum,
-            state.object_spectrum.as_mut_slice(),
+            object.as_slice(),
+            state.object_spectrum.as_slice_mut(),
             problem.model.reconstruction_shape,
         );
         Ok(state)
@@ -254,14 +292,14 @@ impl ReconstructionState {
         let low_shape = problem.model.image_shape;
         let high_shape = problem.model.reconstruction_shape;
         Ok(Self {
-            object_spectrum: checkpoint.object_spectrum.clone(),
+            object_spectrum: StandardArray2::try_from(checkpoint.object_spectrum.clone())?,
             object_real_space_cache: None,
             pupil: checkpoint.pupil.clone(),
             illumination_corrections: checkpoint.illumination_corrections.clone(),
             frame_gains: checkpoint.frame_gains.clone(),
             background: checkpoint.background.clone(),
             algorithm_auxiliary: checkpoint.algorithm_auxiliary.clone(),
-            scratch: ReconstructionScratch::new(low_shape, high_shape),
+            scratch: ReconstructionScratch::new(low_shape, high_shape)?,
             backend,
         })
     }

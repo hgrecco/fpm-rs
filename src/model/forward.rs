@@ -1,9 +1,11 @@
+use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
 use std::{sync::Arc, thread};
 
 use crate::{
-    Array2, Result,
+    Result,
     algorithms::objective::LossType,
+    array_layout::{StandardView2, checked_len_2d},
     backend::{Backend, CpuBackend, FftDirection},
     error::Error,
 };
@@ -20,9 +22,9 @@ pub struct ForwardWorkspace {
 }
 
 impl ForwardWorkspace {
-    fn new(model: &ImagePlaneModel) -> Self {
-        let image_len = model.image_shape.0 * model.image_shape.1;
-        Self {
+    fn new(model: &ImagePlaneModel) -> Result<Self> {
+        let image_len = checked_len_2d(model.image_shape)?;
+        Ok(Self {
             patch: vec![Complex64::default(); image_len],
             centered_exit: vec![Complex64::default(); image_len],
             field: vec![Complex64::default(); image_len],
@@ -30,7 +32,7 @@ impl ForwardWorkspace {
                 Complex64::default();
                 model.image_shape.0.max(model.reconstruction_shape.0)
             ],
-        }
+        })
     }
 
     pub fn field(&self) -> &[Complex64] {
@@ -39,6 +41,12 @@ impl ForwardWorkspace {
 }
 
 /// Allocation-friendly CPU implementation of the image-plane FPM forward model.
+///
+/// Public spectrum and two-dimensional destination views must have standard
+/// C-style row-major layout. The layout is validated once at each public
+/// computational boundary and nonstandard views are rejected without copying.
+/// Methods returning an [`Array2`] allocate their result; `_into` methods borrow
+/// caller-provided workspace and destinations.
 pub struct ForwardModel<'a> {
     model: &'a ImagePlaneModel,
     backend: Arc<dyn Backend>,
@@ -62,25 +70,25 @@ impl<'a> ForwardModel<'a> {
         self.model
     }
 
-    pub fn workspace(&self) -> ForwardWorkspace {
+    pub fn workspace(&self) -> Result<ForwardWorkspace> {
         ForwardWorkspace::new(self.model)
     }
 
     pub fn extract_patch(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         source: usize,
     ) -> Result<Array2<Complex64>> {
-        let mut values =
-            vec![Complex64::default(); self.model.image_shape.0 * self.model.image_shape.1];
+        let image_len = checked_len_2d(self.model.image_shape)?;
+        let mut values = vec![Complex64::default(); image_len];
         self.model
             .extract_patch(object_spectrum, source, &mut values)?;
-        Array2::from_vec(self.model.image_shape, values)
+        Ok(Array2::from_shape_vec(self.model.image_shape, values)?)
     }
 
     pub fn insert_patch_update(
         &self,
-        object_spectrum: &mut Array2<Complex64>,
+        object_spectrum: ArrayViewMut2<'_, Complex64>,
         source: usize,
         update: &[Complex64],
         scale: f64,
@@ -95,7 +103,7 @@ impl<'a> ForwardModel<'a> {
         pupil: &Pupil,
         destination: &mut [Complex64],
     ) -> Result<()> {
-        let len = self.model.image_shape.0 * self.model.image_shape.1;
+        let len = checked_len_2d(self.model.image_shape)?;
         if patch.len() != len || destination.len() != len || pupil.values.len() != len {
             return Err(Error::InvalidShape(
                 "patch, pupil, and destination lengths must match image shape".into(),
@@ -114,25 +122,29 @@ impl<'a> ForwardModel<'a> {
     /// Coherent low-resolution field for one illumination source.
     pub fn forward_source_field(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         source: usize,
     ) -> Result<Array2<Complex64>> {
-        let mut workspace = self.workspace();
-        self.forward_source_field_into(object_spectrum, pupil, source, &mut workspace)?;
-        Array2::from_vec(self.model.image_shape, workspace.field)
+        let object_spectrum = StandardView2::try_from(object_spectrum)?;
+        let mut workspace = self.workspace()?;
+        self.forward_source_field_standard_into(object_spectrum, pupil, source, &mut workspace)?;
+        Ok(Array2::from_shape_vec(
+            self.model.image_shape,
+            workspace.field,
+        )?)
     }
 
-    pub fn forward_source_field_into<'b>(
+    pub(crate) fn forward_source_field_standard_into<'b>(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: StandardView2<'_, Complex64>,
         pupil: &Pupil,
         source: usize,
         workspace: &'b mut ForwardWorkspace,
     ) -> Result<&'b [Complex64]> {
         self.validate_workspace(workspace)?;
         self.model
-            .extract_patch(object_spectrum, source, &mut workspace.patch)?;
+            .extract_patch_standard(object_spectrum, source, &mut workspace.patch)?;
         self.apply_pupil(&workspace.patch, pupil, &mut workspace.centered_exit)?;
         ifftshift_copy(
             &workspace.centered_exit,
@@ -152,7 +164,7 @@ impl<'a> ForwardModel<'a> {
     /// one source is represented by a field scaled by the square-root weight.
     pub fn forward_field(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         frame: usize,
     ) -> Result<Array2<Complex64>> {
@@ -172,7 +184,7 @@ impl<'a> ForwardModel<'a> {
             let (source, weight) = row[0];
             let mut field = self.forward_source_field(object_spectrum, pupil, source)?;
             let field_scale = weight.sqrt();
-            for value in field.as_mut_slice() {
+            for value in &mut field {
                 *value *= field_scale;
             }
             Ok(field)
@@ -183,19 +195,43 @@ impl<'a> ForwardModel<'a> {
 
     pub fn forward_intensity(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         frame: usize,
     ) -> Result<Array2<f64>> {
-        let mut workspace = self.workspace();
-        let mut values = vec![0.0; self.model.image_shape.0 * self.model.image_shape.1];
-        self.forward_intensity_into(object_spectrum, pupil, frame, &mut workspace, &mut values)?;
-        Array2::from_vec(self.model.image_shape, values)
+        let object_spectrum = StandardView2::try_from(object_spectrum)?;
+        let mut workspace = self.workspace()?;
+        let mut values = vec![0.0; checked_len_2d(self.model.image_shape)?];
+        self.forward_intensity_standard_into(
+            object_spectrum,
+            pupil,
+            frame,
+            &mut workspace,
+            &mut values,
+        )?;
+        Ok(Array2::from_shape_vec(self.model.image_shape, values)?)
     }
 
     pub fn forward_intensity_into(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
+        pupil: &Pupil,
+        frame: usize,
+        workspace: &mut ForwardWorkspace,
+        destination: &mut [f64],
+    ) -> Result<()> {
+        self.forward_intensity_standard_into(
+            StandardView2::try_from(object_spectrum)?,
+            pupil,
+            frame,
+            workspace,
+            destination,
+        )
+    }
+
+    pub(crate) fn forward_intensity_standard_into(
+        &self,
+        object_spectrum: StandardView2<'_, Complex64>,
         pupil: &Pupil,
         frame: usize,
         workspace: &mut ForwardWorkspace,
@@ -208,7 +244,7 @@ impl<'a> ForwardModel<'a> {
             });
         }
         let gain = self.frame_gain(frame)?;
-        let image_len = self.model.image_shape.0 * self.model.image_shape.1;
+        let image_len = checked_len_2d(self.model.image_shape)?;
         if destination.len() != image_len {
             return Err(Error::LengthMismatch {
                 actual: destination.len(),
@@ -219,14 +255,19 @@ impl<'a> ForwardModel<'a> {
         destination.fill(0.0);
         if let Some(matrix) = &self.model.multiplexing_matrix {
             for &(source, weight) in &matrix[frame] {
-                let field =
-                    self.forward_source_field_into(object_spectrum, pupil, source, workspace)?;
+                let field = self.forward_source_field_standard_into(
+                    object_spectrum,
+                    pupil,
+                    source,
+                    workspace,
+                )?;
                 for (intensity, value) in destination.iter_mut().zip(field) {
                     *intensity += weight * value.norm_sqr();
                 }
             }
         } else {
-            let field = self.forward_source_field_into(object_spectrum, pupil, frame, workspace)?;
+            let field =
+                self.forward_source_field_standard_into(object_spectrum, pupil, frame, workspace)?;
             for (intensity, value) in destination.iter_mut().zip(field) {
                 *intensity = value.norm_sqr();
             }
@@ -245,18 +286,19 @@ impl<'a> ForwardModel<'a> {
     /// rejected. A worker count of one executes directly without spawning.
     pub fn forward_intensity_stack_into(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         destination: &mut [f64],
         worker_count: usize,
     ) -> Result<()> {
+        let object_spectrum = StandardView2::try_from(object_spectrum)?;
         if worker_count == 0 {
             return Err(Error::InvalidParameter {
                 name: "worker_count",
                 reason: "must be greater than zero".into(),
             });
         }
-        let image_len = self.model.image_shape.0 * self.model.image_shape.1;
+        let image_len = checked_len_2d(self.model.image_shape)?;
         let expected = image_len
             .checked_mul(self.model.frame_count())
             .ok_or_else(|| Error::InvalidShape("forward stack length overflows".into()))?;
@@ -269,9 +311,9 @@ impl<'a> ForwardModel<'a> {
         }
         let workers = worker_count.min(self.model.frame_count());
         if workers == 1 {
-            let mut workspace = self.workspace();
+            let mut workspace = self.workspace()?;
             for (frame, frame_destination) in destination.chunks_exact_mut(image_len).enumerate() {
-                self.forward_intensity_into(
+                self.forward_intensity_standard_into(
                     object_spectrum,
                     pupil,
                     frame,
@@ -291,11 +333,11 @@ impl<'a> ForwardModel<'a> {
                 .map(|(chunk_index, output)| {
                     let first_frame = chunk_index * frames_per_worker;
                     scope.spawn(move || -> Result<()> {
-                        let mut workspace = self.workspace();
+                        let mut workspace = self.workspace()?;
                         for (local_frame, frame_destination) in
                             output.chunks_exact_mut(image_len).enumerate()
                         {
-                            self.forward_intensity_into(
+                            self.forward_intensity_standard_into(
                                 object_spectrum,
                                 pupil,
                                 first_frame + local_frame,
@@ -319,19 +361,28 @@ impl<'a> ForwardModel<'a> {
     /// Allocation-owning convenience wrapper for [`Self::forward_intensity_stack_into`].
     pub fn forward_intensity_stack(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         worker_count: usize,
     ) -> Result<Vec<f64>> {
-        let image_len = self.model.image_shape.0 * self.model.image_shape.1;
-        let mut destination = vec![0.0; image_len * self.model.frame_count()];
+        let image_len = checked_len_2d(self.model.image_shape)?;
+        let stack_len = image_len
+            .checked_mul(self.model.frame_count())
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![
+                    self.model.frame_count(),
+                    self.model.image_shape.0,
+                    self.model.image_shape.1,
+                ],
+            })?;
+        let mut destination = vec![0.0; stack_len];
         self.forward_intensity_stack_into(object_spectrum, pupil, &mut destination, worker_count)?;
         Ok(destination)
     }
 
     pub fn residual(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         frame: usize,
         measured: &[f64],
@@ -343,7 +394,6 @@ impl<'a> ForwardModel<'a> {
             ));
         }
         Ok(predicted
-            .as_slice()
             .iter()
             .zip(measured)
             .map(|(&predicted, &measured)| predicted - measured)
@@ -406,14 +456,17 @@ impl<'a> ForwardModel<'a> {
 
     pub fn frame_loss(
         &self,
-        object_spectrum: &Array2<Complex64>,
+        object_spectrum: ArrayView2<'_, Complex64>,
         pupil: &Pupil,
         frame: usize,
         measured: &[f64],
         loss_type: LossType,
     ) -> Result<f64> {
         let predicted = self.forward_intensity(object_spectrum, pupil, frame)?;
-        crate::algorithms::objective::loss(predicted.as_slice(), measured, loss_type)
+        let predicted = predicted.as_slice().ok_or_else(|| {
+            Error::InvalidModel("internally generated intensity was not standard layout".into())
+        })?;
+        crate::algorithms::objective::loss(predicted, measured, loss_type)
     }
 
     fn frame_gain(&self, frame: usize) -> Result<f64> {
@@ -441,7 +494,7 @@ impl<'a> ForwardModel<'a> {
     }
 
     fn validate_workspace(&self, workspace: &ForwardWorkspace) -> Result<()> {
-        let image_len = self.model.image_shape.0 * self.model.image_shape.1;
+        let image_len = checked_len_2d(self.model.image_shape)?;
         if workspace.patch.len() != image_len
             || workspace.centered_exit.len() != image_len
             || workspace.field.len() != image_len

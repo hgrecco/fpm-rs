@@ -1,7 +1,7 @@
 use std::{env, path::Path};
 
 use fpm_rs::{
-    Array2, Complex64, Error, Result,
+    Complex64, Error, Result,
     algorithms::{
         Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
     },
@@ -15,6 +15,7 @@ use fpm_rs::{
     reconstruction::ReconstructionProblem,
     simulation::presets::{NOISELESS_MIXED_PRESET, noiseless_mixed_fpm},
 };
+use ndarray::Array2;
 
 fn main() -> Result<()> {
     let profile_name = env::args()
@@ -24,7 +25,12 @@ fn main() -> Result<()> {
     let iterations = match profile.name {
         SMOKE_BENCHMARK_PROFILE => 2,
         CPU_BENCHMARK_PROFILE => 20,
-        _ => unreachable!("benchmark profiles are exhaustively matched"),
+        other => {
+            return Err(Error::InvalidParameter {
+                name: "benchmark_profile",
+                reason: format!("unsupported profile {other}"),
+            });
+        }
     };
 
     let simulation = noiseless_mixed_fpm(2026)?;
@@ -124,7 +130,7 @@ where
         algorithm_configuration,
         algorithm,
         case.problem,
-        Some(case.truth),
+        Some(case.truth.view()),
         Some(case.true_model),
         None,
     );

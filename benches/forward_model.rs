@@ -1,16 +1,24 @@
 use std::{env, hint::black_box, time::Instant};
 
 use fpm_rs::{
-    Array2, Complex64, Result,
+    Complex64, Error, Result,
     experiment::KVector,
     model::{CropIndices, ForwardModel, FourierCrop, ImagePlaneModel, Pupil, Sampling},
 };
+use ndarray::Array2;
 
 fn main() -> Result<()> {
     let model = benchmark_model()?;
-    let spectrum = Array2::from_vec(
-        model.reconstruction_shape,
-        (0..model.reconstruction_shape.0 * model.reconstruction_shape.1)
+    let reconstruction_shape = model.reconstruction_shape();
+    let reconstruction_len = reconstruction_shape
+        .0
+        .checked_mul(reconstruction_shape.1)
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![reconstruction_shape.0, reconstruction_shape.1],
+        })?;
+    let spectrum = Array2::from_shape_vec(
+        reconstruction_shape,
+        (0..reconstruction_len)
             .map(|index| Complex64::new((index % 101) as f64 / 101.0, (index % 67) as f64 / 67.0))
             .collect(),
     )?;
@@ -24,22 +32,34 @@ fn main() -> Result<()> {
     let mut checksum = 0.0;
     for _ in 0..iterations {
         for frame in 0..model.frame_count() {
-            let intensity = forward.forward_intensity(&spectrum, &model.pupil, frame)?;
-            checksum += intensity.as_slice()[frame % intensity.len()];
+            let intensity = forward.forward_intensity(spectrum.view(), model.pupil(), frame)?;
+            checksum += intensity
+                .iter()
+                .nth(frame % intensity.len())
+                .copied()
+                .unwrap_or(0.0);
         }
     }
     let allocating = allocating_started.elapsed();
     black_box(checksum);
 
-    let mut workspace = forward.workspace();
-    let mut intensity = vec![0.0; model.image_shape.0 * model.image_shape.1];
+    let mut workspace = forward.workspace()?;
+    let image_shape = model.image_shape();
+    let image_len =
+        image_shape
+            .0
+            .checked_mul(image_shape.1)
+            .ok_or_else(|| Error::ShapeOverflow {
+                shape: vec![image_shape.0, image_shape.1],
+            })?;
+    let mut intensity = vec![0.0; image_len];
     let reused_started = Instant::now();
     let mut checksum = 0.0;
     for _ in 0..iterations {
         for frame in 0..model.frame_count() {
             forward.forward_intensity_into(
-                &spectrum,
-                &model.pupil,
+                spectrum.view(),
+                model.pupil(),
                 frame,
                 &mut workspace,
                 &mut intensity,
@@ -51,11 +71,22 @@ fn main() -> Result<()> {
     black_box(checksum);
 
     let workers = std::thread::available_parallelism().map_or(1, |count| count.get());
-    let mut stack = vec![0.0; model.frame_count() * intensity.len()];
+    let stack_len = model
+        .frame_count()
+        .checked_mul(intensity.len())
+        .ok_or_else(|| Error::ShapeOverflow {
+            shape: vec![model.frame_count(), image_shape.0, image_shape.1],
+        })?;
+    let mut stack = vec![0.0; stack_len];
     let parallel_started = Instant::now();
     let mut checksum = 0.0;
     for _ in 0..iterations {
-        forward.forward_intensity_stack_into(&spectrum, &model.pupil, &mut stack, workers)?;
+        forward.forward_intensity_stack_into(
+            spectrum.view(),
+            model.pupil(),
+            &mut stack,
+            workers,
+        )?;
         for frame in 0..model.frame_count() {
             checksum += stack[frame * intensity.len() + frame % intensity.len()];
         }
@@ -85,8 +116,8 @@ fn benchmark_model() -> Result<ImagePlaneModel> {
     let reconstruction_shape = (128, 128);
     let sampling = Sampling::new(1.0, 0.5, 1.0, 1.0)?;
     let pupil = Pupil::new(
-        Array2::filled(image_shape, Complex64::new(1.0, 0.0))?,
-        vec![true; image_shape.0 * image_shape.1],
+        Array2::from_elem(image_shape, Complex64::new(1.0, 0.0)),
+        Array2::from_elem(image_shape, 1_u8),
     )?;
     let shifts: Vec<_> = (-2_isize..=2)
         .flat_map(|row| (-2_isize..=2).map(move |column| (8 * column, 8 * row)))

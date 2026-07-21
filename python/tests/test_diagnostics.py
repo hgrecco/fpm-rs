@@ -163,6 +163,14 @@ def test_debug_recorder_collects_frame_and_raw_summaries(
     assert len(diagnostics["frame_diagnostics"]) == problem.frame_count
     assert len(diagnostics["raw_frame_stats"]) == problem.frame_count
     assert all("iteration" in entry for entry in diagnostics["frame_diagnostics"])
+    assert all("measured_sum" in entry for entry in diagnostics["frame_diagnostics"])
+    assert all("predicted_sum" in entry for entry in diagnostics["frame_diagnostics"])
+    assert all(
+        "reference_sum" not in entry for entry in diagnostics["frame_diagnostics"]
+    )
+    assert all(
+        "estimate_sum" not in entry for entry in diagnostics["frame_diagnostics"]
+    )
     assert "object_snapshots" not in diagnostics
     assert "pupil_snapshots" not in diagnostics
 

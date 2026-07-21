@@ -4,7 +4,8 @@
 //! compile into this computational model, and algorithms only consume the model.
 
 pub mod algorithms;
-pub mod array;
+mod array_layout;
+mod array_serde;
 pub mod backend;
 pub mod benchmark;
 pub mod callbacks;
@@ -22,6 +23,5 @@ pub mod model;
 pub mod reconstruction;
 pub mod simulation;
 
-pub use array::Array2;
 pub use error::{Error, Result};
 pub use num_complex::Complex64;

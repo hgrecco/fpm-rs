@@ -19,7 +19,7 @@ ptychography, multislice propagation, and GPU execution are not implemented.
   options fit the experiment.
 - **Keep a run inspectable.** Record diagnostics, write checkpoints, and
   compare simulations with known ground truth.
-- **Measure at the right layer.** Reusable reference/candidate metrics,
+- **Measure at the right layer.** Reusable reference/estimate metrics,
   optimization objectives, reconstruction evaluation, and recorder-driven
   diagnostics are separate APIs.
 
@@ -32,6 +32,23 @@ ptychography, multislice propagation, and GPU execution are not implemented.
 
 The same forward model is used for simulation and reconstruction, while
 algorithms consume the compiled model rather than experimental geometry.
+
+## Array layout contract
+
+The Rust API uses native `ndarray` arrays and views. Pointwise utilities and
+metrics accept arbitrary logical layouts, including transposed and stepped
+views. Computational inputs whose kernels use flat Fourier-grid offsets—such
+as pupils, synthetic objects, measurement stacks, crop operations, and direct
+forward-model spectra—require standard C-style row-major layout. Those APIs
+validate the layout without copying and return a `NonStandardLayout` error for
+strided input. Owned result and diagnostic arrays are ordinary `ndarray`
+arrays and may be rearranged freely by callers.
+
+Python follows the same distinction. Metrics accept strided NumPy arrays.
+Reconstruction, simulation, pupil, and measurement inputs require
+C-contiguous arrays and raise an error suggesting `numpy.ascontiguousarray`;
+the caller therefore decides whether to pay for that copy. Accepted NumPy
+inputs are copied into Rust-owned storage at the binding boundary.
 
 ## Start here
 

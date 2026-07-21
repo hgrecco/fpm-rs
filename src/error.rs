@@ -18,6 +18,24 @@ pub enum Error {
         expected: usize,
         shape: (usize, usize),
     },
+    #[error("array length {actual} does not match shape {shape:?} (expected {expected})")]
+    ArrayLengthMismatch {
+        actual: usize,
+        expected: usize,
+        shape: Vec<usize>,
+    },
+    #[error("array shape {shape:?} overflows addressable storage")]
+    ShapeOverflow { shape: Vec<usize> },
+    #[error(
+        "{context} with shape {shape:?} and strides {strides:?} is not C-contiguous standard row-major layout"
+    )]
+    NonStandardLayout {
+        context: &'static str,
+        shape: Vec<usize>,
+        strides: Vec<isize>,
+    },
+    #[error("ndarray shape construction failed: {0}")]
+    NdarrayShape(#[from] ndarray::ShapeError),
     #[error("frame index {index} is out of range for {frames} frames")]
     FrameOutOfRange { index: usize, frames: usize },
     #[error("numerical error: {0}")]

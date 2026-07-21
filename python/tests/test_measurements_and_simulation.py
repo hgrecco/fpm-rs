@@ -56,19 +56,35 @@ def test_acquisition_errors_are_concrete_configuration(
     np.testing.assert_array_equal(result.measurements.frame_weights, [0.0])
 
 
-def test_measurement_stack_accepts_noncontiguous_arrays_and_masks(
+def test_measurement_stack_rejects_noncontiguous_arrays_and_masks(
     model: fpm.ImagePlaneModel,
 ) -> None:
     contiguous = np.ones((1, 8, 8), dtype=np.float64)
     measurements = contiguous[:, ::-1, :]
+    with pytest.raises(fpm.InvalidShapeError, match="ascontiguousarray"):
+        fpm.MeasurementStack(measurements, frame_weights=[0.5])
+
     masks = np.ones((1, 8, 8), dtype=np.uint8)[:, :, ::-1]
-    stack = fpm.MeasurementStack(measurements, frame_weights=[0.5], masks=masks)
+    with pytest.raises(fpm.InvalidShapeError, match="ascontiguousarray"):
+        fpm.MeasurementStack(contiguous, frame_weights=[0.5], masks=masks)
+
+    stack = fpm.MeasurementStack(
+        contiguous,
+        frame_weights=[0.5],
+        masks=np.ascontiguousarray(masks),
+    )
     problem = fpm.ReconstructionProblem(stack, model, name="array-problem")
 
     assert problem.name == "array-problem"
     assert problem.frame_count == 1
     assert stack.shape == (1, 8, 8)
     np.testing.assert_allclose(stack.frame_weights, [0.5])
+
+
+def test_synthetic_object_rejects_noncontiguous_fields() -> None:
+    field = np.ones((16, 16), dtype=np.complex128).T
+    with pytest.raises(fpm.InvalidShapeError, match="ascontiguousarray"):
+        fpm.SyntheticObject(field)
 
 
 def test_problem_accepts_a_raw_numpy_stack(model: fpm.ImagePlaneModel) -> None:

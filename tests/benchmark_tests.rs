@@ -1,7 +1,7 @@
 use std::fs;
 
 use fpm_rs::{
-    Array2, Complex64, Result,
+    Complex64, Result,
     algorithms::{AlternatingProjection, Epry, ReconstructionAlgorithm},
     benchmark::{
         BENCHMARK_PROFILES, BENCHMARK_RECORD_FORMAT_VERSION, CPU_BENCHMARK_PROFILE,
@@ -16,6 +16,7 @@ use fpm_rs::{
         aberrated_pupil_fpm, noiseless_mixed_fpm, poisson_gaussian_fpm,
     },
 };
+use ndarray::Array2;
 
 #[test]
 fn named_simulation_presets_are_deterministic_and_well_formed() -> Result<()> {
@@ -23,7 +24,7 @@ fn named_simulation_presets_are_deterministic_and_well_formed() -> Result<()> {
     let second = noiseless_mixed_fpm(17)?;
     assert_eq!(first.parameters.frame_count, 9);
     assert_eq!(first.parameters.image_shape, (32, 32));
-    assert_eq!(first.ground_truth_object.shape(), (64, 64));
+    assert_eq!(first.ground_truth_object.dim(), (64, 64));
     assert_eq!(
         first.measurements.as_slice(),
         second.measurements.as_slice()
@@ -32,8 +33,8 @@ fn named_simulation_presets_are_deterministic_and_well_formed() -> Result<()> {
     let aberrated = aberrated_pupil_fpm(17)?;
     assert_eq!(aberrated.measurements.frame_count(), 9);
     assert_ne!(
-        aberrated.true_model.pupil.values.as_slice(),
-        aberrated.reconstruction_model.pupil.values.as_slice()
+        aberrated.true_model.pupil().values(),
+        aberrated.reconstruction_model.pupil().values()
     );
 
     let noisy_first = poisson_gaussian_fpm(17)?;
@@ -78,7 +79,7 @@ fn benchmark_runs_ap_and_epry_on_the_same_problem() -> Result<()> {
         "iterations=4,object_step=1.0",
         AlternatingProjection::default().iterations(4),
         &problem,
-        Some(&truth),
+        Some(truth.view()),
         Some(&true_model),
         None,
     );
@@ -90,7 +91,7 @@ fn benchmark_runs_ap_and_epry_on_the_same_problem() -> Result<()> {
         "iterations=4,recover_pupil=true",
         Epry::default().iterations(4).recover_pupil(true),
         &problem,
-        Some(&truth),
+        Some(truth.view()),
         Some(&true_model),
         None,
     );
@@ -193,7 +194,7 @@ fn benchmark_writes_outputs_csv_json_and_failure_records() -> Result<()> {
         "iterations=2",
         AlternatingProjection::default().iterations(2),
         &problem,
-        Some(&truth),
+        Some(truth.view()),
         Some(&true_model),
         None,
     );
@@ -221,7 +222,7 @@ fn benchmark_writes_outputs_csv_json_and_failure_records() -> Result<()> {
         "object_step=-1",
         AlternatingProjection::default().object_step(-1.0),
         &problem,
-        Some(&truth),
+        Some(truth.view()),
         Some(&true_model),
         None,
     );
@@ -271,34 +272,43 @@ fn object_mask_controls_ground_truth_metrics_and_benchmark_evaluation() -> Resul
             mask_values[row * 64 + column] = 1;
         }
     }
-    let mask = Array2::from_vec((64, 64), mask_values)?;
+    let mask = Array2::from_shape_vec((64, 64), mask_values)?;
     let (record, result) = run_benchmark_case(
         "masked-synthetic",
         "iterations=2",
         AlternatingProjection::default().iterations(2),
         &problem,
-        Some(&truth),
+        Some(truth.view()),
         Some(&true_model),
-        Some(&mask),
+        Some(mask.view()),
     );
     assert!(record.success, "{:?}", record.error);
     let result = result.unwrap();
-    let expected = evaluate_reconstruction(&result, &truth, None, Some(&mask))?;
+    let expected = evaluate_reconstruction(&result, truth.view(), None, Some(mask.view()))?;
     assert!((record.amplitude_rmse.unwrap() - expected.object.amplitude_rmse).abs() < 1e-12);
 
     let mut changed_outside = result;
-    for (index, value) in changed_outside.object.as_mut_slice().iter_mut().enumerate() {
-        if mask.as_slice()[index] == 0 {
+    for (value, &valid) in changed_outside.object.iter_mut().zip(mask.iter()) {
+        if valid == 0 {
             *value = Complex64::new(1e6, -1e6);
         }
     }
-    let unchanged = evaluate_reconstruction(&changed_outside, &truth, None, Some(&mask))?;
+    let unchanged =
+        evaluate_reconstruction(&changed_outside, truth.view(), None, Some(mask.view()))?;
     assert!((unchanged.object.amplitude_rmse - expected.object.amplitude_rmse).abs() < 1e-12);
     assert!((unchanged.object.phase_rmse - expected.object.phase_rmse).abs() < 1e-12);
     assert!((unchanged.object.complex_nrmse - expected.object.complex_nrmse).abs() < 1e-12);
     assert!((unchanged.object.fourier_nrmse - expected.object.fourier_nrmse).abs() < 1e-12);
 
-    let empty_mask = Array2::filled((64, 64), 0_u8)?;
-    assert!(evaluate_reconstruction(&changed_outside, &truth, None, Some(&empty_mask)).is_err());
+    let empty_mask = Array2::from_elem((64, 64), 0_u8);
+    assert!(
+        evaluate_reconstruction(
+            &changed_outside,
+            truth.view(),
+            None,
+            Some(empty_mask.view())
+        )
+        .is_err()
+    );
     Ok(())
 }

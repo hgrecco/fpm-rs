@@ -133,8 +133,8 @@ fn versioned_configuration_round_trips_models_camera_and_acquisition() {
     assert_eq!(restored.random_seed, 1234);
     assert_eq!(restored.image_shape, configuration.image_shape);
     assert_eq!(
-        restored.compiled_models.true_model.background,
-        configuration.compiled_models.true_model.background
+        restored.compiled_models.true_model.background(),
+        configuration.compiled_models.true_model.background()
     );
     assert_eq!(
         restored
@@ -145,7 +145,7 @@ fn versioned_configuration_round_trips_models_camera_and_acquisition() {
         vec![3]
     );
     let count_model = restored.reconstruction_model_for_counts().unwrap();
-    assert_eq!(count_model.frame_gains.as_ref().unwrap(), &vec![100.0; 4]);
+    assert_eq!(count_model.frame_gains().unwrap(), &[100.0; 4]);
 }
 
 #[test]
@@ -192,7 +192,13 @@ fn configuration_rejects_unknown_versions_fields_and_model_drift() {
     assert!(wrong_version.validate().is_err());
 
     let mut drifted = configuration.clone();
-    drifted.compiled_models.true_model.k_vectors[0].kx = 1e5;
+    let mut vectors = drifted.compiled_models.true_model.k_vectors().to_vec();
+    vectors[0].kx = 1e5;
+    drifted
+        .compiled_models
+        .true_model
+        .replace_k_vectors(vectors)
+        .unwrap();
     assert!(drifted.validate().is_err());
 
     let mut value = serde_json::to_value(configuration).unwrap();
