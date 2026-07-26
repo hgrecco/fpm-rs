@@ -1,4 +1,6 @@
 mod arrays;
+mod benchmark_bundle;
+mod bundle;
 mod config;
 mod datasets;
 mod diagnostics;
@@ -15,6 +17,8 @@ use pyo3::prelude::*;
 fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     errors::register(module)?;
+    bundle::register(module)?;
+    benchmark_bundle::register(module)?;
     config::register(module)?;
     datasets::register(module)?;
     diagnostics::register(module)?;

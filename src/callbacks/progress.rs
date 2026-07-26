@@ -22,7 +22,7 @@ impl Default for ProgressLogger {
 
 impl Callback for ProgressLogger {
     fn requires(&self) -> Vec<DiagnosticRequest> {
-        vec![DiagnosticRequest::Loss]
+        vec![DiagnosticRequest::Objective]
     }
 
     fn requires_for(&self, hook: CallbackHook, iteration: usize) -> Vec<DiagnosticRequest> {
@@ -35,9 +35,12 @@ impl Callback for ProgressLogger {
 
     fn on_iteration_end(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
         if context.iteration.is_multiple_of(self.frequency)
-            && let Some(loss) = context.diagnostics.loss
+            && let Some(objective) = context.diagnostics.objective
         {
-            eprintln!("iteration {:>5}: loss {loss:.6e}", context.iteration);
+            eprintln!(
+                "iteration {:>5}: objective {objective:.6e}",
+                context.iteration
+            );
         }
         Ok(CallbackAction::Continue)
     }

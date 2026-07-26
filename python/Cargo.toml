@@ -10,6 +10,6 @@ crate-type = ["cdylib"]
 name = "_core"
 
 [dependencies]
-fpm-rs.workspace = true
+fpm-rs = { workspace = true, features = ["parquet"] }
 numpy.workspace = true
 pyo3.workspace = true

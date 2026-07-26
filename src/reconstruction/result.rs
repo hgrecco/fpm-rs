@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fs::File,
-    io::{BufReader, BufWriter},
-    path::Path,
-};
+use std::{collections::BTreeMap, fs::File, io::BufWriter, path::Path};
 
 use image::{GrayImage, Luma};
 use ndarray::{Array2, ArrayView2};
@@ -16,14 +11,11 @@ use crate::{
     array_serde::Array2Data,
     backend::FftDirection,
     complex,
-    diagnostics::ReconstructionHistory,
     error::Error,
     model::{Pupil, ifftshift_copy},
 };
 
-use super::ReconstructionState;
-
-pub const RESULT_BUNDLE_FORMAT_VERSION: u32 = 1;
+use super::{ReconstructionState, ReconstructionTrace};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeInfo {
@@ -44,38 +36,24 @@ pub struct ReconstructionResult {
     pub calibrated_illumination: Option<Vec<(f64, f64)>>,
     pub recovered_frame_gains: Option<Vec<f64>>,
     pub recovered_background: Option<Vec<f64>>,
-    pub history: ReconstructionHistory,
-    pub diagnostics: BTreeMap<String, f64>,
+    pub trace: ReconstructionTrace,
+    pub scalar_diagnostics: BTreeMap<String, f64>,
     pub runtime: RuntimeInfo,
     pub metadata: BTreeMap<String, String>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct ReconstructionResultBundle {
-    format_version: u32,
-    result: ReconstructionResult,
 }
 
 impl ReconstructionResult {
     pub(crate) fn from_state(
         state: &mut ReconstructionState,
-        history: ReconstructionHistory,
+        trace: ReconstructionTrace,
         runtime: RuntimeInfo,
     ) -> Result<Self> {
         let object = state_object(state)?;
         let amplitude = complex::amplitude(object.view());
         let phase = complex::phase(object.view());
-        let mut diagnostics = BTreeMap::new();
-        if let Some(loss) = history.final_loss() {
-            diagnostics.insert("final_loss".into(), loss);
-        }
-        if let Some(record) = history.iterations.last() {
-            if let Some(residual) = record.admm_primal_residual_rms {
-                diagnostics.insert("final_admm_primal_residual_rms".into(), residual);
-            }
-            if let Some(residual) = record.admm_dual_residual_rms {
-                diagnostics.insert("final_admm_dual_residual_rms".into(), residual);
-            }
+        let mut scalar_diagnostics = BTreeMap::new();
+        if let Some(objective) = trace.final_objective() {
+            scalar_diagnostics.insert("final_objective".into(), objective);
         }
         Ok(Self {
             object,
@@ -86,8 +64,8 @@ impl ReconstructionResult {
             calibrated_illumination: state.illumination_corrections.clone(),
             recovered_frame_gains: state.frame_gains.clone(),
             recovered_background: state.background.clone(),
-            history,
-            diagnostics,
+            trace,
+            scalar_diagnostics,
             runtime,
             metadata: BTreeMap::new(),
         })
@@ -113,61 +91,85 @@ impl ReconstructionResult {
         Ok(())
     }
 
-    pub fn save_loss_csv(&self, path: impl AsRef<Path>) -> Result<()> {
+    pub fn save_trace_csv(&self, path: impl AsRef<Path>) -> Result<()> {
         let mut writer = csv::Writer::from_path(path)?;
-        writer.write_record([
-            "iteration",
-            "loss",
-            "elapsed_seconds",
-            "admm_primal_residual_rms",
-            "admm_dual_residual_rms",
-        ])?;
-        for record in &self.history.iterations {
-            writer.serialize((
-                record.iteration,
-                record.loss,
-                record.elapsed_seconds,
-                record.admm_primal_residual_rms,
-                record.admm_dual_residual_rms,
-            ))?;
+        writer.write_record(["iteration", "objective", "elapsed_seconds"])?;
+        for record in &self.trace.iterations {
+            writer.serialize((record.iteration, record.objective, record.elapsed_seconds))?;
         }
         writer.flush()?;
         Ok(())
     }
 
-    /// Saves every result array, calibration value, diagnostic, history entry,
-    /// runtime field, and metadata value in a versioned JSON bundle.
-    pub fn save_bundle(&self, path: impl AsRef<Path>) -> Result<()> {
-        self.validate()?;
-        let writer = BufWriter::new(File::create(path)?);
-        serde_json::to_writer(
-            writer,
-            &ReconstructionResultBundle {
-                format_version: RESULT_BUNDLE_FORMAT_VERSION,
-                result: self.clone(),
-            },
-        )?;
-        Ok(())
+    #[cfg(feature = "parquet")]
+    pub fn write_bundle(
+        &self,
+        path: impl AsRef<Path>,
+        options: crate::reconstruction::BundleExportOptions,
+    ) -> Result<crate::reconstruction::ResultBundle> {
+        crate::tabular::parquet::write_result_bundle(self, path.as_ref(), options, None, None)
     }
 
-    pub fn load_bundle(path: impl AsRef<Path>) -> Result<Self> {
-        let reader = BufReader::new(File::open(path)?);
-        let bundle: ReconstructionResultBundle = serde_json::from_reader(reader)?;
-        if bundle.format_version != RESULT_BUNDLE_FORMAT_VERSION {
-            return Err(Error::InvalidParameter {
-                name: "result bundle format_version",
-                reason: format!(
-                    "expected {RESULT_BUNDLE_FORMAT_VERSION}, got {}",
-                    bundle.format_version
-                ),
-            });
-        }
-        bundle.result.validate()?;
-        Ok(bundle.result)
+    /// Writes a bundle including optional callback diagnostics and reference
+    /// evaluation records.
+    #[cfg(feature = "parquet")]
+    pub fn write_bundle_with_context(
+        &self,
+        path: impl AsRef<Path>,
+        options: crate::reconstruction::BundleExportOptions,
+        diagnostics: Option<&crate::diagnostics::ReconstructionDiagnostics>,
+        evaluation: Option<&crate::evaluation::ReconstructionEvaluation>,
+    ) -> Result<crate::reconstruction::ResultBundle> {
+        crate::tabular::parquet::write_result_bundle(
+            self,
+            path.as_ref(),
+            options,
+            diagnostics,
+            evaluation,
+        )
     }
 
     pub fn validate(&self) -> Result<()> {
         let shape = self.object.dim();
+        if shape.0 == 0 || shape.1 == 0 {
+            return Err(Error::InvalidShape(
+                "result reconstruction arrays must be non-empty".into(),
+            ));
+        }
+        for (context, array_shape, strides, is_standard) in [
+            (
+                "reconstruction result object",
+                self.object.shape(),
+                self.object.strides(),
+                self.object.is_standard_layout(),
+            ),
+            (
+                "reconstruction result amplitude",
+                self.amplitude.shape(),
+                self.amplitude.strides(),
+                self.amplitude.is_standard_layout(),
+            ),
+            (
+                "reconstruction result phase",
+                self.phase.shape(),
+                self.phase.strides(),
+                self.phase.is_standard_layout(),
+            ),
+            (
+                "reconstruction result object spectrum",
+                self.object_spectrum.shape(),
+                self.object_spectrum.strides(),
+                self.object_spectrum.is_standard_layout(),
+            ),
+        ] {
+            if !is_standard {
+                return Err(Error::NonStandardLayout {
+                    context,
+                    shape: array_shape.to_vec(),
+                    strides: strides.to_vec(),
+                });
+            }
+        }
         if self.amplitude.dim() != shape
             || self.phase.dim() != shape
             || self.object_spectrum.dim() != shape
@@ -179,6 +181,46 @@ impl ReconstructionResult {
         if self.recovered_pupil.support.len() != self.recovered_pupil.values.len() {
             return Err(Error::InvalidShape(
                 "result pupil support and values have different lengths".into(),
+            ));
+        }
+        if self
+            .calibrated_illumination
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+            || self
+                .recovered_frame_gains
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+            || self
+                .recovered_background
+                .as_ref()
+                .is_some_and(Vec::is_empty)
+        {
+            return Err(Error::InvalidShape(
+                "present result calibration arrays must be non-empty".into(),
+            ));
+        }
+        if let (Some(gains), Some(background)) =
+            (&self.recovered_frame_gains, &self.recovered_background)
+            && gains.len() != background.len()
+        {
+            return Err(Error::InvalidShape(
+                "result frame gains and background lengths must match".into(),
+            ));
+        }
+        if let Some(frame_count) = self
+            .metadata
+            .get("frame_count")
+            .and_then(|value| value.parse::<usize>().ok())
+            && self
+                .recovered_frame_gains
+                .as_ref()
+                .into_iter()
+                .chain(self.recovered_background.as_ref())
+                .any(|values| values.len() != frame_count)
+        {
+            return Err(Error::InvalidShape(
+                "result frame calibration length must match metadata frame_count".into(),
             ));
         }
         if self
@@ -214,7 +256,11 @@ impl ReconstructionResult {
                 "result calibration values are invalid".into(),
             ));
         }
-        if self.diagnostics.values().any(|value| !value.is_finite()) {
+        if self
+            .scalar_diagnostics
+            .values()
+            .any(|value| !value.is_finite())
+        {
             return Err(Error::InvalidModel(
                 "result diagnostics contain non-finite values".into(),
             ));
@@ -222,37 +268,42 @@ impl ReconstructionResult {
         if !self.runtime.elapsed_seconds.is_finite()
             || self.runtime.elapsed_seconds < 0.0
             || self.runtime.algorithm.is_empty()
-            || self.runtime.completed_iterations != self.history.iterations.len()
+            || self.runtime.completed_iterations != self.trace.iterations.len()
             || self
-                .history
+                .trace
                 .iterations
                 .iter()
                 .enumerate()
                 .any(|(index, record)| {
                     record.iteration != index + 1
-                        || !record.loss.is_finite()
+                        || !record.objective.is_finite()
                         || !record.elapsed_seconds.is_finite()
                         || record.elapsed_seconds < 0.0
-                        || record
-                            .admm_primal_residual_rms
-                            .is_some_and(|value| !value.is_finite() || value < 0.0)
-                        || record
-                            .admm_dual_residual_rms
-                            .is_some_and(|value| !value.is_finite() || value < 0.0)
                 })
             || self
-                .history
+                .trace
                 .iterations
                 .windows(2)
                 .any(|pair| pair[1].elapsed_seconds < pair[0].elapsed_seconds)
             || self
-                .history
+                .trace
                 .iterations
                 .last()
                 .is_some_and(|record| record.elapsed_seconds > self.runtime.elapsed_seconds)
         {
             return Err(Error::InvalidModel(
-                "result runtime and history are inconsistent".into(),
+                "result runtime and trace are inconsistent".into(),
+            ));
+        }
+        if self.trace.algorithm_metrics.iter().any(|record| {
+            record.iteration == 0
+                || record.iteration > self.runtime.completed_iterations
+                || record.namespace.is_empty()
+                || record.metric.is_empty()
+                || !record.value.is_finite()
+        }) {
+            return Err(Error::InvalidModel(
+                "result algorithm metrics are invalid".into(),
             ));
         }
         Ok(())
@@ -346,8 +397,8 @@ impl Serialize for ReconstructionResult {
             calibrated_illumination: &'a Option<Vec<(f64, f64)>>,
             recovered_frame_gains: &'a Option<Vec<f64>>,
             recovered_background: &'a Option<Vec<f64>>,
-            history: &'a ReconstructionHistory,
-            diagnostics: &'a BTreeMap<String, f64>,
+            trace: &'a ReconstructionTrace,
+            scalar_diagnostics: &'a BTreeMap<String, f64>,
             runtime: &'a RuntimeInfo,
             metadata: &'a BTreeMap<String, String>,
         }
@@ -361,8 +412,8 @@ impl Serialize for ReconstructionResult {
             calibrated_illumination: &self.calibrated_illumination,
             recovered_frame_gains: &self.recovered_frame_gains,
             recovered_background: &self.recovered_background,
-            history: &self.history,
-            diagnostics: &self.diagnostics,
+            trace: &self.trace,
+            scalar_diagnostics: &self.scalar_diagnostics,
             runtime: &self.runtime,
             metadata: &self.metadata,
         }
@@ -388,8 +439,8 @@ impl<'de> Deserialize<'de> for ReconstructionResult {
             calibrated_illumination: Option<Vec<(f64, f64)>>,
             recovered_frame_gains: Option<Vec<f64>>,
             recovered_background: Option<Vec<f64>>,
-            history: ReconstructionHistory,
-            diagnostics: BTreeMap<String, f64>,
+            trace: ReconstructionTrace,
+            scalar_diagnostics: BTreeMap<String, f64>,
             runtime: RuntimeInfo,
             metadata: BTreeMap<String, String>,
         }
@@ -416,8 +467,8 @@ impl<'de> Deserialize<'de> for ReconstructionResult {
             calibrated_illumination: representation.calibrated_illumination,
             recovered_frame_gains: representation.recovered_frame_gains,
             recovered_background: representation.recovered_background,
-            history: representation.history,
-            diagnostics: representation.diagnostics,
+            trace: representation.trace,
+            scalar_diagnostics: representation.scalar_diagnostics,
             runtime: representation.runtime,
             metadata: representation.metadata,
         };

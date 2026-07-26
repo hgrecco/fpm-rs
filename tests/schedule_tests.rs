@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use fpm_rs::{
     Result,
-    algorithms::ReconstructionAlgorithm,
-    diagnostics::StepDiagnostics,
+    algorithms::{NoIterationMetrics, ReconstructionAlgorithm, StepOutput, StepSummary},
     measurements::{FrameMetadata, MeasurementRead, MeasurementStack},
     reconstruction::{
         Batch, FrameSchedule, ReconstructionProblem, ReconstructionState, RunOptions, Runner,
@@ -107,19 +106,21 @@ struct RecordingAlgorithm {
 }
 
 impl ReconstructionAlgorithm for RecordingAlgorithm {
+    type IterationMetrics = NoIterationMetrics;
+
     fn step<M: MeasurementRead>(
         &mut self,
         problem: &ReconstructionProblem<M>,
         _state: &mut ReconstructionState,
         batch: &Batch,
         _iteration: usize,
-    ) -> Result<StepDiagnostics> {
+    ) -> Result<StepOutput<Self::IterationMetrics>> {
         self.visited.lock().unwrap().extend(&batch.indices);
-        let mut diagnostics = StepDiagnostics::default();
+        let mut summary = StepSummary::default();
         for &frame in &batch.indices {
-            diagnostics.push_frame(frame, 0.0, problem.measurements.frame_weight(frame)?);
+            summary.push_frame(frame, 0.0, problem.measurements.frame_weight(frame)?);
         }
-        Ok(diagnostics)
+        Ok(summary.into())
     }
 
     fn iterations(&self) -> usize {

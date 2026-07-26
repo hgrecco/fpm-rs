@@ -17,8 +17,8 @@ PlotResult = tuple[Any, dict[str, Any]]
 DiagnosticsData = Mapping[str, Any]
 
 _RECONSTRUCTION_LAYOUT = (
-    ("true_amplitude", "true_phase", "loss"),
-    ("reconstructed_amplitude", "reconstructed_phase", "loss"),
+    ("true_amplitude", "true_phase", "objective"),
+    ("reconstructed_amplitude", "reconstructed_phase", "objective"),
 )
 _RECONSTRUCTION_IMAGE_AXES = (
     "true_amplitude",
@@ -26,7 +26,7 @@ _RECONSTRUCTION_IMAGE_AXES = (
     "reconstructed_amplitude",
     "reconstructed_phase",
 )
-_RECONSTRUCTION_REQUIRED_AXES = frozenset((*_RECONSTRUCTION_IMAGE_AXES, "loss"))
+_RECONSTRUCTION_REQUIRED_AXES = frozenset((*_RECONSTRUCTION_IMAGE_AXES, "objective"))
 
 
 def plot_reconstruction(
@@ -36,7 +36,7 @@ def plot_reconstruction(
     layout: Sequence[Sequence[str]] | str | None = None,
     figsize: tuple[float, float] = (13.0, 7.0),
 ) -> PlotResult:
-    """Plot ground truth, reconstruction, and loss history."""
+    """Plot ground truth, reconstruction, and objective history."""
     plt = _import_pyplot()
 
     truth_array = np.asarray(truth)
@@ -84,13 +84,13 @@ def plot_reconstruction(
     axes["reconstructed_phase"].imshow(phase, cmap="twilight", vmin=-np.pi, vmax=np.pi)
     axes["reconstructed_phase"].set_title("Reconstructed phase")
 
-    iterations = [record[0] for record in result.history]
-    losses = [record[1] for record in result.history]
-    axes["loss"].semilogy(iterations, losses, marker="o")
-    axes["loss"].set(
-        title="Reconstruction error (loss)", xlabel="Iteration", ylabel="Loss"
+    iterations = [record[0] for record in result.trace]
+    objectives = [record[1] for record in result.trace]
+    axes["objective"].semilogy(iterations, objectives, marker="o")
+    axes["objective"].set(
+        title="Reconstruction objective", xlabel="Iteration", ylabel="Objective"
     )
-    axes["loss"].grid(True, which="both", alpha=0.3)
+    axes["objective"].grid(True, which="both", alpha=0.3)
 
     for name in _RECONSTRUCTION_IMAGE_AXES:
         axes[name].set_axis_off()
@@ -104,43 +104,43 @@ def plot_convergence(
     figsize: tuple[float, float] = (13.0, 9.0),
 ) -> PlotResult | None:
     """Plot convergence diagnostics and return the figure and named axes."""
-    history = diagnostics.get("iteration_history")
+    history = diagnostics.get("iteration_diagnostics")
     if not isinstance(history, list) or not history:
         return None
 
     iterations = _series(history, "iteration")
     if np.isnan(iterations).all():
         iterations = np.arange(len(history), dtype=float)
-    total_loss = _series(history, "total_loss")
-    data_loss = _series(history, "data_loss")
-    regularization_loss = _series(history, "regularization_loss")
+    total_objective = _series(history, "total_objective")
+    data_objective = _series(history, "data_objective")
+    regularization_objective = _series(history, "regularization_objective")
     object_change = _series(history, "object_relative_change")
     pupil_change = _series(history, "pupil_relative_change")
-    median_frame_loss = _series(history, "median_frame_loss")
-    worst_frame_loss = _series(history, "worst_frame_loss")
-    elapsed_ms = _series(history, "elapsed_ms")
+    median_frame_objective = _series(history, "median_frame_objective")
+    worst_frame_objective = _series(history, "worst_frame_objective")
+    elapsed_seconds = _series(history, "elapsed_seconds")
 
     plt = _import_pyplot()
     figure, raw_axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
     raw_axes = raw_axes.ravel()
     axes = {
-        "loss": raw_axes[0],
+        "objective": raw_axes[0],
         "relative_change": raw_axes[1],
-        "frame_loss": raw_axes[2],
+        "frame_objective": raw_axes[2],
         "elapsed_time": raw_axes[3],
     }
 
     _plot_lines(
-        axes["loss"],
+        axes["objective"],
         iterations,
         [
-            ("total loss", total_loss),
-            ("data loss", data_loss),
-            ("regularization loss", regularization_loss),
+            ("total objective", total_objective),
+            ("data objective", data_objective),
+            ("regularization objective", regularization_objective),
         ],
-        title="Loss history",
+        title="Objective history",
         xlabel="Iteration",
-        ylabel="Loss",
+        ylabel="Objective",
         log_scale=True,
     )
     _plot_lines(
@@ -153,24 +153,24 @@ def plot_convergence(
         log_scale=True,
     )
     _plot_lines(
-        axes["frame_loss"],
+        axes["frame_objective"],
         iterations,
         [
-            ("median frame loss", median_frame_loss),
-            ("worst frame loss", worst_frame_loss),
+            ("median frame objective", median_frame_objective),
+            ("worst frame objective", worst_frame_objective),
         ],
-        title="Per-frame loss",
+        title="Per-frame objective",
         xlabel="Iteration",
-        ylabel="Loss",
+        ylabel="Objective",
         log_scale=True,
     )
     _plot_lines(
         axes["elapsed_time"],
         iterations,
-        [("elapsed ms", elapsed_ms)],
+        [("elapsed seconds", elapsed_seconds)],
         title="Elapsed time",
         xlabel="Iteration",
-        ylabel="Milliseconds",
+        ylabel="Seconds",
         log_scale=False,
     )
     return figure, axes
@@ -194,8 +194,8 @@ def plot_frame_residuals(
     residual_mean = _series(frame_diagnostics, "residual_mean")
     residual_std = _series(frame_diagnostics, "residual_std")
     residual_max_abs = _series(frame_diagnostics, "residual_max_abs")
-    measured_sum = _series(frame_diagnostics, "measured_sum")
-    predicted_sum = _series(frame_diagnostics, "predicted_sum")
+    reference_sum = _series(frame_diagnostics, "reference_sum")
+    estimate_sum = _series(frame_diagnostics, "estimate_sum")
 
     plt = _import_pyplot()
     figure, raw_axes = plt.subplots(2, 2, figsize=figsize, constrained_layout=True)
@@ -204,7 +204,7 @@ def plot_frame_residuals(
         "residual_magnitude": raw_axes[0],
         "residual_moments": raw_axes[1],
         "frame_sums": raw_axes[2],
-        "measured_vs_predicted": raw_axes[3],
+        "reference_vs_estimate": raw_axes[3],
     }
 
     _plot_lines(
@@ -232,32 +232,32 @@ def plot_frame_residuals(
     _plot_lines(
         axes["frame_sums"],
         illumination_index,
-        [("measured sum", measured_sum), ("predicted sum", predicted_sum)],
+        [("reference sum", reference_sum), ("estimate sum", estimate_sum)],
         title="Frame sums",
         xlabel="Illumination index",
         ylabel="Sum",
         log_scale=False,
     )
-    finite_mask = np.isfinite(measured_sum) & np.isfinite(predicted_sum)
+    finite_mask = np.isfinite(reference_sum) & np.isfinite(estimate_sum)
     if np.any(finite_mask):
-        scatter = axes["measured_vs_predicted"].scatter(
-            measured_sum[finite_mask],
-            predicted_sum[finite_mask],
+        scatter = axes["reference_vs_estimate"].scatter(
+            reference_sum[finite_mask],
+            estimate_sum[finite_mask],
             c=normalized_l2[finite_mask],
             cmap="viridis",
             edgecolor="none",
         )
         minimum = float(
             np.nanmin(
-                [measured_sum[finite_mask].min(), predicted_sum[finite_mask].min()]
+                [reference_sum[finite_mask].min(), estimate_sum[finite_mask].min()]
             )
         )
         maximum = float(
             np.nanmax(
-                [measured_sum[finite_mask].max(), predicted_sum[finite_mask].max()]
+                [reference_sum[finite_mask].max(), estimate_sum[finite_mask].max()]
             )
         )
-        axes["measured_vs_predicted"].plot(
+        axes["reference_vs_estimate"].plot(
             [minimum, maximum],
             [minimum, maximum],
             color="0.4",
@@ -266,15 +266,15 @@ def plot_frame_residuals(
         )
         figure.colorbar(
             scatter,
-            ax=axes["measured_vs_predicted"],
+            ax=axes["reference_vs_estimate"],
             label="Normalized L2",
         )
-    axes["measured_vs_predicted"].set(
-        title="Measured vs predicted sums",
-        xlabel="Measured sum",
-        ylabel="Predicted sum",
+    axes["reference_vs_estimate"].set(
+        title="Reference vs estimate sums",
+        xlabel="Reference sum",
+        ylabel="Estimate sum",
     )
-    axes["measured_vs_predicted"].grid(True, alpha=0.25)
+    axes["reference_vs_estimate"].grid(True, alpha=0.25)
     return figure, axes
 
 
@@ -284,7 +284,7 @@ def plot_raw_stack_stats(
     figsize: tuple[float, float] = (13.0, 9.0),
 ) -> PlotResult | None:
     """Plot raw measurement-stack statistics and return named axes."""
-    raw_stats = diagnostics.get("raw_frame_stats")
+    raw_stats = diagnostics.get("raw_frame_statistics")
     if not isinstance(raw_stats, list) or not raw_stats:
         return None
 

@@ -9,7 +9,7 @@ use fpm_rs::callbacks::{Callback, CallbackAction, CallbackHook, StepContext};
 use fpm_rs::diagnostics::{
     DiagnosticRecorder, DiagnosticRecorderConfig, DiagnosticRequest, Diagnostics,
     FrameDiagnosticRecord, IterationDiagnostics, RawFrameStatisticsRecord,
-    ReconstructionDiagnostics, ReconstructionHistory, compute_fourier_coverage,
+    ReconstructionDiagnostics, compute_fourier_coverage,
 };
 use fpm_rs::{
     Complex64, Error, Result,
@@ -17,7 +17,7 @@ use fpm_rs::{
         complex_field::{ComplexFieldComparisonMetrics, compare_complex_fields},
         intensity::{IntensityComparisonMetrics, IntensityStats, compare_intensity, stats},
     },
-    reconstruction::{ReconstructionProblem, ReconstructionState},
+    reconstruction::{ReconstructionProblem, ReconstructionState, ReconstructionTrace},
     simulation::{Simulator, SyntheticObject},
 };
 use ndarray::Array2;
@@ -66,7 +66,7 @@ fn loss_rejects_empty_mismatched_and_non_finite_inputs() {
 }
 
 #[test]
-fn raw_frame_stats_match_known_values() {
+fn raw_frame_statistics_match_known_values() {
     let stats = stats(&[0.0, 1.0, 2.0, 3.0], Some(2.0)).unwrap();
     assert_abs_diff_eq!(stats.mean, 1.5, epsilon = 1e-14);
     assert_abs_diff_eq!(stats.std, (1.25f64).sqrt(), epsilon = 1e-14);
@@ -148,16 +148,16 @@ fn ground_truth_metrics_align_global_phase() {
 #[test]
 fn reconstruction_diagnostics_json_round_trips() {
     let diagnostics = ReconstructionDiagnostics {
-        iteration_history: vec![IterationDiagnostics {
+        iteration_diagnostics: vec![IterationDiagnostics {
             iteration: 1,
-            total_loss: Some(1.0),
-            data_loss: Some(0.8),
-            regularization_loss: Some(0.2),
+            total_objective: Some(1.0),
+            data_objective: Some(0.8),
+            regularization_objective: Some(0.2),
             object_relative_change: Some(0.1),
             pupil_relative_change: Some(0.2),
-            median_frame_loss: Some(0.3),
-            worst_frame_loss: Some(0.4),
-            elapsed_ms: Some(12.0),
+            median_frame_objective: Some(0.3),
+            worst_frame_objective: Some(0.4),
+            elapsed_seconds: Some(12.0),
         }],
         frame_diagnostics: vec![FrameDiagnosticRecord {
             iteration: Some(1),
@@ -175,7 +175,7 @@ fn reconstruction_diagnostics_json_round_trips() {
                 saturated_pixels: Some(2),
             },
         }],
-        raw_frame_stats: vec![RawFrameStatisticsRecord {
+        raw_frame_statistics: vec![RawFrameStatisticsRecord {
             frame_index: 0,
             metrics: IntensityStats {
                 mean: 1.0,
@@ -205,20 +205,20 @@ fn reconstruction_diagnostics_json_round_trips() {
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let frame = &json["frame_diagnostics"][0];
-    assert_eq!(frame["measured_sum"], 10.0);
-    assert_eq!(frame["predicted_sum"], 9.0);
-    assert!(frame.get("reference_sum").is_none());
-    assert!(frame.get("estimate_sum").is_none());
+    assert_eq!(frame["reference_sum"], 10.0);
+    assert_eq!(frame["estimate_sum"], 9.0);
+    assert!(frame.get("measured_sum").is_none());
+    assert!(frame.get("predicted_sum").is_none());
 
     let loaded = ReconstructionDiagnostics::from_json_file(&path).unwrap();
-    assert_eq!(loaded.iteration_history.len(), 1);
+    assert_eq!(loaded.iteration_diagnostics.len(), 1);
     assert_eq!(loaded.frame_diagnostics.len(), 1);
     assert_abs_diff_eq!(
         loaded.frame_diagnostics[0].metrics.estimate_sum,
         9.0,
         epsilon = 1e-14
     );
-    assert_eq!(loaded.raw_frame_stats.len(), 1);
+    assert_eq!(loaded.raw_frame_statistics.len(), 1);
     assert!(loaded.coverage.is_some());
     assert!(loaded.ground_truth_metrics.is_some());
 }
@@ -227,7 +227,7 @@ fn reconstruction_diagnostics_json_round_trips() {
 fn diagnostic_recorder_default_disables_snapshots() {
     let config = DiagnosticRecorderConfig::default();
     assert_eq!(config.every, 1);
-    assert!(config.record_iteration_history);
+    assert!(config.record_iteration_diagnostics);
     assert!(!config.record_object_snapshots);
     assert!(!config.record_pupil_snapshots);
 }
@@ -243,10 +243,10 @@ fn diagnostic_recorder_respects_every() {
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
             .unwrap();
     let state = ReconstructionState::initialize(&problem).unwrap();
-    let history = ReconstructionHistory::default();
+    let trace = ReconstructionTrace::default();
 
     let start_diagnostics = Diagnostics {
-        raw_frame_stats: Some(vec![RawFrameStatisticsRecord {
+        raw_frame_statistics: Some(vec![RawFrameStatisticsRecord {
             frame_index: 0,
             metrics: IntensityStats {
                 mean: 1.0,
@@ -266,7 +266,8 @@ fn diagnostic_recorder_respects_every() {
         batch_index: None,
         state: &state,
         diagnostics: &start_diagnostics,
-        history: &history,
+        trace: &trace,
+        current_algorithm_metrics: &[],
         model: &problem.model,
         problem_name: None,
     };
@@ -279,16 +280,16 @@ fn diagnostic_recorder_respects_every() {
         recorder.on_start(&start_context).unwrap(),
         CallbackAction::Continue
     );
-    assert_eq!(recorder.diagnostics().raw_frame_stats.len(), 1);
+    assert_eq!(recorder.diagnostics().raw_frame_statistics.len(), 1);
 
     let iteration_one = Diagnostics {
-        loss: Some(1.0),
-        per_frame_error: Some(vec![1.0, 3.0, 2.0]),
+        objective: Some(1.0),
+        per_frame_objective: Some(vec![1.0, 3.0, 2.0]),
         ..Diagnostics::default()
     };
     let iteration_two = Diagnostics {
-        loss: Some(2.0),
-        per_frame_error: Some(vec![1.0, 3.0, 2.0]),
+        objective: Some(2.0),
+        per_frame_objective: Some(vec![1.0, 3.0, 2.0]),
         ..Diagnostics::default()
     };
     let iteration_context = |iteration, diagnostics| StepContext {
@@ -297,7 +298,8 @@ fn diagnostic_recorder_respects_every() {
         batch_index: None,
         state: &state,
         diagnostics,
-        history: &history,
+        trace: &trace,
+        current_algorithm_metrics: &[],
         model: &problem.model,
         problem_name: None,
     };
@@ -309,18 +311,18 @@ fn diagnostic_recorder_respects_every() {
         .on_iteration_end(&iteration_context(2, &iteration_two))
         .unwrap();
 
-    assert_eq!(recorder.diagnostics().iteration_history.len(), 1);
-    assert_eq!(recorder.diagnostics().iteration_history[0].iteration, 2);
+    assert_eq!(recorder.diagnostics().iteration_diagnostics.len(), 1);
+    assert_eq!(recorder.diagnostics().iteration_diagnostics[0].iteration, 2);
     assert_abs_diff_eq!(
-        recorder.diagnostics().iteration_history[0]
-            .median_frame_loss
+        recorder.diagnostics().iteration_diagnostics[0]
+            .median_frame_objective
             .unwrap(),
         2.0,
         epsilon = 1e-14
     );
     assert_abs_diff_eq!(
-        recorder.diagnostics().iteration_history[0]
-            .worst_frame_loss
+        recorder.diagnostics().iteration_diagnostics[0]
+            .worst_frame_objective
             .unwrap(),
         3.0,
         epsilon = 1e-14
@@ -337,11 +339,11 @@ fn diagnostic_recorder_snapshot_cadence_is_independent() {
     });
 
     let iteration_two = recorder.requires_for(CallbackHook::IterationEnd, 2);
-    assert!(iteration_two.contains(&DiagnosticRequest::Loss));
+    assert!(iteration_two.contains(&DiagnosticRequest::Objective));
     assert!(!iteration_two.contains(&DiagnosticRequest::ObjectAmplitude));
 
     let iteration_three = recorder.requires_for(CallbackHook::IterationEnd, 3);
-    assert!(!iteration_three.contains(&DiagnosticRequest::Loss));
+    assert!(!iteration_three.contains(&DiagnosticRequest::Objective));
     assert!(iteration_three.contains(&DiagnosticRequest::ObjectAmplitude));
     assert!(iteration_three.contains(&DiagnosticRequest::ObjectPhase));
 }
@@ -367,7 +369,7 @@ fn diagnostic_recorder_output_remains_accessible_after_runner_consumes_clone() {
         .unwrap();
 
     let diagnostics = recorder.diagnostics();
-    assert_eq!(diagnostics.iteration_history.len(), 2);
+    assert_eq!(diagnostics.iteration_diagnostics.len(), 2);
     assert_eq!(
         diagnostics.frame_diagnostics.len(),
         2 * problem.model.frame_count()
@@ -407,7 +409,7 @@ fn diagnostic_recorder_reuse_discards_state_from_a_failed_run() {
         .iterations(1)
         .run_with_callbacks(&problem, vec![Box::new(recorder.clone())])
         .unwrap();
-    assert_eq!(recorder.diagnostics().iteration_history.len(), 1);
+    assert_eq!(recorder.diagnostics().iteration_diagnostics.len(), 1);
 }
 
 #[test]

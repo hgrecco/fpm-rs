@@ -644,7 +644,7 @@ fn multiplexed_simulation_is_an_incoherent_weighted_intensity_sum() {
         .iterations(2)
         .run(&problem)
         .unwrap();
-    assert_eq!(reconstruction.history.iterations.len(), 2);
+    assert_eq!(reconstruction.trace.iterations.len(), 2);
     let forward = ForwardModel::new(&problem.model).unwrap();
     assert!(
         forward

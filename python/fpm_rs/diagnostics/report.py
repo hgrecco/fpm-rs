@@ -39,35 +39,35 @@ def write_ground_truth_metrics(diag: dict[str, Any], output_dir: str | Path) -> 
 
 def write_summary(diag: dict[str, Any], output_dir: str | Path) -> None:
     output_path = ensure_output_dir(output_dir) / "summary.txt"
-    iteration_history = diag.get("iteration_history")
+    iteration_diagnostics = diag.get("iteration_diagnostics")
     all_frame_diagnostics = diag.get("frame_diagnostics")
     frame_diagnostics = latest_frame_diagnostics(all_frame_diagnostics)
-    raw_frame_stats = diag.get("raw_frame_stats")
+    raw_frame_statistics = diag.get("raw_frame_statistics")
     coverage = diag.get("coverage")
     ground_truth_metrics = diag.get("ground_truth_metrics")
 
     lines = [
-        f"recorded_iterations: {len(iteration_history) if isinstance(iteration_history, list) else 0}",
+        f"recorded_iterations: {len(iteration_diagnostics) if isinstance(iteration_diagnostics, list) else 0}",
         f"frame_diagnostics: {len(all_frame_diagnostics) if isinstance(all_frame_diagnostics, list) else 0}",
-        f"raw_frame_stats: {len(raw_frame_stats) if isinstance(raw_frame_stats, list) else 0}",
+        f"raw_frame_statistics: {len(raw_frame_statistics) if isinstance(raw_frame_statistics, list) else 0}",
         f"coverage_available: {bool(isinstance(coverage, dict) and coverage)}",
         f"ground_truth_metrics_available: {bool(isinstance(ground_truth_metrics, dict) and ground_truth_metrics)}",
     ]
 
-    if isinstance(iteration_history, list) and iteration_history:
-        last = iteration_history[-1]
+    if isinstance(iteration_diagnostics, list) and iteration_diagnostics:
+        last = iteration_diagnostics[-1]
         if isinstance(last, dict):
             lines.append("last_iteration:")
             for key in (
                 "iteration",
-                "total_loss",
-                "data_loss",
-                "regularization_loss",
+                "total_objective",
+                "data_objective",
+                "regularization_objective",
                 "object_relative_change",
                 "pupil_relative_change",
-                "median_frame_loss",
-                "worst_frame_loss",
-                "elapsed_ms",
+                "median_frame_objective",
+                "worst_frame_objective",
+                "elapsed_seconds",
             ):
                 value = last.get(key)
                 if value is not None:

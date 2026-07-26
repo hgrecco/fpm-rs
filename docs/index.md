@@ -69,6 +69,8 @@ straight to the [Python API](reference/python/index.md).
 - `backend` provides the CPU backend and future resident-buffer boundary.
 - `benchmark` runs single cases and writes versioned benchmark records and
   artifacts.
+- `tabular` optionally converts results, diagnostics, evaluation, and
+  benchmarks to Polars tables and writes Parquet/NumPy result bundles.
 
 ## Documentation map
 

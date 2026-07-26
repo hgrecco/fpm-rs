@@ -53,9 +53,9 @@ fn main() -> Result<()> {
     write_benchmark_csv(std::slice::from_ref(&record), output.join("summary.csv"))?;
     write_benchmark_json(std::slice::from_ref(&record), output.join("summary.json"))?;
     println!(
-        "benchmark success={} final_loss={:?}; wrote {}",
+        "benchmark success={} final_objective={:?}; wrote {}",
         record.success,
-        record.final_loss,
+        record.final_objective,
         output.display()
     );
     Ok(())

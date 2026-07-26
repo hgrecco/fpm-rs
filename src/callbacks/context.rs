@@ -1,8 +1,10 @@
 use crate::{
     Result,
-    diagnostics::{DiagnosticRequest, Diagnostics, ReconstructionHistory},
+    diagnostics::{DiagnosticRequest, Diagnostics},
     model::ImagePlaneModel,
-    reconstruction::{ReconstructionResult, ReconstructionState},
+    reconstruction::{
+        AlgorithmMetricRecord, ReconstructionResult, ReconstructionState, ReconstructionTrace,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +27,8 @@ pub struct StepContext<'a> {
     pub batch_index: Option<usize>,
     pub state: &'a ReconstructionState,
     pub diagnostics: &'a Diagnostics,
-    pub history: &'a ReconstructionHistory,
+    pub trace: &'a ReconstructionTrace,
+    pub current_algorithm_metrics: &'a [AlgorithmMetricRecord],
     pub model: &'a ImagePlaneModel,
     pub problem_name: Option<&'a str>,
 }

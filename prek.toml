@@ -39,6 +39,7 @@ id = "toml-format"
 name = "Format TOML files with Tombi"
 language = "system"
 entry = "pixi run tombi format"
+exclude = "^Cargo\\.lock$"
 types = ["toml"]
 
 [[repos.hooks]]
@@ -46,6 +47,7 @@ id = "toml-lint"
 name = "Lint TOML files with Tombi"
 language = "system"
 entry = "pixi run tombi lint"
+exclude = "^Cargo\\.lock$"
 types = ["toml"]
 
 [[repos.hooks]]

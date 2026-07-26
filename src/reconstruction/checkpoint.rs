@@ -9,11 +9,12 @@ use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Result, array_serde::Array2Data, diagnostics::ReconstructionHistory, error::Error,
-    measurements::MeasurementRead, model::Pupil,
+    Result, array_serde::Array2Data, error::Error, measurements::MeasurementRead, model::Pupil,
 };
 
-use super::{AlgorithmAuxiliaryState, ReconstructionProblem, ReconstructionState};
+use super::{
+    AlgorithmAuxiliaryState, ReconstructionProblem, ReconstructionState, ReconstructionTrace,
+};
 
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
 
@@ -29,14 +30,14 @@ pub struct ReconstructionCheckpoint {
     pub(crate) frame_gains: Option<Vec<f64>>,
     pub(crate) background: Option<Vec<f64>>,
     pub(crate) algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
-    pub(crate) history: ReconstructionHistory,
+    pub(crate) trace: ReconstructionTrace,
 }
 
 impl ReconstructionCheckpoint {
     pub fn capture(
         completed_iterations: usize,
         state: &ReconstructionState,
-        history: &ReconstructionHistory,
+        trace: &ReconstructionTrace,
     ) -> Self {
         Self {
             format_version: CHECKPOINT_FORMAT_VERSION,
@@ -47,7 +48,7 @@ impl ReconstructionCheckpoint {
             frame_gains: state.frame_gains.clone(),
             background: state.background.clone(),
             algorithm_auxiliary: state.algorithm_auxiliary.clone(),
-            history: history.clone(),
+            trace: trace.clone(),
         }
     }
 
@@ -83,8 +84,8 @@ impl ReconstructionCheckpoint {
         self.algorithm_auxiliary.as_ref()
     }
 
-    pub const fn history(&self) -> &ReconstructionHistory {
-        &self.history
+    pub const fn trace(&self) -> &ReconstructionTrace {
+        &self.trace
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -187,26 +188,31 @@ impl ReconstructionCheckpoint {
                 "checkpoint algorithm auxiliary state is inconsistent or non-finite".into(),
             ));
         }
-        let records = &self.history.iterations;
+        let records = &self.trace.iterations;
         if records.len() != self.completed_iterations
             || records.iter().enumerate().any(|(index, record)| {
                 record.iteration != index + 1
-                    || !record.loss.is_finite()
+                    || !record.objective.is_finite()
                     || !record.elapsed_seconds.is_finite()
                     || record.elapsed_seconds < 0.0
-                    || record
-                        .admm_primal_residual_rms
-                        .is_some_and(|value| !value.is_finite() || value < 0.0)
-                    || record
-                        .admm_dual_residual_rms
-                        .is_some_and(|value| !value.is_finite() || value < 0.0)
             })
             || records
                 .windows(2)
                 .any(|pair| pair[1].elapsed_seconds < pair[0].elapsed_seconds)
         {
             return Err(Error::InvalidModel(
-                "checkpoint history is incomplete, non-finite, or non-monotonic".into(),
+                "checkpoint trace is incomplete, non-finite, or non-monotonic".into(),
+            ));
+        }
+        if self.trace.algorithm_metrics.iter().any(|record| {
+            record.iteration == 0
+                || record.iteration > self.completed_iterations
+                || record.namespace.is_empty()
+                || record.metric.is_empty()
+                || !record.value.is_finite()
+        }) {
+            return Err(Error::InvalidModel(
+                "checkpoint algorithm metrics are invalid".into(),
             ));
         }
         Ok(())
@@ -305,7 +311,7 @@ impl Serialize for ReconstructionCheckpoint {
             frame_gains: &'a Option<Vec<f64>>,
             background: &'a Option<Vec<f64>>,
             algorithm_auxiliary: &'a Option<AlgorithmAuxiliaryState>,
-            history: &'a ReconstructionHistory,
+            trace: &'a ReconstructionTrace,
         }
 
         Representation {
@@ -317,7 +323,7 @@ impl Serialize for ReconstructionCheckpoint {
             frame_gains: &self.frame_gains,
             background: &self.background,
             algorithm_auxiliary: &self.algorithm_auxiliary,
-            history: &self.history,
+            trace: &self.trace,
         }
         .serialize(serializer)
     }
@@ -342,7 +348,7 @@ impl<'de> Deserialize<'de> for ReconstructionCheckpoint {
             background: Option<Vec<f64>>,
             #[serde(default)]
             algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
-            history: ReconstructionHistory,
+            trace: ReconstructionTrace,
         }
 
         let representation = Representation::deserialize(deserializer)?;
@@ -358,7 +364,7 @@ impl<'de> Deserialize<'de> for ReconstructionCheckpoint {
             frame_gains: representation.frame_gains,
             background: representation.background,
             algorithm_auxiliary: representation.algorithm_auxiliary,
-            history: representation.history,
+            trace: representation.trace,
         };
         checkpoint.validate().map_err(D::Error::custom)?;
         Ok(checkpoint)

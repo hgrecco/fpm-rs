@@ -8,6 +8,8 @@ mod array_layout;
 mod array_serde;
 pub mod backend;
 pub mod benchmark;
+#[cfg(feature = "parquet")]
+pub mod benchmark_bundle;
 pub mod callbacks;
 pub mod complex;
 pub mod configuration;
@@ -22,6 +24,12 @@ pub mod metrics;
 pub mod model;
 pub mod reconstruction;
 pub mod simulation;
+#[cfg(feature = "tabular")]
+pub mod tabular;
 
+#[cfg(feature = "parquet")]
+pub use benchmark_bundle::{BenchmarkBundle, read_benchmark_bundle};
 pub use error::{Error, Result};
 pub use num_complex::Complex64;
+#[cfg(feature = "parquet")]
+pub use reconstruction::{ResultBundle, read_bundle};

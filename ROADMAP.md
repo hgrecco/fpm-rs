@@ -35,6 +35,12 @@ historical implementation notes are kept in version control history.
 
 - [ ] Record resolved source frame indices, illumination associations, and
   spatial crops in benchmark records produced from dataset subsets.
+- [ ] Reconsider returning Python Polars DataFrames through `pyo3-polars` once
+  the Rust Polars, Python Polars, PyO3, NumPy bindings, and supported wheel
+  matrix can be upgraded and tested as one compatible set. The current
+  bindings use PyO3 0.29 and NumPy 0.29; adding the adapter would couple their
+  conversion traits and `pyo3-ffi` link requirements to both Polars runtimes.
+  Until that full matrix is verified, bundles expose ordinary Parquet paths.
 
 ## Documentation
 

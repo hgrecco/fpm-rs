@@ -10,11 +10,11 @@ use super::{FrameDiagnosticRecord, IterationDiagnostics, RawFrameStatisticsRecor
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ReconstructionDiagnostics {
-    pub iteration_history: Vec<IterationDiagnostics>,
+    pub iteration_diagnostics: Vec<IterationDiagnostics>,
 
     pub frame_diagnostics: Vec<FrameDiagnosticRecord>,
 
-    pub raw_frame_stats: Vec<RawFrameStatisticsRecord>,
+    pub raw_frame_statistics: Vec<RawFrameStatisticsRecord>,
 
     pub coverage: Option<super::FourierCoverageDiagnostics>,
 

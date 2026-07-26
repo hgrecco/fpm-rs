@@ -20,7 +20,7 @@ quantization are tested deterministically as a distinct detector behavior.
 
 The normal regression suite also runs the diagnostics recorder against the
 versioned noiseless preset. It checks cadence, Fourier coverage dimensions,
-finite per-frame residuals, and decreasing recorded loss without treating
+finite per-frame residuals, and a decreasing recorded objective without treating
 runtime or elapsed-time values as stable regression data.
 
 Each returns the normal `SimulationResult`. Preset names end in a schema version
@@ -29,7 +29,7 @@ such as `_v1`; changing the physical definition requires a new preset version.
 `run_benchmark_case` is generic over `ReconstructionAlgorithm` and
 `MeasurementRead`. It returns a `BenchmarkRecord` plus the optional successful
 `ReconstructionResult`. The record includes dimensions, original frame/source
-indices, algorithm configuration, runtime, loss ratio, object/pupil errors when
+indices, algorithm configuration, elapsed seconds, objective ratio, object/pupil errors when
 ground truth exists, and per-frame residual summaries. Reconstruction and metric
 failures are recorded rather than discarded.
 
@@ -72,8 +72,8 @@ fn main() -> Result<()> {
 ```
 
 Use `write_benchmark_csv` and `write_benchmark_json` for summaries.
-`save_benchmark_outputs` writes amplitude, phase, result bundle, and loss
-history. Output stems contain a stable case hash so different algorithm
+`save_benchmark_outputs` writes amplitude, phase, a result bundle, and objective
+history CSV. Output stems contain a stable case hash so different algorithm
 configurations do not overwrite one another.
 
 Named profiles are metadata only; examples still choose concrete algorithms
@@ -93,6 +93,108 @@ cargo run --example benchmark_algorithms
 Converted-dataset benchmarks use the same API. When ground truth is unavailable,
 pass `ground_truth: None`; normalized frame residuals remain available without
 ground truth. The `load_local_dataset` example demonstrates this path.
+
+## Normalized benchmark bundles
+
+A `BenchmarkRecord` has two identities: `case_id` identifies an immutable case
+configuration, while `run_id` is unique for each execution. Repetitions of one
+case share `case_id` and have distinct `run_id` values. Frame metrics are
+normalized as one row per `(run_id, frame_index)` rather than stored as
+parallel lists.
+
+With the `parquet` feature, `write_benchmark_bundle` writes four stable tables:
+`runs`, `frames`, `artifacts`, and long-form `metadata`. Every successful run
+also has one nested `ResultBundle` under `results/<run_id>`; arrays are not
+duplicated in benchmark-level storage. Shared run columns have the same names
+and dtypes as result summary tables, so joins are direct.
+
+Python can build a comparison from existing results:
+
+```python
+suite = fpm.BenchmarkSuite("algorithm-comparison")
+run_id = suite.add_result(
+    result,
+    case_id="synthetic-v1-seed-17",
+    dataset_name="synthetic",
+    algorithm_configuration="iterations=20,object_step=1.0",
+)
+benchmark = suite.write_bundle("output/comparison", label="AP repeats")
+reopened = fpm.read_benchmark_bundle(benchmark.path)
+result_bundle = reopened.results[run_id]
+```
+
+Install `fpm-rs[polars]` to query the ordinary Parquet paths:
+
+```python
+import polars as pl
+
+runs = pl.scan_parquet(benchmark.tables.runs.path)
+frames = pl.scan_parquet(benchmark.tables.frames.path)
+
+comparison = (
+    runs.filter(pl.col("case_id") == "synthetic-v1-seed-17")
+    .select("run_id", "algorithm", "elapsed_seconds", "final_objective")
+    .collect()
+)
+
+per_frame = (
+    frames.join(runs.select("run_id", "algorithm"), on="run_id")
+    .group_by("algorithm")
+    .agg(pl.col("normalized_l2").mean())
+    .collect()
+)
+```
+
+Result summaries can be joined through the artifacts table or read from the
+nested bundles:
+
+```python
+runs_eager = pl.read_parquet(benchmark.tables.runs.path)
+summaries = pl.concat(
+    [
+        pl.read_parquet(
+            benchmark.results[run_id].tables.summary.path
+        )
+        for run_id in runs_eager["run_id"]
+    ]
+)
+run_summaries = runs_eager.join(
+    summaries,
+    on="run_id",
+    how="left",
+    suffix="_result",
+)
+
+one_case = (
+    runs_eager.filter(
+        (pl.col("case_id") == "synthetic-v1-seed-17")
+        & pl.col("success")
+    )
+    .select(
+        "case_id",
+        "algorithm",
+        "elapsed_seconds",
+        "completed_iterations",
+        "final_objective",
+    )
+    .sort(["case_id", "final_objective"])
+)
+
+repeats = (
+    runs_eager.filter(pl.col("success"))
+    .group_by(["case_id", "algorithm"])
+    .agg(
+        pl.len().alias("run_count"),
+        pl.col("elapsed_seconds").mean().alias("mean_elapsed_seconds"),
+        pl.col("elapsed_seconds").std().alias("std_elapsed_seconds"),
+        pl.col("final_objective").mean().alias("mean_final_objective"),
+    )
+)
+```
+
+For frame-level analysis, join `frames` to `runs` on `run_id`, then retain
+`case_id`, `algorithm`, and `dataset_name` from the run table. The Python
+extension does not import Polars and does not define a second DataFrame wrapper.
 
 ## Forward-model and gradient scaling benchmarks
 
@@ -137,3 +239,27 @@ thread overhead can dominate. A 20-sample 32×32/64×64 development run measured
 1.89× ordinary-update speedup with four workers (1.49 MiB incremental heap,
 versus 0.06 MiB serial); eight workers reached 1.91× with 2.26 MiB. These are
 illustrative measurements, not portable guarantees.
+
+### Array/trace refactor validation snapshot
+
+The ndarray, typed-trace, and bundle refactor was compared with its clean
+pre-refactor `HEAD` on the same machine and toolchain. Debug forward-model
+measurements over 500 evaluations changed from 2265.149 to 2244.738 µs/frame
+for the allocating path, 2140.048 to 2135.985 µs/frame with a reused workspace,
+and 600.479 to 607.455 µs/frame for the eight-worker stack. The largest absolute
+change was 1.2%.
+
+Ten-sample 32×32/64×64 single-worker gradient steps changed as follows:
+
+| Case | Before (ms/step) | After (ms/step) | Change |
+|---|---:|---:|---:|
+| Ordinary object | 8.847 | 8.882 | +0.4% |
+| Multiplexed object | 11.491 | 11.615 | +1.1% |
+| Multiplexed object and pupil | 12.386 | 12.922 | +4.3% |
+| Multiplexed object and illumination | 29.072 | 29.041 | -0.1% |
+
+Peak incremental heap values were unchanged in every worker configuration. The
+validation threshold was a repeatable 10% regression in representative serial
+paths or an unexplained increase in incremental heap; neither occurred.
+Multi-worker timings remain scheduler-sensitive and are retained as descriptive
+output rather than a release gate.

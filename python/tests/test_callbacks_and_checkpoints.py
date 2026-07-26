@@ -16,7 +16,7 @@ def test_built_in_and_python_callbacks(
         problem,
         callbacks=[
             fpm.IterationCallback(events.append),
-            fpm.CsvLogger(tmp_path / "loss.csv"),
+            fpm.CsvLogger(tmp_path / "objective.csv"),
             fpm.CheckpointEvery(1, tmp_path / "checkpoints"),
             fpm.SaveImageEvery(2, tmp_path / "images"),
         ],
@@ -24,7 +24,7 @@ def test_built_in_and_python_callbacks(
 
     assert result.runtime.completed_iterations == 2
     assert [event["iteration"] for event in events] == [1, 2]
-    assert (tmp_path / "loss.csv").is_file()
+    assert (tmp_path / "objective.csv").is_file()
     assert (tmp_path / "checkpoints" / "checkpoint_00001.json").is_file()
     assert (tmp_path / "checkpoints" / "checkpoint_00002.json").is_file()
     assert (tmp_path / "images" / "amplitude_00002.png").is_file()
@@ -51,7 +51,7 @@ def test_checkpoint_load_save_and_resume(
     assert checkpoint.format_version == 1
     assert checkpoint.completed_iterations == 1
     assert result.runtime.completed_iterations == 2
-    assert len(result.history) == 2
+    assert len(result.trace) == 2
 
 
 def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> None:

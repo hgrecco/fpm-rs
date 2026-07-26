@@ -1,7 +1,6 @@
 use crate::{
     Result,
-    algorithms::objective::LossType,
-    diagnostics::StepDiagnostics,
+    algorithms::{NoIterationMetrics, StepOutput, objective::LossType},
     error::Error,
     measurements::MeasurementRead,
     reconstruction::{Batch, ReconstructionProblem, ReconstructionState},
@@ -82,6 +81,8 @@ impl Fpie {
 }
 
 impl ReconstructionAlgorithm for Fpie {
+    type IterationMetrics = NoIterationMetrics;
+
     fn validate(&self) -> Result<()> {
         if !self.object_step.is_finite() || self.object_step <= 0.0 {
             return Err(Error::InvalidParameter {
@@ -110,8 +111,8 @@ impl ReconstructionAlgorithm for Fpie {
         state: &mut ReconstructionState,
         batch: &Batch,
         _iteration: usize,
-    ) -> Result<StepDiagnostics> {
-        projection_update(
+    ) -> Result<StepOutput<Self::IterationMetrics>> {
+        Ok(projection_update(
             problem,
             state,
             batch,
@@ -125,7 +126,8 @@ impl ReconstructionAlgorithm for Fpie {
                 gain_update: None,
                 background_update: None,
             },
-        )
+        )?
+        .into())
     }
 
     fn iterations(&self) -> usize {

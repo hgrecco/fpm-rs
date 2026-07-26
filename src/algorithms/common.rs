@@ -2,10 +2,12 @@ use num_complex::Complex64;
 
 use crate::{
     Result,
-    algorithms::objective::{LossType, point_loss},
+    algorithms::{
+        StepSummary,
+        objective::{LossType, point_loss},
+    },
     array_layout::checked_len_2d,
     backend::FftDirection,
-    diagnostics::StepDiagnostics,
     error::Error,
     measurements::MeasurementRead,
     model::{fftshift_copy, ifftshift_copy},
@@ -49,11 +51,11 @@ pub(crate) fn projection_update<M: MeasurementRead>(
     state: &mut ReconstructionState,
     batch: &Batch,
     configuration: UpdateConfiguration,
-) -> Result<StepDiagnostics> {
+) -> Result<StepSummary> {
     let model = &problem.model;
     let shape = model.image_shape;
     let image_len = checked_len_2d(shape)?;
-    let mut diagnostics = StepDiagnostics::default();
+    let mut diagnostics = StepSummary::default();
     for &frame in &batch.indices {
         let frame_weight = problem.measurements.frame_weight(frame)?;
         if frame_weight == 0.0 {

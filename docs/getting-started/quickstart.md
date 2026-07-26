@@ -37,11 +37,11 @@ result = fpm.AlternatingProjection(iterations=20).run(problem)
 
 print(result.amplitude.shape)
 print(result.runtime.completed_iterations)
-print(result.final_loss)
+print(result.final_objective)
 ```
 
 Expected output includes an amplitude shape of `(42, 42)`, 20 completed
-iterations, and a finite final loss. Exact floating-point loss values may vary
+iterations, and a finite final objective. Exact floating-point objective values may vary
 slightly by platform.
 
 The model separates the measured low-resolution frame shape from the recovered

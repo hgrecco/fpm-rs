@@ -4,20 +4,21 @@ mod common;
 mod epry;
 mod fpie;
 mod gradient_descent;
+mod metrics;
 pub mod objective;
 mod regularization;
 
-pub use admm::Admm;
+pub use admm::{Admm, AdmmIterationMetrics};
 pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;
 pub use fpie::Fpie;
 pub use gradient_descent::GradientDescent;
+pub use metrics::{AlgorithmIterationMetrics, NoIterationMetrics, StepOutput, StepSummary};
 
 use crate::{
     Result,
     backend::Backend,
     callbacks::Callback,
-    diagnostics::StepDiagnostics,
     measurements::MeasurementRead,
     reconstruction::{
         Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionResult,
@@ -27,6 +28,8 @@ use crate::{
 use std::sync::Arc;
 
 pub trait ReconstructionAlgorithm {
+    type IterationMetrics: AlgorithmIterationMetrics;
+
     fn validate(&self) -> Result<()> {
         Ok(())
     }
@@ -59,7 +62,7 @@ pub trait ReconstructionAlgorithm {
         state: &mut ReconstructionState,
         batch: &Batch,
         iteration: usize,
-    ) -> Result<StepDiagnostics>;
+    ) -> Result<StepOutput<Self::IterationMetrics>>;
 
     fn iterations(&self) -> usize;
 

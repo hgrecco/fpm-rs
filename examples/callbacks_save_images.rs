@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         vec![
             Box::new(SaveImageEvery::new(10, "output/callback_frames")),
             Box::new(SaveResidualsEvery::new(10, "output/callback_residuals")),
-            Box::new(CsvLogger::new("output/callback_loss.csv")),
+            Box::new(CsvLogger::new("output/callback_objective.csv")),
             Box::new(CheckpointEvery::new(25, "output/checkpoints")),
             Box::new(StopOnPlateau::new(10, 1e-7)),
         ],

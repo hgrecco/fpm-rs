@@ -18,7 +18,8 @@ ptychography, multislice propagation, and GPU execution are not implemented.
   EPRY, ADMM, or gradient descent when their calibration and regularization
   options fit the experiment.
 - **Keep a run inspectable.** Record diagnostics, write checkpoints, and
-  compare simulations with known ground truth.
+  compare simulations with known ground truth. Optional Parquet support writes
+  self-describing result and benchmark bundles for downstream analysis.
 - **Measure at the right layer.** Reusable reference/estimate metrics,
   optimization objectives, reconstruction evaluation, and recorder-driven
   diagnostics are separate APIs.
@@ -42,13 +43,16 @@ as pupils, synthetic objects, measurement stacks, crop operations, and direct
 forward-model spectra—require standard C-style row-major layout. Those APIs
 validate the layout without copying and return a `NonStandardLayout` error for
 strided input. Owned result and diagnostic arrays are ordinary `ndarray`
-arrays and may be rearranged freely by callers.
+arrays. Result bundle export is a strict persistence boundary and rejects
+nonstandard result layouts rather than silently materializing a copy.
 
 Python follows the same distinction. Metrics accept strided NumPy arrays.
 Reconstruction, simulation, pupil, and measurement inputs require
 C-contiguous arrays and raise an error suggesting `numpy.ascontiguousarray`;
 the caller therefore decides whether to pay for that copy. Accepted NumPy
-inputs are copied into Rust-owned storage at the binding boundary.
+inputs are copied into Rust-owned storage at the binding boundary. Arrays
+opened through a result bundle are loaded on first access, cached, and exposed
+as immutable NumPy arrays.
 
 ## Start here
 

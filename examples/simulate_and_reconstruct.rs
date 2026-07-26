@@ -24,15 +24,15 @@ fn main() -> Result<()> {
             &problem,
             vec![
                 Box::new(SaveImageEvery::new(5, "output/iterations")),
-                Box::new(CsvLogger::new("output/loss.csv")),
+                Box::new(CsvLogger::new("output/objective.csv")),
             ],
         )?;
     result.save_amplitude("output/amplitude.png")?;
     result.save_phase("output/phase.png")?;
     let metrics = evaluate_reconstruction(&result, truth.view(), None, None)?;
     println!(
-        "final loss {:.4e}, amplitude RMSE {:.4e}",
-        result.history.final_loss().unwrap_or(f64::NAN),
+        "final objective {:.4e}, amplitude RMSE {:.4e}",
+        result.trace.final_objective().unwrap_or(f64::NAN),
         metrics.object.amplitude_rmse
     );
     Ok(())

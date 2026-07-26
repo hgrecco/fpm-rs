@@ -12,18 +12,14 @@ pub struct FrameDiagnosticRecord {
     pub metrics: IntensityComparisonMetrics,
 }
 
-/// Diagnostic persistence deliberately uses measured/predicted terminology.
-///
-/// Keeping this wire model here prevents diagnostic roles from leaking into
-/// the reusable reference/estimate metric type.
 #[derive(Serialize)]
 struct FrameDiagnosticRecordRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     iteration: Option<usize>,
     frame_index: usize,
     illumination_index: usize,
-    measured_sum: f64,
-    predicted_sum: f64,
+    reference_sum: f64,
+    estimate_sum: f64,
     residual_l1: f64,
     residual_l2: f64,
     residual_mean: f64,
@@ -39,8 +35,8 @@ struct FrameDiagnosticRecordOwned {
     iteration: Option<usize>,
     frame_index: usize,
     illumination_index: usize,
-    measured_sum: f64,
-    predicted_sum: f64,
+    reference_sum: f64,
+    estimate_sum: f64,
     residual_l1: f64,
     residual_l2: f64,
     residual_mean: f64,
@@ -59,8 +55,8 @@ impl Serialize for FrameDiagnosticRecord {
             iteration: self.iteration,
             frame_index: self.frame_index,
             illumination_index: self.illumination_index,
-            measured_sum: self.metrics.reference_sum,
-            predicted_sum: self.metrics.estimate_sum,
+            reference_sum: self.metrics.reference_sum,
+            estimate_sum: self.metrics.estimate_sum,
             residual_l1: self.metrics.residual_l1,
             residual_l2: self.metrics.residual_l2,
             residual_mean: self.metrics.residual_mean,
@@ -84,8 +80,8 @@ impl<'de> Deserialize<'de> for FrameDiagnosticRecord {
             frame_index: record.frame_index,
             illumination_index: record.illumination_index,
             metrics: IntensityComparisonMetrics {
-                reference_sum: record.measured_sum,
-                estimate_sum: record.predicted_sum,
+                reference_sum: record.reference_sum,
+                estimate_sum: record.estimate_sum,
                 residual_l1: record.residual_l1,
                 residual_l2: record.residual_l2,
                 residual_mean: record.residual_mean,

@@ -22,8 +22,8 @@ use fpm_rs::{
     measurements::{FrameMetadata, MeasurementRead, MeasurementStack},
     model::Pupil,
     reconstruction::{
-        FrameSchedule, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionResult,
-        RunOptions, Runner,
+        AlgorithmMetricRecord, FrameSchedule, IterationRecord, ReconstructionCheckpoint,
+        ReconstructionProblem, ReconstructionResult, ReconstructionTrace, RunOptions, Runner,
     },
 };
 use numpy::{PyArray1, PyArray2, PyArrayMethods, ndarray};
@@ -189,35 +189,35 @@ impl PyReconstructionCheckpoint {
 #[derive(Clone)]
 pub(crate) struct PyRuntimeInfo {
     #[pyo3(get)]
-    elapsed_seconds: f64,
+    pub(crate) elapsed_seconds: f64,
     #[pyo3(get)]
-    completed_iterations: usize,
+    pub(crate) completed_iterations: usize,
     #[pyo3(get)]
-    stopped_early: bool,
+    pub(crate) stopped_early: bool,
     #[pyo3(get)]
-    algorithm: String,
+    pub(crate) algorithm: String,
 }
 
 #[pyclass(module = "fpm_rs._core", name = "ReconstructionResult", frozen)]
 pub(crate) struct PyReconstructionResult {
-    object: Py<PyArray2<Complex64>>,
-    amplitude: Py<PyArray2<f64>>,
-    phase: Py<PyArray2<f64>>,
-    object_spectrum: Py<PyArray2<Complex64>>,
-    recovered_pupil: Py<PyArray2<Complex64>>,
-    pupil_support: Py<PyArray2<u8>>,
-    calibrated_illumination: Option<Py<PyArray2<f64>>>,
-    recovered_frame_gains: Option<Py<PyArray1<f64>>>,
-    recovered_background: Option<Py<PyArray1<f64>>>,
-    history: Vec<(usize, f64, f64)>,
-    admm_residual_history: Vec<(usize, f64, f64)>,
-    diagnostics: BTreeMap<String, f64>,
-    runtime: PyRuntimeInfo,
-    metadata: BTreeMap<String, String>,
+    pub(crate) object: Py<PyArray2<Complex64>>,
+    pub(crate) amplitude: Py<PyArray2<f64>>,
+    pub(crate) phase: Py<PyArray2<f64>>,
+    pub(crate) object_spectrum: Py<PyArray2<Complex64>>,
+    pub(crate) recovered_pupil: Py<PyArray2<Complex64>>,
+    pub(crate) pupil_support: Py<PyArray2<u8>>,
+    pub(crate) calibrated_illumination: Option<Py<PyArray2<f64>>>,
+    pub(crate) recovered_frame_gains: Option<Py<PyArray1<f64>>>,
+    pub(crate) recovered_background: Option<Py<PyArray1<f64>>>,
+    pub(crate) trace: Vec<(usize, f64, f64)>,
+    pub(crate) algorithm_metrics: Vec<(usize, String, String, f64)>,
+    pub(crate) scalar_diagnostics: BTreeMap<String, f64>,
+    pub(crate) runtime: PyRuntimeInfo,
+    pub(crate) metadata: BTreeMap<String, String>,
 }
 
 impl PyReconstructionResult {
-    fn from_core(py: Python<'_>, result: ReconstructionResult) -> PyResult<Self> {
+    pub(crate) fn from_core(py: Python<'_>, result: ReconstructionResult) -> PyResult<Self> {
         let pupil_shape = result.recovered_pupil.shape();
         let pupil_support = result.recovered_pupil.support().iter().copied().collect();
         let calibrated_illumination = result
@@ -237,23 +237,24 @@ impl PyReconstructionResult {
         let recovered_background = result.recovered_background.map(|values| {
             PyArray1::from_owned_array(py, ndarray::Array1::from_vec(values)).unbind()
         });
-        let admm_residual_history = result
-            .history
-            .iterations
+        let algorithm_metrics = result
+            .trace
+            .algorithm_metrics
             .iter()
-            .filter_map(|record| {
-                Some((
+            .map(|record| {
+                (
                     record.iteration,
-                    record.admm_primal_residual_rms?,
-                    record.admm_dual_residual_rms?,
-                ))
+                    record.namespace.clone(),
+                    record.metric.clone(),
+                    record.value,
+                )
             })
             .collect();
-        let history = result
-            .history
+        let trace = result
+            .trace
             .iterations
             .into_iter()
-            .map(|record| (record.iteration, record.loss, record.elapsed_seconds))
+            .map(|record| (record.iteration, record.objective, record.elapsed_seconds))
             .collect();
         let runtime = PyRuntimeInfo {
             elapsed_seconds: result.runtime.elapsed_seconds,
@@ -271,15 +272,15 @@ impl PyReconstructionResult {
             calibrated_illumination,
             recovered_frame_gains,
             recovered_background,
-            history,
-            admm_residual_history,
-            diagnostics: result.diagnostics,
+            trace,
+            algorithm_metrics,
+            scalar_diagnostics: result.scalar_diagnostics,
             runtime,
             metadata: result.metadata,
         })
     }
 
-    fn to_core_for_evaluation(&self, py: Python<'_>) -> PyResult<ReconstructionResult> {
+    pub(crate) fn to_core(&self, py: Python<'_>) -> PyResult<ReconstructionResult> {
         let object =
             crate::arrays::core_array2(&self.object.bind(py).readonly()).map_err(to_py_err)?;
         let amplitude =
@@ -350,8 +351,30 @@ impl PyReconstructionResult {
             calibrated_illumination,
             recovered_frame_gains,
             recovered_background,
-            history: fpm_rs::diagnostics::ReconstructionHistory::default(),
-            diagnostics: self.diagnostics.clone(),
+            trace: ReconstructionTrace {
+                iterations: self
+                    .trace
+                    .iter()
+                    .map(|&(iteration, objective, elapsed_seconds)| IterationRecord {
+                        iteration,
+                        objective,
+                        elapsed_seconds,
+                    })
+                    .collect(),
+                algorithm_metrics: self
+                    .algorithm_metrics
+                    .iter()
+                    .map(
+                        |(iteration, namespace, metric, value)| AlgorithmMetricRecord {
+                            iteration: *iteration,
+                            namespace: namespace.clone(),
+                            metric: metric.clone(),
+                            value: *value,
+                        },
+                    )
+                    .collect(),
+            },
+            scalar_diagnostics: self.scalar_diagnostics.clone(),
             runtime: fpm_rs::reconstruction::RuntimeInfo {
                 elapsed_seconds: self.runtime.elapsed_seconds,
                 completed_iterations: self.runtime.completed_iterations,
@@ -373,7 +396,7 @@ fn evaluate_reconstruction_py(
     reference_model: Option<PyRef<'_, PyImagePlaneModel>>,
     valid_object_mask: Option<numpy::PyReadonlyArray2<'_, u8>>,
 ) -> PyResult<Py<PyDict>> {
-    let result = result.to_core_for_evaluation(py)?;
+    let result = result.to_core(py)?;
     // Evaluation is layout-independent. Copying here releases the Python
     // borrow before detaching while preserving the input's logical order.
     let truth = truth.as_array().to_owned();
@@ -404,7 +427,7 @@ fn evaluate_reconstruction_py(
     evaluation_to_py(py, &evaluation)
 }
 
-fn evaluation_to_py(
+pub(crate) fn evaluation_to_py(
     py: Python<'_>,
     evaluation: &fpm_rs::evaluation::ReconstructionEvaluation,
 ) -> PyResult<Py<PyDict>> {
@@ -519,19 +542,18 @@ impl PyReconstructionResult {
     }
 
     #[getter]
-    fn history(&self) -> Vec<(usize, f64, f64)> {
-        self.history.clone()
-    }
-
-    /// `(iteration, primal_rms, dual_rms)` records for ADMM runs.
-    #[getter]
-    fn admm_residual_history(&self) -> Vec<(usize, f64, f64)> {
-        self.admm_residual_history.clone()
+    fn trace(&self) -> Vec<(usize, f64, f64)> {
+        self.trace.clone()
     }
 
     #[getter]
-    fn diagnostics(&self) -> BTreeMap<String, f64> {
-        self.diagnostics.clone()
+    fn algorithm_metrics(&self) -> Vec<(usize, String, String, f64)> {
+        self.algorithm_metrics.clone()
+    }
+
+    #[getter]
+    fn scalar_diagnostics(&self) -> BTreeMap<String, f64> {
+        self.scalar_diagnostics.clone()
     }
 
     #[getter]
@@ -545,8 +567,33 @@ impl PyReconstructionResult {
     }
 
     #[getter]
-    fn final_loss(&self) -> Option<f64> {
-        self.history.last().map(|record| record.1)
+    fn final_objective(&self) -> Option<f64> {
+        self.trace.last().map(|record| record.1)
+    }
+
+    #[pyo3(signature = (path, *, run_id=None, label=None, include_previews=true))]
+    fn write_bundle(
+        &self,
+        py: Python<'_>,
+        path: PathBuf,
+        run_id: Option<String>,
+        label: Option<String>,
+        include_previews: bool,
+    ) -> PyResult<crate::bundle::PyResultBundle> {
+        let result = self.to_core(py)?;
+        let bundle = py
+            .detach(move || {
+                result.write_bundle(
+                    path,
+                    fpm_rs::reconstruction::BundleExportOptions {
+                        run_id,
+                        label,
+                        include_previews,
+                    },
+                )
+            })
+            .map_err(to_py_err)?;
+        Ok(crate::bundle::PyResultBundle::from_core(bundle))
     }
 }
 
@@ -624,27 +671,27 @@ impl PyDiagnosticRecorder {
     }
 }
 
-fn diagnostics_to_py(
+pub(crate) fn diagnostics_to_py(
     py: Python<'_>,
     diagnostics: &ReconstructionDiagnostics,
 ) -> PyResult<Py<PyDict>> {
     let output = PyDict::new(py);
 
-    let iteration_history = PyList::empty(py);
-    for entry in &diagnostics.iteration_history {
+    let iteration_diagnostics = PyList::empty(py);
+    for entry in &diagnostics.iteration_diagnostics {
         let value = PyDict::new(py);
         value.set_item("iteration", entry.iteration)?;
-        value.set_item("total_loss", entry.total_loss)?;
-        value.set_item("data_loss", entry.data_loss)?;
-        value.set_item("regularization_loss", entry.regularization_loss)?;
+        value.set_item("total_objective", entry.total_objective)?;
+        value.set_item("data_objective", entry.data_objective)?;
+        value.set_item("regularization_objective", entry.regularization_objective)?;
         value.set_item("object_relative_change", entry.object_relative_change)?;
         value.set_item("pupil_relative_change", entry.pupil_relative_change)?;
-        value.set_item("median_frame_loss", entry.median_frame_loss)?;
-        value.set_item("worst_frame_loss", entry.worst_frame_loss)?;
-        value.set_item("elapsed_ms", entry.elapsed_ms)?;
-        iteration_history.append(value)?;
+        value.set_item("median_frame_objective", entry.median_frame_objective)?;
+        value.set_item("worst_frame_objective", entry.worst_frame_objective)?;
+        value.set_item("elapsed_seconds", entry.elapsed_seconds)?;
+        iteration_diagnostics.append(value)?;
     }
-    output.set_item("iteration_history", iteration_history)?;
+    output.set_item("iteration_diagnostics", iteration_diagnostics)?;
 
     let frame_diagnostics = PyList::empty(py);
     for entry in &diagnostics.frame_diagnostics {
@@ -652,8 +699,8 @@ fn diagnostics_to_py(
         value.set_item("iteration", entry.iteration)?;
         value.set_item("frame_index", entry.frame_index)?;
         value.set_item("illumination_index", entry.illumination_index)?;
-        value.set_item("measured_sum", entry.metrics.reference_sum)?;
-        value.set_item("predicted_sum", entry.metrics.estimate_sum)?;
+        value.set_item("reference_sum", entry.metrics.reference_sum)?;
+        value.set_item("estimate_sum", entry.metrics.estimate_sum)?;
         value.set_item("residual_l1", entry.metrics.residual_l1)?;
         value.set_item("residual_l2", entry.metrics.residual_l2)?;
         value.set_item("residual_mean", entry.metrics.residual_mean)?;
@@ -665,8 +712,8 @@ fn diagnostics_to_py(
     }
     output.set_item("frame_diagnostics", frame_diagnostics)?;
 
-    let raw_frame_stats = PyList::empty(py);
-    for entry in &diagnostics.raw_frame_stats {
+    let raw_frame_statistics = PyList::empty(py);
+    for entry in &diagnostics.raw_frame_statistics {
         let value = PyDict::new(py);
         value.set_item("frame_index", entry.frame_index)?;
         value.set_item("mean", entry.metrics.mean)?;
@@ -676,9 +723,9 @@ fn diagnostics_to_py(
         value.set_item("sum", entry.metrics.sum)?;
         value.set_item("saturated_pixels", entry.metrics.saturated_pixels)?;
         value.set_item("zero_pixels", entry.metrics.zero_pixels)?;
-        raw_frame_stats.append(value)?;
+        raw_frame_statistics.append(value)?;
     }
-    output.set_item("raw_frame_stats", raw_frame_stats)?;
+    output.set_item("raw_frame_statistics", raw_frame_statistics)?;
 
     if let Some(coverage) = &diagnostics.coverage {
         let value = PyDict::new(py);
@@ -850,7 +897,7 @@ struct PythonIterationCallback {
 
 impl Callback for PythonIterationCallback {
     fn requires(&self) -> Vec<DiagnosticRequest> {
-        vec![DiagnosticRequest::Loss]
+        vec![DiagnosticRequest::Objective]
     }
 
     fn requires_for(&self, hook: CallbackHook, iteration: usize) -> Vec<DiagnosticRequest> {
@@ -868,7 +915,21 @@ impl Callback for PythonIterationCallback {
         Python::attach(|py| {
             let values = PyDict::new(py);
             values.set_item("iteration", context.iteration)?;
-            values.set_item("loss", context.diagnostics.loss)?;
+            values.set_item("objective", context.diagnostics.objective)?;
+            values.set_item(
+                "algorithm_metrics",
+                context
+                    .current_algorithm_metrics
+                    .iter()
+                    .map(|record| {
+                        (
+                            record.namespace.as_str(),
+                            record.metric.as_str(),
+                            record.value,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )?;
             values.set_item("problem_name", context.problem_name)?;
             let response = self.callable.bind(py).call1((values,));
             match response {

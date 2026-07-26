@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 pub struct IterationDiagnostics {
     pub iteration: usize,
 
-    pub total_loss: Option<f64>,
-    pub data_loss: Option<f64>,
-    pub regularization_loss: Option<f64>,
+    pub total_objective: Option<f64>,
+    pub data_objective: Option<f64>,
+    pub regularization_objective: Option<f64>,
 
     pub object_relative_change: Option<f64>,
     pub pupil_relative_change: Option<f64>,
 
-    pub median_frame_loss: Option<f64>,
-    pub worst_frame_loss: Option<f64>,
+    pub median_frame_objective: Option<f64>,
+    pub worst_frame_objective: Option<f64>,
 
-    pub elapsed_ms: Option<f64>,
+    pub elapsed_seconds: Option<f64>,
 }

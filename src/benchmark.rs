@@ -4,9 +4,11 @@
 //! traits. Calling it once per concrete algorithm avoids a second algorithm
 //! registry or trait-object hierarchy.
 
+#[cfg(feature = "parquet")]
+use std::fs;
 use std::{
     collections::BTreeMap,
-    fs::{self, File},
+    fs::File,
     io::BufWriter,
     path::{Path, PathBuf},
     time::Instant,
@@ -14,6 +16,7 @@ use std::{
 
 use ndarray::ArrayView2;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     Complex64, Result,
@@ -103,6 +106,10 @@ pub fn annotate_benchmark_profile(record: &mut BenchmarkRecord, profile: &Benchm
 #[serde(deny_unknown_fields)]
 pub struct BenchmarkRecord {
     pub format_version: u32,
+    /// Deterministic identity of the immutable case configuration.
+    pub case_id: String,
+    /// Unique identity of this execution.
+    pub run_id: String,
     pub dataset_name: String,
     pub dataset_version: Option<String>,
     pub preset_name: Option<String>,
@@ -110,7 +117,7 @@ pub struct BenchmarkRecord {
     pub random_seed: Option<u64>,
     /// Original-image crop as `[row, column, height, width]`, when applicable.
     pub spatial_crop: Option<[usize; 4]>,
-    pub algorithm_name: String,
+    pub algorithm: String,
     pub algorithm_configuration: String,
     pub success: bool,
     pub error: Option<String>,
@@ -118,11 +125,11 @@ pub struct BenchmarkRecord {
     pub image_shape: [usize; 2],
     pub reconstruction_shape: [usize; 2],
     pub completed_iterations: usize,
-    pub runtime_seconds: f64,
-    pub initial_loss: Option<f64>,
-    pub final_loss: Option<f64>,
-    /// Final loss divided by initial loss; lower values indicate a larger decrease.
-    pub final_to_initial_loss_ratio: Option<f64>,
+    pub elapsed_seconds: f64,
+    pub initial_objective: Option<f64>,
+    pub final_objective: Option<f64>,
+    /// Final objective divided by the initial objective.
+    pub final_to_initial_objective_ratio: Option<f64>,
     pub amplitude_rmse: Option<f64>,
     pub phase_rmse: Option<f64>,
     pub complex_field_relative_error: Option<f64>,
@@ -130,13 +137,97 @@ pub struct BenchmarkRecord {
     pub pupil_amplitude_rmse: Option<f64>,
     pub pupil_phase_rmse: Option<f64>,
     pub illumination_position_rmse: Option<f64>,
-    pub per_frame_residuals: Option<Vec<f64>>,
     pub per_frame_residual_mean: Option<f64>,
     pub per_frame_residual_max: Option<f64>,
-    pub selected_original_frame_indices: Vec<usize>,
-    pub selected_original_illumination_indices: Vec<Option<usize>>,
+    pub frames: Vec<BenchmarkFrameRecord>,
     pub output_paths: Vec<PathBuf>,
     pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkFrameRecord {
+    pub frame_index: usize,
+    pub original_frame_index: usize,
+    pub original_illumination_index: Option<usize>,
+    pub normalized_l2: Option<f64>,
+}
+
+impl BenchmarkRecord {
+    /// Builds a normalized benchmark record for an already completed result.
+    ///
+    /// Callers provide the deterministic `case_id`; a fresh `run_id` is
+    /// generated for this execution.
+    pub fn from_result(
+        case_id: impl Into<String>,
+        dataset_name: impl Into<String>,
+        algorithm_configuration: impl Into<String>,
+        result: &ReconstructionResult,
+    ) -> Self {
+        let image_shape = result.recovered_pupil.shape();
+        let reconstruction_shape = result.object.dim();
+        let frame_count = result
+            .metadata
+            .get("frame_count")
+            .and_then(|value| value.parse().ok())
+            .or_else(|| result.recovered_frame_gains.as_ref().map(Vec::len))
+            .unwrap_or(0);
+        let initial_objective = result
+            .trace
+            .iterations
+            .first()
+            .map(|record| record.objective);
+        let final_objective = result.trace.final_objective();
+        Self {
+            format_version: BENCHMARK_RECORD_FORMAT_VERSION,
+            case_id: case_id.into(),
+            run_id: Uuid::new_v4().to_string(),
+            dataset_name: dataset_name.into(),
+            dataset_version: result.metadata.get("dataset_version").cloned(),
+            preset_name: result.metadata.get("preset_name").cloned(),
+            crate_version: env!("CARGO_PKG_VERSION").into(),
+            random_seed: result
+                .metadata
+                .get("random_seed")
+                .and_then(|value| value.parse().ok()),
+            spatial_crop: None,
+            algorithm: result.runtime.algorithm.clone(),
+            algorithm_configuration: algorithm_configuration.into(),
+            success: true,
+            error: None,
+            frame_count,
+            image_shape: [image_shape.0, image_shape.1],
+            reconstruction_shape: [reconstruction_shape.0, reconstruction_shape.1],
+            completed_iterations: result.runtime.completed_iterations,
+            elapsed_seconds: result.runtime.elapsed_seconds,
+            initial_objective,
+            final_objective,
+            final_to_initial_objective_ratio: initial_objective.and_then(|initial| {
+                final_objective
+                    .filter(|_| initial.abs() > f64::EPSILON)
+                    .map(|final_value| final_value / initial)
+            }),
+            amplitude_rmse: None,
+            phase_rmse: None,
+            complex_field_relative_error: None,
+            fourier_domain_relative_error: None,
+            pupil_amplitude_rmse: None,
+            pupil_phase_rmse: None,
+            illumination_position_rmse: None,
+            per_frame_residual_mean: None,
+            per_frame_residual_max: None,
+            frames: (0..frame_count)
+                .map(|frame_index| BenchmarkFrameRecord {
+                    frame_index,
+                    original_frame_index: frame_index,
+                    original_illumination_index: None,
+                    normalized_l2: None,
+                })
+                .collect(),
+            output_paths: Vec::new(),
+            metadata: BTreeMap::new(),
+        }
+    }
 }
 
 /// Runs one concrete algorithm and always returns a record. Reconstruction or
@@ -160,13 +251,15 @@ where
     let reconstruction_shape = problem.model.reconstruction_shape;
     let mut record = BenchmarkRecord {
         format_version: BENCHMARK_RECORD_FORMAT_VERSION,
+        case_id: String::new(),
+        run_id: Uuid::new_v4().to_string(),
         dataset_name: dataset_name.into(),
         dataset_version: None,
         preset_name: None,
         crate_version: env!("CARGO_PKG_VERSION").into(),
         random_seed: None,
         spatial_crop: None,
-        algorithm_name,
+        algorithm: algorithm_name,
         algorithm_configuration: algorithm_configuration.into(),
         success: false,
         error: None,
@@ -174,10 +267,10 @@ where
         image_shape: [image_shape.0, image_shape.1],
         reconstruction_shape: [reconstruction_shape.0, reconstruction_shape.1],
         completed_iterations: 0,
-        runtime_seconds: 0.0,
-        initial_loss: None,
-        final_loss: None,
-        final_to_initial_loss_ratio: None,
+        elapsed_seconds: 0.0,
+        initial_objective: None,
+        final_objective: None,
+        final_to_initial_objective_ratio: None,
         amplitude_rmse: None,
         phase_rmse: None,
         complex_field_relative_error: None,
@@ -185,49 +278,46 @@ where
         pupil_amplitude_rmse: None,
         pupil_phase_rmse: None,
         illumination_position_rmse: None,
-        per_frame_residuals: None,
         per_frame_residual_mean: None,
         per_frame_residual_max: None,
-        selected_original_frame_indices: problem
+        frames: problem
             .measurements
             .frame_metadata()
             .iter()
             .enumerate()
-            .map(|(index, metadata)| metadata.original_frame_index.unwrap_or(index))
-            .collect(),
-        selected_original_illumination_indices: problem
-            .measurements
-            .frame_metadata()
-            .iter()
-            .map(|metadata| {
-                metadata
+            .map(|(index, metadata)| BenchmarkFrameRecord {
+                frame_index: index,
+                original_frame_index: metadata.original_frame_index.unwrap_or(index),
+                original_illumination_index: metadata
                     .original_illumination_index
-                    .or(metadata.illumination_index)
+                    .or(metadata.illumination_index),
+                normalized_l2: None,
             })
             .collect(),
         output_paths: Vec::new(),
         metadata: BTreeMap::new(),
     };
+    record.case_id = format!("{:016x}", case_hash(&record));
 
     let started = Instant::now();
     let result = match algorithm.run(problem) {
         Ok(result) => result,
         Err(error) => {
-            record.runtime_seconds = started.elapsed().as_secs_f64();
+            record.elapsed_seconds = started.elapsed().as_secs_f64();
             record.error = Some(error.to_string());
             return (record, None);
         }
     };
-    record.runtime_seconds = started.elapsed().as_secs_f64();
-    record.algorithm_name = result.runtime.algorithm.clone();
+    record.elapsed_seconds = started.elapsed().as_secs_f64();
+    record.algorithm = result.runtime.algorithm.clone();
     record.completed_iterations = result.runtime.completed_iterations;
-    record.initial_loss = result.history.iterations.first().map(|entry| entry.loss);
-    record.final_loss = result.history.final_loss();
-    record.final_to_initial_loss_ratio = record.initial_loss.and_then(|initial| {
+    record.initial_objective = result.trace.iterations.first().map(|entry| entry.objective);
+    record.final_objective = result.trace.final_objective();
+    record.final_to_initial_objective_ratio = record.initial_objective.and_then(|initial| {
         record
-            .final_loss
+            .final_objective
             .filter(|_| initial.abs() > f64::EPSILON)
-            .map(|final_loss| final_loss / initial)
+            .map(|final_objective| final_objective / initial)
     });
 
     let residuals: Vec<f64> = if let Some(truth) = ground_truth {
@@ -285,13 +375,40 @@ where
             Some(residuals.iter().sum::<f64>() / residuals.len() as f64);
         record.per_frame_residual_max = residuals.iter().copied().reduce(f64::max);
     }
-    record.per_frame_residuals = Some(residuals);
+    for (frame, residual) in record.frames.iter_mut().zip(residuals) {
+        frame.normalized_l2 = Some(residual);
+    }
+    let mut result = result;
+    result
+        .metadata
+        .insert("case_id".into(), record.case_id.clone());
+    result
+        .metadata
+        .insert("dataset_name".into(), record.dataset_name.clone());
+    if let Some(version) = &record.dataset_version {
+        result
+            .metadata
+            .insert("dataset_version".into(), version.clone());
+    }
+    result.metadata.insert(
+        "algorithm_configuration".into(),
+        record.algorithm_configuration.clone(),
+    );
+    result
+        .metadata
+        .insert("frame_count".into(), record.frame_count.to_string());
+    if let Some(seed) = record.random_seed {
+        result
+            .metadata
+            .insert("random_seed".into(), seed.to_string());
+    }
     record.success = true;
     (record, Some(result))
 }
 
 /// Saves the standard reconstruction artifacts for a benchmark case and adds
 /// their paths to the record.
+#[cfg(feature = "parquet")]
 pub fn save_benchmark_outputs(
     record: &mut BenchmarkRecord,
     result: &ReconstructionResult,
@@ -302,21 +419,39 @@ pub fn save_benchmark_outputs(
     let stem = format!(
         "{}-{}-{:016x}",
         safe_stem(&record.dataset_name),
-        safe_stem(&record.algorithm_name),
+        safe_stem(&record.algorithm),
         case_hash(record),
     );
     let outputs = [
         directory.join(format!("{stem}-amplitude.png")),
         directory.join(format!("{stem}-phase.png")),
-        directory.join(format!("{stem}-result.json")),
-        directory.join(format!("{stem}-loss.csv")),
+        directory.join(format!("{stem}-result")),
+        directory.join(format!("{stem}-trace.csv")),
     ];
     result.save_amplitude(&outputs[0])?;
     result.save_phase(&outputs[1])?;
-    result.save_bundle(&outputs[2])?;
-    result.save_loss_csv(&outputs[3])?;
+    result.write_bundle(
+        &outputs[2],
+        crate::reconstruction::BundleExportOptions {
+            run_id: Some(record.run_id.clone()),
+            label: None,
+            include_previews: true,
+        },
+    )?;
+    result.save_trace_csv(&outputs[3])?;
     record.output_paths.extend(outputs);
     Ok(())
+}
+
+#[cfg(not(feature = "parquet"))]
+pub fn save_benchmark_outputs(
+    _record: &mut BenchmarkRecord,
+    _result: &ReconstructionResult,
+    _directory: impl AsRef<Path>,
+) -> Result<()> {
+    Err(crate::Error::Unsupported(
+        "benchmark result bundles require the `parquet` feature".into(),
+    ))
 }
 
 pub fn write_benchmark_json(records: &[BenchmarkRecord], path: impl AsRef<Path>) -> Result<()> {
@@ -341,13 +476,15 @@ pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) 
     let mut writer = csv::Writer::from_path(path)?;
     writer.write_record([
         "format_version",
+        "case_id",
+        "run_id",
         "dataset_name",
         "dataset_version",
         "preset_name",
         "crate_version",
         "random_seed",
         "spatial_crop",
-        "algorithm_name",
+        "algorithm",
         "algorithm_configuration",
         "success",
         "error",
@@ -357,10 +494,10 @@ pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) 
         "reconstruction_height",
         "reconstruction_width",
         "completed_iterations",
-        "runtime_seconds",
-        "initial_loss",
-        "final_loss",
-        "final_to_initial_loss_ratio",
+        "elapsed_seconds",
+        "initial_objective",
+        "final_objective",
+        "final_to_initial_objective_ratio",
         "amplitude_rmse",
         "phase_rmse",
         "complex_field_relative_error",
@@ -368,17 +505,17 @@ pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) 
         "pupil_amplitude_rmse",
         "pupil_phase_rmse",
         "illumination_position_rmse",
-        "per_frame_residuals",
         "per_frame_residual_mean",
         "per_frame_residual_max",
-        "selected_original_frame_indices",
-        "selected_original_illumination_indices",
+        "frames_json",
         "output_paths",
         "metadata_json",
     ])?;
     for record in records {
         writer.write_record([
             record.format_version.to_string(),
+            record.case_id.clone(),
+            record.run_id.clone(),
             record.dataset_name.clone(),
             record.dataset_version.clone().unwrap_or_default(),
             record.preset_name.clone().unwrap_or_default(),
@@ -392,7 +529,7 @@ pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) 
                     .collect::<Vec<_>>()
                     .join(";")
             }),
-            record.algorithm_name.clone(),
+            record.algorithm.clone(),
             record.algorithm_configuration.clone(),
             record.success.to_string(),
             record.error.clone().unwrap_or_default(),
@@ -402,10 +539,10 @@ pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) 
             record.reconstruction_shape[0].to_string(),
             record.reconstruction_shape[1].to_string(),
             record.completed_iterations.to_string(),
-            record.runtime_seconds.to_string(),
-            optional_number(record.initial_loss),
-            optional_number(record.final_loss),
-            optional_number(record.final_to_initial_loss_ratio),
+            record.elapsed_seconds.to_string(),
+            optional_number(record.initial_objective),
+            optional_number(record.final_objective),
+            optional_number(record.final_to_initial_objective_ratio),
             optional_number(record.amplitude_rmse),
             optional_number(record.phase_rmse),
             optional_number(record.complex_field_relative_error),
@@ -413,19 +550,9 @@ pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) 
             optional_number(record.pupil_amplitude_rmse),
             optional_number(record.pupil_phase_rmse),
             optional_number(record.illumination_position_rmse),
-            record
-                .per_frame_residuals
-                .as_deref()
-                .map_or_else(String::new, join_f64),
             optional_number(record.per_frame_residual_mean),
             optional_number(record.per_frame_residual_max),
-            join_usize(&record.selected_original_frame_indices),
-            record
-                .selected_original_illumination_indices
-                .iter()
-                .map(|value| value.map_or_else(String::new, |value| value.to_string()))
-                .collect::<Vec<_>>()
-                .join(";"),
+            serde_json::to_string(&record.frames)?,
             record
                 .output_paths
                 .iter()
@@ -450,22 +577,7 @@ fn optional_number(value: Option<f64>) -> String {
     value.map_or_else(String::new, |value| value.to_string())
 }
 
-fn join_usize(values: &[usize]) -> String {
-    values
-        .iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
-fn join_f64(values: &[f64]) -> String {
-    values
-        .iter()
-        .map(f64::to_string)
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
+#[cfg(feature = "parquet")]
 fn safe_stem(value: &str) -> String {
     let stem: String = value
         .chars()
@@ -505,10 +617,16 @@ fn case_hash(record: &BenchmarkRecord) -> u64 {
             .as_bytes(),
     );
     update(record.preset_name.as_deref().unwrap_or_default().as_bytes());
-    update(record.algorithm_name.as_bytes());
+    update(record.algorithm.as_bytes());
     update(record.algorithm_configuration.as_bytes());
-    for index in &record.selected_original_frame_indices {
-        update(&index.to_le_bytes());
+    for frame in &record.frames {
+        update(&frame.original_frame_index.to_le_bytes());
+        update(
+            &frame
+                .original_illumination_index
+                .unwrap_or(usize::MAX)
+                .to_le_bytes(),
+        );
     }
     if let Some(crop) = record.spatial_crop {
         for value in crop {

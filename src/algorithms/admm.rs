@@ -2,10 +2,12 @@ use num_complex::Complex64;
 
 use crate::{
     Result,
-    algorithms::objective::{LossType, point_loss},
+    algorithms::{
+        AlgorithmIterationMetrics, StepOutput, StepSummary,
+        objective::{LossType, point_loss},
+    },
     array_layout::checked_len_2d,
     backend::FftDirection,
-    diagnostics::StepDiagnostics,
     error::Error,
     measurements::MeasurementRead,
     model::{FourierOffset, ImagePlaneModel, fftshift_copy, ifftshift_copy},
@@ -16,6 +18,67 @@ use crate::{
 };
 
 use super::ReconstructionAlgorithm;
+
+/// ADMM consensus metrics accumulated over every active detector-field mode in
+/// one complete iteration.
+#[derive(Clone, Debug, Default)]
+pub struct AdmmIterationMetrics {
+    primal_residual_sum_squares: f64,
+    dual_residual_sum_squares: f64,
+    residual_count: usize,
+}
+
+impl AdmmIterationMetrics {
+    pub fn primal_residual_rms(&self) -> Option<f64> {
+        (self.residual_count > 0)
+            .then(|| (self.primal_residual_sum_squares / self.residual_count as f64).sqrt())
+    }
+
+    pub fn dual_residual_rms(&self) -> Option<f64> {
+        (self.residual_count > 0)
+            .then(|| (self.dual_residual_sum_squares / self.residual_count as f64).sqrt())
+    }
+
+    fn push_dual_change(&mut self, change: Complex64, penalty: f64) {
+        self.dual_residual_sum_squares += penalty * penalty * change.norm_sqr();
+    }
+
+    fn push_primal_residual(&mut self, residual: Complex64) {
+        self.primal_residual_sum_squares += residual.norm_sqr();
+        self.residual_count += 1;
+    }
+}
+
+impl AlgorithmIterationMetrics for AdmmIterationMetrics {
+    fn merge(&mut self, other: Self) {
+        self.primal_residual_sum_squares += other.primal_residual_sum_squares;
+        self.dual_residual_sum_squares += other.dual_residual_sum_squares;
+        self.residual_count += other.residual_count;
+    }
+
+    fn append_records(
+        &self,
+        iteration: usize,
+        output: &mut Vec<crate::reconstruction::AlgorithmMetricRecord>,
+    ) {
+        if let Some(value) = self.primal_residual_rms() {
+            output.push(crate::reconstruction::AlgorithmMetricRecord {
+                iteration,
+                namespace: "admm".into(),
+                metric: "primal_residual_rms".into(),
+                value,
+            });
+        }
+        if let Some(value) = self.dual_residual_rms() {
+            output.push(crate::reconstruction::AlgorithmMetricRecord {
+                iteration,
+                namespace: "admm".into(),
+                metric: "dual_residual_rms".into(),
+                value,
+            });
+        }
+    }
+}
 
 /// Linearized ADMM reconstruction for Fourier ptychographic microscopy.
 ///
@@ -108,6 +171,8 @@ impl Admm {
 }
 
 impl ReconstructionAlgorithm for Admm {
+    type IterationMetrics = AdmmIterationMetrics;
+
     fn validate(&self) -> Result<()> {
         if !self.object_step.is_finite() || self.object_step <= 0.0 {
             return Err(Error::InvalidParameter {
@@ -142,7 +207,7 @@ impl ReconstructionAlgorithm for Admm {
         state: &mut ReconstructionState,
         batch: &Batch,
         _iteration: usize,
-    ) -> Result<StepDiagnostics> {
+    ) -> Result<StepOutput<Self::IterationMetrics>> {
         let expected = admm_auxiliary_len(&problem.model)?;
         let mut auxiliary = match state.algorithm_auxiliary.take() {
             None => AdmmAuxiliaryState {
@@ -172,7 +237,7 @@ impl Admm {
         state: &mut ReconstructionState,
         batch: &Batch,
         auxiliary: &mut AdmmAuxiliaryState,
-    ) -> Result<StepDiagnostics> {
+    ) -> Result<StepOutput<AdmmIterationMetrics>> {
         let model = &problem.model;
         let shape = model.image_shape;
         let image_len = checked_len_2d(shape)?;
@@ -195,13 +260,14 @@ impl Admm {
             .map(|value| value.norm_sqr())
             .fold(0.0, f64::max)
             .max(self.epsilon);
-        let mut diagnostics = StepDiagnostics::default();
+        let mut summary = StepSummary::default();
+        let mut metrics = AdmmIterationMetrics::default();
         let mut active_frames = 0;
 
         for &frame in &batch.indices {
             let frame_weight = problem.measurements.frame_weight(frame)?;
             if frame_weight == 0.0 {
-                diagnostics.push_frame(frame, 0.0, 0.0);
+                summary.push_frame(frame, 0.0, 0.0);
                 continue;
             }
             active_frames += 1;
@@ -267,7 +333,7 @@ impl Admm {
                     "frame {frame} has no unmasked pixels"
                 )));
             }
-            diagnostics.push_frame(frame, frame_loss / valid_pixels as f64, frame_weight);
+            summary.push_frame(frame, frame_loss / valid_pixels as f64, frame_weight);
 
             for (local_mode, &(source, source_weight)) in sources.iter().enumerate() {
                 let local_start = local_mode * image_len;
@@ -294,7 +360,7 @@ impl Admm {
                     };
                     let auxiliary_value = (self.penalty * consensus + frame_weight * projected)
                         / (self.penalty + frame_weight);
-                    diagnostics.push_admm_dual_change(
+                    metrics.push_dual_change(
                         auxiliary_value - auxiliary.auxiliary_fields[index],
                         self.penalty,
                     );
@@ -360,13 +426,13 @@ impl Admm {
                     } else {
                         let primal_residual =
                             state.scratch.field[pixel] - auxiliary.auxiliary_fields[index];
-                        diagnostics.push_admm_primal_residual(primal_residual);
+                        metrics.push_primal_residual(primal_residual);
                         auxiliary.dual_fields[index] += self.dual_relaxation * primal_residual;
                     }
                 }
             }
         }
-        Ok(diagnostics)
+        Ok(StepOutput { summary, metrics })
     }
 }
 

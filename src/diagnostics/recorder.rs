@@ -1,7 +1,4 @@
-use std::{
-    sync::{Arc, Mutex, MutexGuard},
-    time::Instant,
-};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ndarray::{Array2, ArrayView2};
 
@@ -19,7 +16,7 @@ use super::{
 pub struct DiagnosticRecorderConfig {
     pub every: usize,
 
-    pub record_iteration_history: bool,
+    pub record_iteration_diagnostics: bool,
     pub record_frame_summaries: bool,
     pub record_raw_stack_stats: bool,
     pub record_coverage: bool,
@@ -33,7 +30,7 @@ impl Default for DiagnosticRecorderConfig {
     fn default() -> Self {
         Self {
             every: 1,
-            record_iteration_history: true,
+            record_iteration_diagnostics: true,
             record_frame_summaries: false,
             record_raw_stack_stats: false,
             record_coverage: false,
@@ -47,7 +44,6 @@ impl Default for DiagnosticRecorderConfig {
 #[derive(Default)]
 struct DiagnosticRecorderState {
     diagnostics: ReconstructionDiagnostics,
-    started_at: Option<Instant>,
     previous_object: Option<Array2<Complex64Proxy>>,
     previous_pupil: Option<Array2<Complex64Proxy>>,
     object_snapshots: Vec<(usize, Array2<f64>, Array2<f64>)>,
@@ -133,8 +129,8 @@ impl Callback for DiagnosticRecorder {
             }
             crate::callbacks::CallbackHook::IterationEnd if should_record || should_snapshot => {
                 let mut requests = Vec::new();
-                if should_record && self.config.record_iteration_history {
-                    requests.push(DiagnosticRequest::Loss);
+                if should_record && self.config.record_iteration_diagnostics {
+                    requests.push(DiagnosticRequest::Objective);
                     requests.push(DiagnosticRequest::PerFrameError);
                 }
                 if should_record && self.config.record_frame_summaries {
@@ -156,15 +152,14 @@ impl Callback for DiagnosticRecorder {
     fn on_start(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
         let mut state = self.lock_state();
         *state = DiagnosticRecorderState::default();
-        state.started_at = Some(Instant::now());
         if self.config.record_coverage {
             state.diagnostics.coverage = Some(compute_fourier_coverage(context.model)?);
         }
-        if let Some(raw_frame_stats) = &context.diagnostics.raw_frame_stats {
+        if let Some(raw_frame_statistics) = &context.diagnostics.raw_frame_statistics {
             state
                 .diagnostics
-                .raw_frame_stats
-                .extend(raw_frame_stats.iter().cloned());
+                .raw_frame_statistics
+                .extend(raw_frame_statistics.iter().cloned());
         }
         Ok(CallbackAction::Continue)
     }
@@ -174,10 +169,12 @@ impl Callback for DiagnosticRecorder {
         let should_snapshot = cadence_matches(context.iteration, self.config.snapshot_every);
         let mut state = self.lock_state();
 
-        if should_record && self.config.record_iteration_history {
-            let elapsed_ms = state
-                .started_at
-                .map(|started| started.elapsed().as_secs_f64() * 1e3);
+        if should_record && self.config.record_iteration_diagnostics {
+            let elapsed_seconds = context
+                .trace
+                .iterations
+                .last()
+                .map(|record| record.elapsed_seconds);
             let object_relative_change = relative_change(
                 state.previous_object.as_ref(),
                 context.state.object_spectrum.ndarray_view(),
@@ -186,25 +183,25 @@ impl Callback for DiagnosticRecorder {
                 relative_change(state.previous_pupil.as_ref(), context.state.pupil.values());
             state
                 .diagnostics
-                .iteration_history
+                .iteration_diagnostics
                 .push(IterationDiagnostics {
                     iteration: context.iteration,
-                    total_loss: context.diagnostics.loss,
-                    data_loss: context.diagnostics.loss,
-                    regularization_loss: None,
+                    total_objective: context.diagnostics.objective,
+                    data_objective: context.diagnostics.objective,
+                    regularization_objective: None,
                     object_relative_change,
                     pupil_relative_change,
-                    median_frame_loss: context
+                    median_frame_objective: context
                         .diagnostics
-                        .per_frame_error
+                        .per_frame_objective
                         .as_ref()
                         .and_then(|values| median(values)),
-                    worst_frame_loss: context
+                    worst_frame_objective: context
                         .diagnostics
-                        .per_frame_error
+                        .per_frame_objective
                         .as_ref()
                         .and_then(|values| values.iter().copied().reduce(f64::max)),
-                    elapsed_ms,
+                    elapsed_seconds,
                 });
         }
         if should_record {
@@ -300,7 +297,7 @@ mod tests {
         assert!(result.is_err());
 
         recorder.reset();
-        assert!(recorder.diagnostics().iteration_history.is_empty());
+        assert!(recorder.diagnostics().iteration_diagnostics.is_empty());
         assert!(recorder.object_snapshots().is_empty());
         assert!(recorder.pupil_snapshots().is_empty());
     }

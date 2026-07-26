@@ -20,7 +20,7 @@ impl CsvLogger {
 
 impl Callback for CsvLogger {
     fn requires(&self) -> Vec<DiagnosticRequest> {
-        vec![DiagnosticRequest::Loss]
+        vec![DiagnosticRequest::Objective]
     }
 
     fn requires_for(&self, hook: CallbackHook, _iteration: usize) -> Vec<DiagnosticRequest> {
@@ -33,14 +33,14 @@ impl Callback for CsvLogger {
 
     fn on_start(&mut self, _context: &StepContext<'_>) -> Result<CallbackAction> {
         let mut writer = csv::Writer::from_path(&self.path)?;
-        writer.write_record(["iteration", "loss"])?;
+        writer.write_record(["iteration", "objective", "elapsed_seconds"])?;
         self.writer = Some(writer);
         Ok(CallbackAction::Continue)
     }
 
     fn on_iteration_end(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
-        if let (Some(writer), Some(loss)) = (&mut self.writer, context.diagnostics.loss) {
-            writer.serialize((context.iteration, loss))?;
+        if let (Some(writer), Some(record)) = (&mut self.writer, context.trace.iterations.last()) {
+            writer.serialize((record.iteration, record.objective, record.elapsed_seconds))?;
             writer.flush()?;
         }
         Ok(CallbackAction::Continue)

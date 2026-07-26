@@ -171,7 +171,7 @@ fn benchmark_case(
             let peak = PEAK_BYTES.load(Ordering::Relaxed).saturating_sub(baseline);
             maximum_peak = maximum_peak.max(peak);
             let spectrum = state.object_spectrum();
-            checksum += diagnostics.mean_loss().unwrap_or_default()
+            checksum += diagnostics.summary.mean_objective().unwrap_or_default()
                 + spectrum
                     .iter()
                     .nth(sample % spectrum.len())

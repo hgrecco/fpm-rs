@@ -89,11 +89,11 @@ fn main() -> Result<()> {
     write_benchmark_json(&records, output.join("summary.json"))?;
     for record in &records {
         println!(
-            "{}: success={} runtime={:.3}s final_loss={:.6e} amplitude_rmse={:.6e}",
-            record.algorithm_name,
+            "{}: success={} runtime={:.3}s final_objective={:.6e} amplitude_rmse={:.6e}",
+            record.algorithm,
             record.success,
-            record.runtime_seconds,
-            record.final_loss.unwrap_or(f64::NAN),
+            record.elapsed_seconds,
+            record.final_objective.unwrap_or(f64::NAN),
             record.amplitude_rmse.unwrap_or(f64::NAN),
         );
     }

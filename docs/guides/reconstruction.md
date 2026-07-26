@@ -187,8 +187,9 @@ with illumination recovery. `object_tv(weight)` applies isotropic TV to both
 components of the complex object; `object_tv_epsilon` controls its smooth
 near-zero approximation. `pupil_smoothing(weight)` applies a quadratic
 nearest-neighbour penalty and requires pupil recovery. Regularization weights
-are scaled by the fraction of all frames in the batch, while history continues
-to report data loss rather than the regularized objective.
+are scaled by the fraction of all frames in the batch. The universal trace
+reports the algorithm's data objective; recorder-only fields can separately
+report data and regularization components when an algorithm supplies them.
 
 Enable per-source position recovery with
 `GradientDescent::recover_illumination(true)`. Corrections are returned as
@@ -211,18 +212,156 @@ dark measurement.
 
 ## Checkpoints, results, callbacks, and schedules
 
-Checkpoints contain spectrum, pupil, calibration variables, and full history.
+Checkpoints contain spectrum, pupil, calibration variables, algorithm
+auxiliary state, and the full `ReconstructionTrace`.
 Load one with `ReconstructionCheckpoint::load` and pass it to
 `ReconstructionAlgorithm::run_from_checkpoint`; `iterations` remains the target
 total, not an additional number of iterations. Save/load validates format
-version, finite state, auxiliary consistency, and monotonic history;
+version, finite state, auxiliary consistency, one-based trace rows, and
+monotonic elapsed seconds;
 `load_for_problem` additionally validates dimensions and calibration against a
 specific problem before reconstruction begins.
 
-`ReconstructionResult::save_bundle` and `load_bundle` persist a validated,
-versioned JSON result bundle containing the complex object and spectrum,
-amplitude, phase, pupil, calibration, diagnostics, history, runtime, and
-metadata. Component-level PNG, JSON, and CSV writers remain available.
+Every result owns a trace, even when no diagnostic callback is installed.
+Universal iteration rows are `(iteration, objective, elapsed_seconds)`.
+Algorithm-specific values such as ADMM primal and dual residuals are separate
+long-form records with `iteration`, `namespace`, `metric`, and `value`.
+`elapsed_seconds` includes any elapsed time restored from a checkpoint.
+
+With the Rust `parquet` feature, write a final result bundle with:
+
+```rust,no_run
+# use fpm_rs::{Result, reconstruction::{BundleExportOptions, ReconstructionResult}};
+# fn save(result: &ReconstructionResult) -> Result<()> {
+let bundle = result.write_bundle(
+    "output/reconstruction",
+    BundleExportOptions {
+        run_id: Some("experiment-42".into()),
+        label: Some("baseline AP".into()),
+        include_previews: true,
+    },
+)?;
+let reopened = fpm_rs::read_bundle(&bundle.path)?;
+let object = reopened.object()?; // hash-checked and cached on first access
+# let _ = object;
+# Ok(())
+# }
+```
+
+The bundle is a directory containing stable Parquet tables, authoritative
+`.npy` arrays, optional PNG previews, and `manifest.json`. Export uses a unique
+final directory, works in a sibling `.inprogress` directory, removes transient
+run-state/checkpoint files, writes the manifest last, and then renames the
+directory atomically. Existing outputs are never silently replaced. Failed
+workspaces are retained for inspection.
+
+Python exposes the same structure without importing Polars:
+
+```python
+bundle = result.write_bundle(
+    "output/reconstruction",
+    run_id="experiment-42",
+    include_previews=True,
+)
+reopened = fpm.read_bundle(bundle.path)
+object_array = reopened.arrays.object.value
+assert reopened.result.object is object_array
+```
+
+Manifest and artifact handles are eager. Scientific arrays, reconstructed
+domain objects, optional diagnostics, and evaluation are loaded and cached on
+first access. Cached NumPy arrays are read-only; `clear_cache()` drops only the
+bundle's references, so arrays already held by user code remain valid.
+`verify()` hashes every artifact and validates table and array structure.
+Use `bundle.tables.history.path` with `polars.scan_parquet`, PyArrow, pandas, or
+DuckDB. Install `fpm-rs[polars]` only when the Python Polars package is wanted.
+Component-level PNG, JSON, checkpoint, and objective-CSV writers remain
+available for their focused workflows.
+
+### Query bundle tables
+
+Artifact properties are ordinary paths, so analysis libraries remain optional:
+
+```python
+import polars as pl
+
+history = pl.scan_parquet(bundle.tables.history.path)
+print(history.select("iteration", "objective", "elapsed_seconds").collect())
+
+if bundle.tables.algorithm_metrics is not None:
+    algorithm_metrics = pl.scan_parquet(bundle.tables.algorithm_metrics.path)
+    print(algorithm_metrics.filter(pl.col("namespace") == "admm").collect())
+
+if bundle.tables.iteration_diagnostics is not None:
+    iteration_diagnostics = pl.scan_parquet(
+        bundle.tables.iteration_diagnostics.path
+    )
+    convergence = history.join(
+        iteration_diagnostics,
+        on=["run_id", "iteration"],
+        how="left",
+    ).collect()
+```
+
+Dynamic scalar diagnostics and string metadata use long-form key/value rows.
+Pivot only when a wide report is useful:
+
+```python
+if bundle.tables.scalar_diagnostics is not None:
+    scalar_rows = pl.read_parquet(bundle.tables.scalar_diagnostics.path)
+    scalar_wide = scalar_rows.pivot(
+        on="key",
+        index="run_id",
+        values="value",
+        aggregate_function="first",
+    )
+
+if bundle.tables.metadata is not None:
+    metadata_rows = pl.read_parquet(bundle.tables.metadata.path)
+    metadata_wide = metadata_rows.pivot(
+        on="key",
+        index="run_id",
+        values="value",
+        aggregate_function="first",
+    )
+```
+
+Equivalent readers require no fpm-rs adapter:
+
+```python
+import pandas as pd
+import pyarrow.parquet as pq
+import duckdb
+
+history_pandas = pd.read_parquet(bundle.tables.history.path)
+history_arrow = pq.read_table(bundle.tables.history.path)
+history_duckdb = duckdb.read_parquet(str(bundle.tables.history.path))
+```
+
+`pandas.read_parquet` requires an installed Parquet engine such as PyArrow.
+Use bundle properties for authoritative arrays and preview paths, or open the
+standard `.npy` artifact directly:
+
+```python
+import numpy as np
+
+object_field = bundle.arrays.object.value       # cached, read-only NumPy
+object_npy_path = bundle.arrays.object.path     # usable with numpy.load
+object_from_file = np.load(object_npy_path)
+amplitude_preview = bundle.previews.object_amplitude
+if amplitude_preview is not None:
+    print(amplitude_preview.path)
+```
+
+Preview artifacts are display-oriented PNG files. Pillow remains optional:
+
+```python
+from PIL import Image
+
+preview = bundle.previews.object_amplitude
+if preview is not None:
+    image = Image.open(preview.path)
+```
 
 Periodic callbacks request work only at active hook points. For example,
 `SaveImageEvery::new(10, ...)` performs the object inverse FFT on iterations
@@ -231,7 +370,7 @@ behaviour while retaining `requires` for capability inspection.
 `SaveResidualsEvery` writes a mask-aware, zero-centred residual image per frame
 at its configured cadence. `on_frame_end` runs once per completed frame; for a
 multi-frame batch it receives the shared post-batch state, frame and batch
-indices, and the individual frame loss.
+indices, and the individual frame objective.
 
 Schedules include sequential, brightfield-first, spiral-out, seeded random,
 and measurement-aware SNR ordering. `FrameSchedule::SnrWeighted` processes the

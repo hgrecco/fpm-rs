@@ -3,13 +3,12 @@ use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use crate::{
     Result,
-    algorithms::ReconstructionAlgorithm,
+    algorithms::{AlgorithmIterationMetrics, ReconstructionAlgorithm, StepOutput, StepSummary},
     backend::Backend,
     callbacks::{Callback, CallbackAction, CallbackHook, StepContext},
     complex,
     diagnostics::{
-        DiagnosticRequest, Diagnostics, FrameDiagnosticRecord, IterationRecord,
-        RawFrameStatisticsRecord, ReconstructionHistory, StepDiagnostics,
+        DiagnosticRequest, Diagnostics, FrameDiagnosticRecord, RawFrameStatisticsRecord,
     },
     error::Error,
     measurements::MeasurementRead,
@@ -19,7 +18,7 @@ use crate::{
 
 use super::{
     Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionResult,
-    ReconstructionState, RunOptions, RuntimeInfo, state_object,
+    ReconstructionState, ReconstructionTrace, RunOptions, RuntimeInfo, state_object,
 };
 
 pub struct Runner<A> {
@@ -80,7 +79,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
             .next()
             .unwrap_or("reconstruction algorithm")
             .to_owned();
-        let (mut state, mut history, starting_iteration) =
+        let (mut state, mut trace, starting_iteration) =
             if let Some(checkpoint) = &self.initial_checkpoint {
                 (
                     if let Some(backend) = &self.backend {
@@ -92,7 +91,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     } else {
                         ReconstructionState::from_checkpoint(problem, checkpoint)?
                     },
-                    checkpoint.history.clone(),
+                    checkpoint.trace.clone(),
                     checkpoint.completed_iterations,
                 )
             } else {
@@ -103,11 +102,11 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     } else {
                         self.algorithm.initialize(problem)?
                     },
-                    ReconstructionHistory::default(),
+                    ReconstructionTrace::default(),
                     0,
                 )
             };
-        let previous_elapsed = history
+        let previous_elapsed = trace
             .iterations
             .last()
             .map_or(0.0, |record| record.elapsed_seconds);
@@ -127,7 +126,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
             batch_index: None,
             state: &state,
             diagnostics: &start_diagnostics,
-            history: &history,
+            trace: &trace,
+            current_algorithm_metrics: &[],
             model: &problem.model,
             problem_name: problem.name.as_deref(),
         };
@@ -146,7 +146,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     .options
                     .schedule
                     .order_for_problem(problem, zero_based_iteration)?;
-                let mut iteration_step = StepDiagnostics::default();
+                let mut iteration_step = StepOutput::<A::IterationMetrics>::default();
                 for (batch_index, indices) in order.chunks(self.options.batch_size).enumerate() {
                     let batch = Batch::new(indices.to_vec(), batch_index);
                     let batch_step =
@@ -154,13 +154,17 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                             .step(problem, &mut state, &batch, zero_based_iteration)?;
                     state.object_real_space_cache = None;
                     if self.options.enable_frame_callbacks {
-                        let batch_loss = batch_step.mean_loss();
+                        let batch_objective = batch_step.summary.mean_objective();
+                        let mut batch_metric_records = Vec::new();
+                        batch_step
+                            .metrics
+                            .append_records(current_iteration, &mut batch_metric_records);
                         let mut diagnostics = build_diagnostics(
                             problem,
                             &mut state,
                             &frame_requests,
-                            batch_loss,
-                            Some(&batch_step),
+                            batch_objective,
+                            Some(&batch_step.summary),
                             current_iteration,
                         )?;
                         // A batch update completes every frame in the batch at
@@ -168,8 +172,9 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                         // the frame's own natural loss and the shared post-batch
                         // state. Expensive diagnostics are computed only once.
                         for &frame in &batch.indices {
-                            if frame_requests.contains(&DiagnosticRequest::Loss) {
-                                diagnostics.loss = batch_step.per_frame_loss.get(&frame).copied();
+                            if frame_requests.contains(&DiagnosticRequest::Objective) {
+                                diagnostics.objective =
+                                    batch_step.summary.per_frame_objective.get(&frame).copied();
                             }
                             let context = StepContext {
                                 iteration: current_iteration,
@@ -177,7 +182,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                                 batch_index: Some(batch_index),
                                 state: &state,
                                 diagnostics: &diagnostics,
-                                history: &history,
+                                trace: &trace,
+                                current_algorithm_metrics: &batch_metric_records,
                                 model: &problem.model,
                                 problem_name: problem.name.as_deref(),
                             };
@@ -196,14 +202,16 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                         break;
                     }
                 }
-                let loss = iteration_step.mean_loss().unwrap_or(f64::NAN);
-                history.iterations.push(IterationRecord {
+                let objective = iteration_step.summary.mean_objective().unwrap_or(f64::NAN);
+                trace.iterations.push(super::IterationRecord {
                     iteration: current_iteration,
-                    loss,
+                    objective,
                     elapsed_seconds: previous_elapsed + started.elapsed().as_secs_f64(),
-                    admm_primal_residual_rms: iteration_step.admm_primal_residual_rms(),
-                    admm_dual_residual_rms: iteration_step.admm_dual_residual_rms(),
                 });
+                let metric_start = trace.algorithm_metrics.len();
+                iteration_step
+                    .metrics
+                    .append_records(current_iteration, &mut trace.algorithm_metrics);
                 let iteration_requests = callback_requests(
                     &self.callbacks,
                     CallbackHook::IterationEnd,
@@ -213,8 +221,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     problem,
                     &mut state,
                     &iteration_requests,
-                    Some(loss),
-                    Some(&iteration_step),
+                    Some(objective),
+                    Some(&iteration_step.summary),
                     current_iteration,
                 )?;
                 let context = StepContext {
@@ -223,7 +231,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     batch_index: None,
                     state: &state,
                     diagnostics: &diagnostics,
-                    history: &history,
+                    trace: &trace,
+                    current_algorithm_metrics: &trace.algorithm_metrics[metric_start..],
                     model: &problem.model,
                     problem_name: problem.name.as_deref(),
                 };
@@ -240,14 +249,14 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
 
         let runtime = RuntimeInfo {
             elapsed_seconds: previous_elapsed + started.elapsed().as_secs_f64(),
-            completed_iterations: history
+            completed_iterations: trace
                 .iterations
                 .last()
                 .map_or(starting_iteration, |record| record.iteration),
             stopped_early,
             algorithm: algorithm_name,
         };
-        let mut result = ReconstructionResult::from_state(&mut state, history, runtime)?;
+        let mut result = ReconstructionResult::from_state(&mut state, trace, runtime)?;
         if let Some(name) = &problem.name {
             result.metadata.insert("problem_name".into(), name.clone());
         }
@@ -273,13 +282,13 @@ fn build_diagnostics<M: MeasurementRead>(
     problem: &ReconstructionProblem<M>,
     state: &mut ReconstructionState,
     requests: &BTreeSet<DiagnosticRequest>,
-    natural_loss: Option<f64>,
-    step: Option<&StepDiagnostics>,
+    natural_objective: Option<f64>,
+    step: Option<&StepSummary>,
     iteration: usize,
 ) -> Result<Diagnostics> {
     let mut diagnostics = Diagnostics::default();
-    if requests.contains(&DiagnosticRequest::Loss) {
-        diagnostics.loss = natural_loss;
+    if requests.contains(&DiagnosticRequest::Objective) {
+        diagnostics.objective = natural_objective;
     }
     if requests.contains(&DiagnosticRequest::RawFrameStats) {
         let mut values = Vec::with_capacity(problem.model.frame_count());
@@ -290,16 +299,16 @@ fn build_diagnostics<M: MeasurementRead>(
                 metrics: stats(&measured, None)?,
             });
         }
-        diagnostics.raw_frame_stats = Some(values);
+        diagnostics.raw_frame_statistics = Some(values);
     }
     if requests.contains(&DiagnosticRequest::PerFrameError)
         && let Some(step) = step
     {
         let mut values = vec![f64::NAN; problem.model.frame_count()];
-        for (&frame, &loss) in &step.per_frame_loss {
-            values[frame] = loss;
+        for (&frame, &objective) in &step.per_frame_objective {
+            values[frame] = objective;
         }
-        diagnostics.per_frame_error = Some(values);
+        diagnostics.per_frame_objective = Some(values);
     }
     if requests.contains(&DiagnosticRequest::FrameSummaries)
         || requests.contains(&DiagnosticRequest::ResidualImages)
@@ -316,7 +325,7 @@ fn build_diagnostics<M: MeasurementRead>(
         } else {
             None
         };
-        let mut per_frame_error =
+        let mut per_frame_objective =
             if requests.contains(&DiagnosticRequest::PerFrameError) && step.is_none() {
                 Some(Vec::with_capacity(problem.model.frame_count()))
             } else {
@@ -338,7 +347,7 @@ fn build_diagnostics<M: MeasurementRead>(
                 .get(frame)
                 .cloned()
                 .unwrap_or_else(|| crate::measurements::FrameMetadata::new(frame));
-            if let Some(values) = per_frame_error.as_mut() {
+            if let Some(values) = per_frame_objective.as_mut() {
                 let mut loss_sum = 0.0;
                 let mut valid_pixels = 0;
                 for pixel in 0..predicted.len() {
@@ -380,8 +389,8 @@ fn build_diagnostics<M: MeasurementRead>(
                 });
             }
         }
-        if diagnostics.per_frame_error.is_none() {
-            diagnostics.per_frame_error = per_frame_error;
+        if diagnostics.per_frame_objective.is_none() {
+            diagnostics.per_frame_objective = per_frame_objective;
         }
         diagnostics.frame_diagnostics = Some(frame_diagnostics);
         if let Some(images) = residual_images {

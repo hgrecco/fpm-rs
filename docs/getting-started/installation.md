@@ -31,6 +31,9 @@ python -m pip install "fpm-rs[notebook]"
 ```
 
 Use `"fpm-rs[plot]"` when only Matplotlib plotting helpers are needed.
+Install `"fpm-rs[polars]"` when querying result or benchmark bundle Parquet
+tables with Python Polars. Bundle writing and artifact handles do not require a
+Python Polars installation.
 
 ## Build the Python package from a checkout
 
@@ -95,6 +98,8 @@ For a functional smoke test, run the example on the [Quickstart](quickstart.md).
 - **An in-tree import finds no `_core` module:** run `pixi run -e py312
   python-develop` or install the package into the active environment.
 - **Plots fail to import:** install `"fpm-rs[plot]"` or `"fpm-rs[notebook]"`.
+- **`import polars` fails in a bundle-analysis script:** install
+  `"fpm-rs[polars]"`; the base package intentionally does not import Polars.
 - **A wheel is unavailable for the platform:** install Rust and build from
   source; the supported implementation does not require a GPU SDK.
 

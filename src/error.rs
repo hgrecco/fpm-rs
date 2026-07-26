@@ -44,6 +44,35 @@ pub enum Error {
     Unsupported(String),
     #[error("dataset error: {0}")]
     Dataset(String),
+    #[error("unsupported bundle format version {actual}; supported version is {supported}")]
+    UnsupportedBundleVersion { actual: u32, supported: u32 },
+    #[error("invalid bundle manifest: {0}")]
+    InvalidManifest(String),
+    #[error("bundle artifact `{role}` is missing")]
+    MissingArtifact { role: String },
+    #[error("bundle artifact `{role}` has an invalid SHA-256 digest")]
+    ArtifactHashMismatch { role: String },
+    #[error("bundle artifact `{role}` has an invalid Parquet schema: {reason}")]
+    InvalidParquetSchema { role: String, reason: String },
+    #[error("bundle artifact has run ID `{actual}`, expected `{expected}`")]
+    InconsistentRunId { expected: String, actual: String },
+    #[error("bundle array `{role}` has invalid shape: {reason}")]
+    InvalidArrayShape { role: String, reason: String },
+    #[error("bundle array `{role}` has invalid dtype `{actual}`, expected `{expected}`")]
+    InvalidArrayDtype {
+        role: String,
+        actual: String,
+        expected: String,
+    },
+    #[error("unsupported bundle artifact role `{0}`")]
+    UnsupportedArtifactRole(String),
+    #[error("invalid relative bundle artifact path `{0}`")]
+    InvalidRelativePath(String),
+    #[error("bundle workspace is incomplete: {0}")]
+    IncompleteBundle(String),
+    #[cfg(feature = "tabular")]
+    #[error("Polars error: {0}")]
+    Polars(#[from] polars::error::PolarsError),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("CSV error: {0}")]

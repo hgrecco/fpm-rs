@@ -34,17 +34,23 @@ def test_all_algorithms_return_numpy_results(
     assert result.object_spectrum.dtype == np.complex128
     assert result.recovered_pupil.shape == (8, 8)
     assert result.runtime.completed_iterations == 1
-    assert len(result.history) == 1
-    assert math.isfinite(result.final_loss)
+    assert len(result.trace) == 1
+    assert math.isfinite(result.final_objective)
     assert result.amplitude is result.amplitude
 
     if isinstance(algorithm, fpm.Admm):
-        assert len(result.admm_residual_history) == 1
-        _, primal, dual = result.admm_residual_history[0]
-        assert math.isfinite(primal) and primal >= 0.0
-        assert math.isfinite(dual) and dual >= 0.0
+        assert len(result.algorithm_metrics) == 2
+        values = {
+            (namespace, metric): value
+            for _, namespace, metric, value in result.algorithm_metrics
+        }
+        assert set(values) == {
+            ("admm", "primal_residual_rms"),
+            ("admm", "dual_residual_rms"),
+        }
+        assert all(math.isfinite(value) and value >= 0.0 for value in values.values())
     else:
-        assert result.admm_residual_history == []
+        assert result.algorithm_metrics == []
 
 
 def test_schedules_are_exposed(problem: fpm.ReconstructionProblem) -> None:

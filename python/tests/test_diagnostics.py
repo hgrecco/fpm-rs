@@ -28,33 +28,35 @@ def test_radial_fourier_spectrum_constant_field() -> None:
 def test_load_diagnostics_reads_json(tmp_path: Path) -> None:
     path = tmp_path / "diagnostics.json"
     path.write_text(
-        json.dumps({"iteration_history": [{"iteration": 1, "total_loss": 1.0}]}),
+        json.dumps(
+            {"iteration_diagnostics": [{"iteration": 1, "total_objective": 1.0}]}
+        ),
         encoding="utf-8",
     )
 
     diagnostics = load_diagnostics(path)
 
-    assert diagnostics["iteration_history"][0]["iteration"] == 1
+    assert diagnostics["iteration_diagnostics"][0]["iteration"] == 1
 
 
-def test_make_diagnostic_report_handles_minimal_iteration_history(
+def test_make_diagnostic_report_handles_minimal_iteration_diagnostics(
     tmp_path: Path,
 ) -> None:
     diagnostics_path = tmp_path / "diagnostics.json"
     diagnostics_path.write_text(
         json.dumps(
             {
-                "iteration_history": [
+                "iteration_diagnostics": [
                     {
                         "iteration": 1,
-                        "total_loss": 1.0,
-                        "data_loss": 1.0,
-                        "regularization_loss": None,
+                        "total_objective": 1.0,
+                        "data_objective": 1.0,
+                        "regularization_objective": None,
                         "object_relative_change": None,
                         "pupil_relative_change": None,
-                        "median_frame_loss": None,
-                        "worst_frame_loss": None,
-                        "elapsed_ms": 1.5,
+                        "median_frame_objective": None,
+                        "worst_frame_objective": None,
+                        "elapsed_seconds": 1.5,
                     }
                 ]
             }
@@ -122,20 +124,20 @@ def test_rust_backed_recorder_integrates_with_existing_callback_api(
     )
 
     assert result.runtime.completed_iterations == 2
-    assert isinstance(result.diagnostics, dict)
-    assert "final_loss" in result.diagnostics
+    assert isinstance(result.scalar_diagnostics, dict)
+    assert "final_objective" in result.scalar_diagnostics
 
     diagnostics = recorder.diagnostics()
     assert set(diagnostics) == {
-        "iteration_history",
+        "iteration_diagnostics",
         "frame_diagnostics",
-        "raw_frame_stats",
+        "raw_frame_statistics",
         "coverage",
         "ground_truth_metrics",
     }
-    assert len(diagnostics["iteration_history"]) == 2
+    assert len(diagnostics["iteration_diagnostics"]) == 2
     assert diagnostics["frame_diagnostics"] == []
-    assert diagnostics["raw_frame_stats"] == []
+    assert diagnostics["raw_frame_statistics"] == []
     assert isinstance(diagnostics["coverage"], dict)
     assert diagnostics["ground_truth_metrics"] is None
 
@@ -147,7 +149,7 @@ def test_rust_backed_recorder_integrates_with_existing_callback_api(
     json_path = tmp_path / "diagnostics.json"
     recorder.to_json(json_path)
     loaded = load_diagnostics(json_path)
-    assert loaded["iteration_history"] == diagnostics["iteration_history"]
+    assert loaded["iteration_diagnostics"] == diagnostics["iteration_diagnostics"]
     make_diagnostic_report(json_path, tmp_path / "json-report")
     assert (tmp_path / "json-report" / "summary.txt").is_file()
 
@@ -161,15 +163,15 @@ def test_debug_recorder_collects_frame_and_raw_summaries(
 
     diagnostics = recorder.diagnostics()
     assert len(diagnostics["frame_diagnostics"]) == problem.frame_count
-    assert len(diagnostics["raw_frame_stats"]) == problem.frame_count
+    assert len(diagnostics["raw_frame_statistics"]) == problem.frame_count
     assert all("iteration" in entry for entry in diagnostics["frame_diagnostics"])
-    assert all("measured_sum" in entry for entry in diagnostics["frame_diagnostics"])
-    assert all("predicted_sum" in entry for entry in diagnostics["frame_diagnostics"])
+    assert all("reference_sum" in entry for entry in diagnostics["frame_diagnostics"])
+    assert all("estimate_sum" in entry for entry in diagnostics["frame_diagnostics"])
     assert all(
-        "reference_sum" not in entry for entry in diagnostics["frame_diagnostics"]
+        "measured_sum" not in entry for entry in diagnostics["frame_diagnostics"]
     )
     assert all(
-        "estimate_sum" not in entry for entry in diagnostics["frame_diagnostics"]
+        "predicted_sum" not in entry for entry in diagnostics["frame_diagnostics"]
     )
     assert "object_snapshots" not in diagnostics
     assert "pupil_snapshots" not in diagnostics
@@ -184,7 +186,7 @@ def test_debug_recorder_collects_frame_and_raw_summaries(
         "residual_magnitude",
         "residual_moments",
         "frame_sums",
-        "measured_vs_predicted",
+        "reference_vs_estimate",
     }
     plt.close(figure)
 
@@ -199,7 +201,7 @@ def test_reusing_recorder_starts_a_fresh_recording(
 ) -> None:
     recorder = fpm.DiagnosticRecorder("minimal")
     fpm.AlternatingProjection(iterations=1).run(problem, callbacks=[recorder])
-    assert len(recorder.diagnostics()["iteration_history"]) == 1
+    assert len(recorder.diagnostics()["iteration_diagnostics"]) == 1
 
     fpm.AlternatingProjection(iterations=2).run(problem, callbacks=[recorder])
-    assert len(recorder.diagnostics()["iteration_history"]) == 2
+    assert len(recorder.diagnostics()["iteration_diagnostics"]) == 2

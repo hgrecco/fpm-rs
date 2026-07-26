@@ -24,12 +24,12 @@ def test_plot_reconstruction_builds_expected_mosaic(
         "true_phase",
         "reconstructed_amplitude",
         "reconstructed_phase",
-        "loss",
+        "objective",
     }
-    assert axes["loss"].get_yscale() == "log"
-    assert axes["loss"].get_title() == "Reconstruction error (loss)"
-    assert len(axes["loss"].lines[0].get_xdata()) == len(result.history)
-    assert all(not axes[name].axison for name in set(axes) - {"loss"})
+    assert axes["objective"].get_yscale() == "log"
+    assert axes["objective"].get_title() == "Reconstruction objective"
+    assert len(axes["objective"].lines[0].get_xdata()) == len(result.trace)
+    assert all(not axes[name].axison for name in set(axes) - {"objective"})
     plt.close(figure)
 
 

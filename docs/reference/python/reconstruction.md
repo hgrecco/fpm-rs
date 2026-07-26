@@ -10,6 +10,24 @@
 
 ::: fpm_rs.ReconstructionResult
 
+## Result and benchmark bundles
+
+::: fpm_rs.BundleArtifact
+
+::: fpm_rs.BundleArray
+
+::: fpm_rs.BundleTables
+
+::: fpm_rs.BundleArrays
+
+::: fpm_rs.BundlePreviews
+
+::: fpm_rs.ResultBundle
+
+::: fpm_rs.BenchmarkSuite
+
+::: fpm_rs.BenchmarkBundle
+
 ## Algorithms
 
 ::: fpm_rs.AlternatingProjection

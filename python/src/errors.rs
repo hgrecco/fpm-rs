@@ -17,9 +17,11 @@ create_exception!(fpm_rs, SerializationError, FpmError);
 pub(crate) fn to_py_err(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
-        Error::InvalidShape(_) | Error::ShapeOverflow { .. } | Error::NdarrayShape(_) => {
-            InvalidShapeError::new_err(message)
-        }
+        Error::InvalidShape(_)
+        | Error::ShapeOverflow { .. }
+        | Error::NdarrayShape(_)
+        | Error::InvalidArrayShape { .. }
+        | Error::InvalidArrayDtype { .. } => InvalidShapeError::new_err(message),
         Error::InvalidParameter { .. } => InvalidParameterError::new_err(message),
         Error::InvalidModel(_) => InvalidModelError::new_err(message),
         Error::InvalidMeasurements(_) => InvalidMeasurementsError::new_err(message),
@@ -29,12 +31,23 @@ pub(crate) fn to_py_err(error: Error) -> PyErr {
         Error::NonStandardLayout { .. } => InvalidShapeError::new_err(message),
         Error::FrameOutOfRange { .. } => FrameOutOfRangeError::new_err(message),
         Error::Numerical(_) => NumericalError::new_err(message),
-        Error::Unsupported(_) => UnsupportedError::new_err(message),
+        Error::Unsupported(_)
+        | Error::UnsupportedBundleVersion { .. }
+        | Error::UnsupportedArtifactRole(_) => UnsupportedError::new_err(message),
         Error::Dataset(_) => DatasetError::new_err(message),
-        Error::Io(_) | Error::Csv(_) | Error::Image(_) | Error::Tiff(_) => {
-            FpmIoError::new_err(message)
-        }
-        Error::Serialization(_) => SerializationError::new_err(message),
+        Error::Io(_)
+        | Error::Csv(_)
+        | Error::Image(_)
+        | Error::Tiff(_)
+        | Error::MissingArtifact { .. } => FpmIoError::new_err(message),
+        Error::Serialization(_)
+        | Error::InvalidManifest(_)
+        | Error::ArtifactHashMismatch { .. }
+        | Error::InvalidParquetSchema { .. }
+        | Error::InconsistentRunId { .. }
+        | Error::InvalidRelativePath(_)
+        | Error::IncompleteBundle(_)
+        | Error::Polars(_) => SerializationError::new_err(message),
     }
 }
 

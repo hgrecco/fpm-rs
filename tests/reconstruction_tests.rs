@@ -8,20 +8,32 @@ use fpm_rs::{
         objective::{LossType, loss},
     },
     callbacks::CheckpointEvery,
-    diagnostics::ReconstructionHistory,
     evaluation::{evaluate_reconstruction, evaluate_reconstruction_with_problem},
     experiment::{LEDArray, Optics, PupilAberration},
     measurements::{LazyMeasurementStack, MeasurementRead},
     model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape},
     reconstruction::{
-        Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionState, RunOptions,
-        Runner,
+        Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionState,
+        ReconstructionTrace, RunOptions, Runner,
     },
     simulation::{CameraModel, Simulator, SyntheticObject},
 };
 use image::{ImageBuffer, Luma};
 use ndarray::{Array2, ShapeBuilder};
 use std::sync::atomic::Ordering;
+
+fn admm_metric_values(
+    result: &fpm_rs::reconstruction::ReconstructionResult,
+    metric: &str,
+) -> Vec<f64> {
+    result
+        .trace
+        .algorithm_metrics
+        .iter()
+        .filter(|record| record.namespace == "admm" && record.metric == metric)
+        .map(|record| record.value)
+        .collect()
+}
 
 #[test]
 fn ap_reconstructs_and_reports_history() {
@@ -40,9 +52,9 @@ fn ap_reconstructs_and_reports_history() {
     assert_eq!(result.amplitude.dim(), (16, 16));
     assert_eq!(result.phase.dim(), (16, 16));
     assert_eq!(result.recovered_pupil.shape(), (8, 8));
-    assert_eq!(result.history.iterations.len(), 8);
-    let first = result.history.iterations.first().unwrap().loss;
-    let last = result.history.iterations.last().unwrap().loss;
+    assert_eq!(result.trace.iterations.len(), 8);
+    let first = result.trace.iterations.first().unwrap().objective;
+    let last = result.trace.iterations.last().unwrap().objective;
     assert!(
         last < first,
         "expected loss decrease, got {first} -> {last}"
@@ -116,6 +128,7 @@ fn reconstruction_runs_directly_from_lazy_measurements() {
     assert_eq!(problem.measurements.cached_frame_count(), 1);
 }
 
+#[cfg(feature = "parquet")]
 #[test]
 fn reconstruction_result_bundle_round_trips_and_validates() {
     let model = common::direct_model().unwrap();
@@ -131,9 +144,14 @@ fn reconstruction_result_bundle_round_trips_and_validates() {
         .run(&problem)
         .unwrap();
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("result.json");
-    result.save_bundle(&path).unwrap();
-    let loaded = fpm_rs::reconstruction::ReconstructionResult::load_bundle(&path).unwrap();
+    let path = directory.path().join("result");
+    let bundle = result
+        .write_bundle(
+            &path,
+            fpm_rs::reconstruction::BundleExportOptions::default(),
+        )
+        .unwrap();
+    let loaded = bundle.result().unwrap();
     for (&loaded, &original) in loaded.object.iter().zip(result.object.iter()) {
         assert_abs_diff_eq!(loaded.re, original.re, epsilon = 1e-14);
         assert_abs_diff_eq!(loaded.im, original.im, epsilon = 1e-14);
@@ -161,21 +179,31 @@ fn reconstruction_result_bundle_round_trips_and_validates() {
         assert_abs_diff_eq!(loaded.re, original.re, epsilon = 1e-14);
         assert_abs_diff_eq!(loaded.im, original.im, epsilon = 1e-14);
     }
-    assert_eq!(loaded.history.iterations.len(), 2);
+    assert_eq!(loaded.trace.iterations.len(), 2);
     assert_eq!(loaded.runtime.completed_iterations, 2);
 
-    let invalid_path = directory.path().join("invalid_result.json");
+    let invalid_path = directory.path().join("invalid_result");
     let mut invalid = result.clone();
     invalid.amplitude = Array2::zeros((1, 1));
-    assert!(invalid.save_bundle(&invalid_path).is_err());
+    assert!(
+        invalid
+            .write_bundle(
+                &invalid_path,
+                fpm_rs::reconstruction::BundleExportOptions::default(),
+            )
+            .is_err()
+    );
     assert!(!invalid_path.exists());
 
     let mut serialized: serde_json::Value =
-        serde_json::from_reader(std::fs::File::open(path).unwrap()).unwrap();
-    serialized["format_version"] = serde_json::json!(999);
-    let corrupted_path = directory.path().join("corrupted_result.json");
-    std::fs::write(&corrupted_path, serde_json::to_vec(&serialized).unwrap()).unwrap();
-    assert!(fpm_rs::reconstruction::ReconstructionResult::load_bundle(corrupted_path).is_err());
+        serde_json::from_reader(std::fs::File::open(path.join("manifest.json")).unwrap()).unwrap();
+    serialized["bundle_format_version"] = serde_json::json!(999);
+    std::fs::write(
+        path.join("manifest.json"),
+        serde_json::to_vec(&serialized).unwrap(),
+    )
+    .unwrap();
+    assert!(fpm_rs::read_bundle(path).is_err());
 }
 
 #[test]
@@ -219,8 +247,8 @@ fn fpie_loss_decreases_on_noiseless_data() {
             .unwrap();
     let result = Fpie::default().iterations(8).run(&problem).unwrap();
     assert!(
-        result.history.iterations.last().unwrap().loss
-            < result.history.iterations.first().unwrap().loss
+        result.trace.iterations.last().unwrap().objective
+            < result.trace.iterations.first().unwrap().objective
     );
 }
 
@@ -245,14 +273,14 @@ fn multiplexed_admm_reports_finite_consensus_residuals() {
         .object_step(0.5)
         .run(&problem)
         .unwrap();
-    for record in &result.history.iterations {
-        assert!(record.admm_primal_residual_rms.is_some_and(f64::is_finite));
-        assert!(record.admm_dual_residual_rms.is_some_and(f64::is_finite));
-    }
-    let first = result.history.iterations.first().unwrap();
-    let last = result.history.iterations.last().unwrap();
-    assert!(last.admm_primal_residual_rms.unwrap() < first.admm_primal_residual_rms.unwrap());
-    assert!(last.admm_dual_residual_rms.unwrap() < first.admm_dual_residual_rms.unwrap());
+    let primal = admm_metric_values(&result, "primal_residual_rms");
+    let dual = admm_metric_values(&result, "dual_residual_rms");
+    assert_eq!(primal.len(), result.trace.iterations.len());
+    assert_eq!(dual.len(), result.trace.iterations.len());
+    assert!(primal.iter().all(|value| value.is_finite()));
+    assert!(dual.iter().all(|value| value.is_finite()));
+    assert!(primal.last().unwrap() < primal.first().unwrap());
+    assert!(dual.last().unwrap() < dual.first().unwrap());
 }
 
 #[test]
@@ -272,26 +300,28 @@ fn admm_loss_decreases_on_noiseless_data() {
         .run(&problem)
         .unwrap();
     assert!(
-        result.history.iterations.last().unwrap().loss
-            < result.history.iterations.first().unwrap().loss
+        result.trace.iterations.last().unwrap().objective
+            < result.trace.iterations.first().unwrap().objective
     );
-    let first = result.history.iterations.first().unwrap();
-    let last = result.history.iterations.last().unwrap();
+    let primal = admm_metric_values(&result, "primal_residual_rms");
+    let dual = admm_metric_values(&result, "dual_residual_rms");
     assert!(
-        last.admm_primal_residual_rms.unwrap() < first.admm_primal_residual_rms.unwrap(),
+        primal.last().unwrap() < primal.first().unwrap(),
         "expected ADMM primal residual to decrease: {:?} -> {:?}",
-        first.admm_primal_residual_rms,
-        last.admm_primal_residual_rms
+        primal.first(),
+        primal.last()
     );
     assert!(
-        last.admm_dual_residual_rms.unwrap() < first.admm_dual_residual_rms.unwrap(),
+        dual.last().unwrap() < dual.first().unwrap(),
         "expected ADMM dual residual to decrease: {:?} -> {:?}",
-        first.admm_dual_residual_rms,
-        last.admm_dual_residual_rms
+        dual.first(),
+        dual.last()
     );
-    assert_eq!(
-        result.diagnostics["final_admm_primal_residual_rms"],
-        last.admm_primal_residual_rms.unwrap()
+    assert!(
+        result
+            .scalar_diagnostics
+            .keys()
+            .all(|key| !key.starts_with("admm"))
     );
 }
 
@@ -448,8 +478,8 @@ fn amplitude_gradient_loss_decreases_on_single_source_data() {
         .run(&problem)
         .unwrap();
     assert!(
-        result.history.iterations.last().unwrap().loss
-            < result.history.iterations.first().unwrap().loss
+        result.trace.iterations.last().unwrap().objective
+            < result.trace.iterations.first().unwrap().objective
     );
 }
 
@@ -486,8 +516,8 @@ fn projection_and_gradient_updates_support_subpixel_crops() {
         .unwrap();
     for result in [projection, gradient] {
         assert!(
-            result.history.iterations.last().unwrap().loss
-                < result.history.iterations.first().unwrap().loss
+            result.trace.iterations.last().unwrap().objective
+                < result.trace.iterations.first().unwrap().objective
         );
     }
 }
@@ -589,10 +619,10 @@ fn joint_illumination_calibration_reduces_model_mismatch() {
         .map(|(&(row, column), truth)| (row - truth.row).powi(2) + (column - truth.column).powi(2))
         .sum();
     assert!(
-        calibrated.history.final_loss().unwrap() < uncalibrated.history.final_loss().unwrap(),
+        calibrated.trace.final_objective().unwrap() < uncalibrated.trace.final_objective().unwrap(),
         "calibration did not improve loss: {} vs {}",
-        calibrated.history.final_loss().unwrap(),
-        uncalibrated.history.final_loss().unwrap()
+        calibrated.trace.final_objective().unwrap(),
+        uncalibrated.trace.final_objective().unwrap()
     );
     assert!(
         final_error < initial_error,
@@ -948,8 +978,8 @@ fn amplitude_gradient_reconstructs_multiplexed_data() {
     for result in [&ap, &fpie, &epry, &admm] {
         assert_eq!(result.runtime.completed_iterations, 12);
         assert!(
-            result.history.iterations.last().unwrap().loss
-                < result.history.iterations.first().unwrap().loss
+            result.trace.iterations.last().unwrap().objective
+                < result.trace.iterations.first().unwrap().objective
         );
     }
     let result = GradientDescent::default()
@@ -960,8 +990,8 @@ fn amplitude_gradient_reconstructs_multiplexed_data() {
         .unwrap();
     assert_eq!(result.runtime.completed_iterations, 12);
     assert!(
-        result.history.iterations.last().unwrap().loss
-            < result.history.iterations.first().unwrap().loss
+        result.trace.iterations.last().unwrap().objective
+            < result.trace.iterations.first().unwrap().objective
     );
 }
 
@@ -1060,8 +1090,8 @@ fn parallel_gradient_reduction_matches_sequential_for_multiplexed_pupil_updates(
         .unwrap();
 
     assert_abs_diff_eq!(
-        parallel_diagnostics.mean_loss().unwrap(),
-        sequential_diagnostics.mean_loss().unwrap(),
+        parallel_diagnostics.summary.mean_objective().unwrap(),
+        sequential_diagnostics.summary.mean_objective().unwrap(),
         epsilon = 1e-14
     );
     for (&parallel, &sequential) in parallel
@@ -1140,8 +1170,8 @@ fn parallel_illumination_reduction_matches_sequential_with_shared_sources() {
         .unwrap();
 
     assert_abs_diff_eq!(
-        parallel_diagnostics.mean_loss().unwrap(),
-        sequential_diagnostics.mean_loss().unwrap(),
+        parallel_diagnostics.summary.mean_objective().unwrap(),
+        sequential_diagnostics.summary.mean_objective().unwrap(),
         epsilon = 1e-14
     );
     for (&parallel, &sequential) in parallel
@@ -1200,8 +1230,8 @@ fn gradient_solver_supports_configurable_losses() {
             .loss_type(loss_type)
             .run(&problem)
             .unwrap();
-        let first = result.history.iterations.first().unwrap().loss;
-        let last = result.history.iterations.last().unwrap().loss;
+        let first = result.trace.iterations.first().unwrap().objective;
+        let last = result.trace.iterations.last().unwrap().objective;
         assert!(
             last.is_finite() && last < first,
             "expected {loss_type:?} loss to decrease, got {first} -> {last}"
@@ -1556,8 +1586,7 @@ fn object_tv_regularization_reduces_complex_variation_across_batch_sizes() {
     )
     .unwrap();
     let state = ReconstructionState::from_object(&problem, initial_object.clone()).unwrap();
-    let checkpoint =
-        ReconstructionCheckpoint::capture(0, &state, &ReconstructionHistory::default());
+    let checkpoint = ReconstructionCheckpoint::capture(0, &state, &ReconstructionTrace::default());
     let initial_variation = complex_variation(&initial_object);
     let full_batch = GradientDescent::default()
         .iterations(1)
@@ -1658,12 +1687,12 @@ fn gradient_loss_is_invariant_to_known_linear_camera_response() {
         .unwrap();
 
     for (ideal, camera) in ideal_result
-        .history
+        .trace
         .iterations
         .iter()
-        .zip(&camera_result.history.iterations)
+        .zip(&camera_result.trace.iterations)
     {
-        assert_abs_diff_eq!(ideal.loss, camera.loss, epsilon = 1e-12);
+        assert_abs_diff_eq!(ideal.objective, camera.objective, epsilon = 1e-12);
     }
     for (&ideal, &camera) in ideal_result
         .object_spectrum

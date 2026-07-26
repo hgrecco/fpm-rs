@@ -506,12 +506,117 @@ class ReconstructionResult:
     calibrated_illumination: FloatArray | None
     recovered_frame_gains: FloatArray | None
     recovered_background: FloatArray | None
-    history: list[tuple[int, float, float]]
-    admm_residual_history: list[tuple[int, float, float]]
-    diagnostics: Mapping[str, float]
+    trace: list[tuple[int, float, float]]
+    algorithm_metrics: list[tuple[int, str, str, float]]
+    scalar_diagnostics: Mapping[str, float]
     runtime: RuntimeInfo
     metadata: Mapping[str, str]
-    final_loss: float | None
+    final_objective: float | None
+    def write_bundle(
+        self,
+        path: Path,
+        *,
+        run_id: str | None = None,
+        label: str | None = None,
+        include_previews: bool = True,
+    ) -> ResultBundle: ...
+
+class BundleArtifact:
+    path: Path
+    media_type: str
+    byte_size: int
+    sha256: str
+    role: str
+
+class BundleArray:
+    path: Path
+    media_type: str
+    byte_size: int
+    sha256: str
+    role: str
+    value: ComplexArray | FloatArray | MaskArray
+
+class BundleTables:
+    summary: BundleArtifact
+    history: BundleArtifact
+    algorithm_metrics: BundleArtifact | None
+    iteration_diagnostics: BundleArtifact | None
+    frame_diagnostics: BundleArtifact | None
+    raw_frame_statistics: BundleArtifact | None
+    frame_evaluation: BundleArtifact | None
+    illumination_calibration: BundleArtifact | None
+    frame_calibration: BundleArtifact | None
+    scalar_diagnostics: BundleArtifact | None
+    metadata: BundleArtifact | None
+
+class BundleArrays:
+    object: BundleArray
+    object_spectrum: BundleArray
+    pupil: BundleArray
+    pupil_support: BundleArray
+    illumination_calibration: BundleArray | None
+    frame_gains: BundleArray | None
+    background: BundleArray | None
+
+class BundlePreviews:
+    object_amplitude: BundleArtifact | None
+    object_phase: BundleArtifact | None
+    pupil_amplitude: BundleArtifact | None
+    pupil_phase: BundleArtifact | None
+    fourier_coverage: BundleArtifact | None
+
+class BundleVerificationResult:
+    artifact_count: int
+    total_bytes: int
+
+class ResultBundle:
+    path: Path
+    manifest_path: Path
+    run_id: str
+    label: str | None
+    tables: BundleTables
+    arrays: BundleArrays
+    previews: BundlePreviews
+    result: ReconstructionResult
+    diagnostics: dict[str, Any] | None
+    evaluation: dict[str, Any] | None
+    def verify(self) -> BundleVerificationResult: ...
+    def clear_cache(self) -> None: ...
+
+def read_bundle(path: Path) -> ResultBundle: ...
+
+class BenchmarkBundleTables:
+    runs: BundleArtifact
+    frames: BundleArtifact
+    artifacts: BundleArtifact
+    metadata: BundleArtifact
+
+class BenchmarkBundle:
+    path: Path
+    manifest_path: Path
+    name: str
+    label: str | None
+    tables: BenchmarkBundleTables
+    results: Mapping[str, ResultBundle]
+
+class BenchmarkSuite:
+    def __init__(self, name: str) -> None: ...
+    def add_result(
+        self,
+        result: ReconstructionResult,
+        *,
+        case_id: str,
+        dataset_name: str,
+        algorithm_configuration: str = "",
+    ) -> str: ...
+    def write_bundle(
+        self,
+        path: Path,
+        *,
+        label: str | None = None,
+    ) -> BenchmarkBundle: ...
+
+def read_benchmark_bundle(path: Path) -> BenchmarkBundle: ...
 
 class ProgressLogger:
     def __init__(self, *, every: int = 1) -> None: ...

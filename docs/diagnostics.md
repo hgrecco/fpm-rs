@@ -7,18 +7,23 @@ loop.
 
 Reusable calculations are split by responsibility. Rust `metrics` contains
 domain-agnostic reference/estimate comparisons; `algorithms::objective`
-contains losses optimized by reconstruction algorithms; and `evaluation`
-combines a reconstruction with optional reference model and measurement stack.
+contains objective functions optimized by reconstruction algorithms; and
+`evaluation` combines a reconstruction with optional reference model and
+measurement stack.
 Python exposes the direct equivalents under `fpm.metrics` and
 `fpm.evaluation`. This module focuses only on run-scoped diagnostic requests,
 Fourier coverage, convergence records, recorder cadence, and serialization.
 See [intensity metrics](metrics.md) for standalone reference/estimate image
 calculations such as NRMSE, PSNR, SSIM, and Poisson deviance.
 
-The reusable metric result uses `reference_sum` and `estimate_sum`. Recorder
-dictionaries and persisted diagnostic JSON retain their acquisition-specific
-`measured_sum` and `predicted_sum` keys; the diagnostic adapter performs this
-translation without changing the pure metric type.
+Every reconstruction records `result.trace` independently of this optional
+recorder. Its one-based tuples contain `(iteration, objective,
+elapsed_seconds)`, where seconds are measured from the start of the run and
+continue across checkpoint resume. Recorder iteration diagnostics are optional
+derived values at the configured cadence and are not the execution trace.
+
+Reusable metrics, recorder dictionaries, diagnostic JSON, and tabular exports
+all use `reference_sum` and `estimate_sum`.
 
 ## End-to-end report
 
@@ -35,7 +40,8 @@ fpm.diagnostics.make_diagnostic_report(
 )
 ```
 
-`result.diagnostics` remains the reconstruction result's small scalar summary.
+`result.scalar_diagnostics` is the reconstruction result's small, dynamic
+scalar summary.
 The structured recorder output is retrieved with `recorder.diagnostics()`.
 
 ## Radial Fourier power spectrum
@@ -46,20 +52,19 @@ It returns a dictionary containing `radius_px`, `power`, and `sample_count`.
 The radii are Fourier-grid pixels; convert them to physical spatial frequency
 only when the input sampling pitch is known.
 
-ADMM results additionally expose `result.admm_residual_history` as
-`(iteration, primal_rms, dual_rms)` tuples. The primal value is the RMS
-detector-field consensus residual `A x - z`; the dual value is the RMS auxiliary
-change `rho (z_k - z_{k-1})`. The final values are also available in
-`result.diagnostics` under `final_admm_primal_residual_rms` and
-`final_admm_dual_residual_rms`. Other algorithms return an empty residual
-history.
+ADMM results additionally expose long-form `result.algorithm_metrics` tuples:
+`(iteration, namespace, metric, value)`. The namespace is `admm`; the metrics
+are `primal_residual_rms` for detector-field consensus `A x - z` and
+`dual_residual_rms` for auxiliary change `rho (z_k - z_{k-1})`. These values do
+not appear in universal iteration rows or scalar diagnostics. Algorithms
+without stable algorithm-specific metrics return an empty list.
 
 The report writer creates plots only for sections present in the diagnostics.
 It always writes `summary.txt`. No intermediate JSON file is required.
 
 ## Recorder modes
 
-| Mode | Iteration history | Fourier coverage | Frame summaries | Raw-stack statistics |
+| Mode | Iteration diagnostics | Fourier coverage | Frame summaries | Raw-stack statistics |
 | --- | --- | --- | --- | --- |
 | `minimal` | yes | no | no | no |
 | `basic` | yes | yes | no | no |
@@ -95,7 +100,7 @@ dictionary of named axes:
 diagnostics = recorder.diagnostics()
 
 figure, axes = fpm.plot.plot_convergence(diagnostics)
-axes["loss"].set_title("Experiment convergence")
+axes["objective"].set_title("Experiment convergence")
 ```
 
 Reconstruction plots live in the same namespace:

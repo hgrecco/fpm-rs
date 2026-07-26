@@ -2,14 +2,62 @@
 
 ## Repository layout
 
-- `src/` is the public Rust `fpm-rs` library. Experiment geometry compiles into
-  the model consumed by algorithms, reconstruction, and simulation.
-- `python/src/` is the private PyO3 extension crate; `python/fpm_rs/` is the
-  typed Python package and plotting/report layer.
+- The workspace has two members. The root `fpm-rs` crate is the public Rust
+  library. The private `python/` member builds `fpm_rs._core` and depends on the
+  root crate with Parquet support; the Rust library never depends on Python.
+- `src/experiment` compiles physical optics and illumination geometry into the
+  transverse wave vectors consumed by `src/model`. Algorithms depend on
+  `ImagePlaneModel` and `MeasurementRead`, not experiment geometry.
+- `src/reconstruction` owns problems, standard-layout numerical state,
+  algorithm-neutral traces, checkpoints, results, schedules, and the runner.
+  `src/algorithms` supplies typed step metrics; `src/callbacks` and
+  `src/diagnostics` request and record optional derived data.
+- `src/tabular` converts domain objects into Polars `DataFrame` values behind
+  the `tabular` feature. Its `parquet` submodule writes versioned result
+  bundles. `src/benchmark_bundle.rs` composes normalized comparison tables with
+  nested result bundles.
+- `python/src/` is the PyO3 binding implementation. `python/fpm_rs/` is the
+  typed public package plus plotting and reporting helpers. NumPy is the array
+  boundary; Parquet paths are exposed as ordinary artifact handles so users can
+  choose Polars, PyArrow, pandas, or DuckDB themselves.
 - `docs/` contains this authored site and its curated tutorial notebooks.
 - `examples/` and `python/examples/` contain Rust workflows and focused Python
   notebook examples not all intended for publication.
 - `tests/` and `python/tests/` contain integration and API tests.
+
+## Array and ownership map
+
+The public Rust numerical API uses `ndarray::Array2`, `Array3`, and their view
+types. Metrics and pointwise utilities accept compatible strided views. Strict
+FFT, backend, measurement, pupil, reconstruction-state, and persistence
+boundaries require standard row-major storage and return `NonStandardLayout`
+instead of copying. Private `StandardArray2` and `StandardArray3` wrappers keep
+that invariant for long-lived core state. Flat `Vec` buffers remain appropriate
+for FFT scratch, backend workspaces, ragged records, and serialized rows.
+
+Python inputs are NumPy arrays. General metrics accept strided views, while
+model and reconstruction inputs require C-contiguous arrays. Reconstruction
+results returned directly by an algorithm own normal NumPy arrays. Arrays
+loaded from a `ResultBundle` are lazy, cached, shared with
+`bundle.result`, and read-only.
+
+## Execution and persistence map
+
+Every run records a `ReconstructionTrace` independently of diagnostic
+callbacks. Its one-based iteration rows contain `objective` and canonical
+`elapsed_seconds`; algorithm-specific scalars are separate long-form
+`AlgorithmMetricRecord` rows. Checkpoints serialize the trace together with
+the object spectrum, pupil, calibration, and algorithm auxiliary state so a
+resume continues iteration numbering and elapsed time.
+
+Callbacks may write checkpoint JSON, objective CSV, PNG snapshots, or residual
+images. The diagnostic recorder optionally retains iteration, frame, raw-stack,
+coverage, and snapshot data. A final result bundle instead writes stable
+Parquet tables, authoritative `.npy` arrays, optional PNG previews, and a
+manifest written last. Benchmark bundles contain normalized runs, frames,
+artifacts, and metadata tables plus one nested result bundle for each successful
+run. Local dataset manifests and diagnostic JSON remain separate formats with
+different purposes.
 
 ## Build and test
 

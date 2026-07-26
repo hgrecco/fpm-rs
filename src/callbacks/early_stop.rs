@@ -22,7 +22,7 @@ impl StopOnPlateau {
 
 impl Callback for StopOnPlateau {
     fn requires(&self) -> Vec<DiagnosticRequest> {
-        vec![DiagnosticRequest::Loss]
+        vec![DiagnosticRequest::Objective]
     }
 
     fn requires_for(&self, hook: CallbackHook, _iteration: usize) -> Vec<DiagnosticRequest> {
@@ -36,9 +36,9 @@ impl Callback for StopOnPlateau {
     fn on_start(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
         self.best = f64::INFINITY;
         self.stale_iterations = 0;
-        for record in &context.history.iterations {
-            if self.best - record.loss > self.minimum_improvement {
-                self.best = record.loss;
+        for record in &context.trace.iterations {
+            if self.best - record.objective > self.minimum_improvement {
+                self.best = record.objective;
                 self.stale_iterations = 0;
             } else {
                 self.stale_iterations += 1;
@@ -48,9 +48,9 @@ impl Callback for StopOnPlateau {
     }
 
     fn on_iteration_end(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
-        if let Some(loss) = context.diagnostics.loss {
-            if self.best - loss > self.minimum_improvement {
-                self.best = loss;
+        if let Some(objective) = context.diagnostics.objective {
+            if self.best - objective > self.minimum_improvement {
+                self.best = objective;
                 self.stale_iterations = 0;
             } else {
                 self.stale_iterations += 1;

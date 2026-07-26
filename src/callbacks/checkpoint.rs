@@ -26,7 +26,7 @@ impl Callback for CheckpointEvery {
 
     fn on_iteration_end(&mut self, context: &StepContext<'_>) -> Result<CallbackAction> {
         if context.iteration.is_multiple_of(self.frequency) {
-            ReconstructionCheckpoint::capture(context.iteration, context.state, context.history)
+            ReconstructionCheckpoint::capture(context.iteration, context.state, context.trace)
                 .save(
                     self.directory
                         .join(format!("checkpoint_{:05}.json", context.iteration)),

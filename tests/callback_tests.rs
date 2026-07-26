@@ -58,7 +58,7 @@ struct FrameRecorder {
 impl Callback for FrameRecorder {
     fn requires_for(&self, hook: CallbackHook, _iteration: usize) -> Vec<DiagnosticRequest> {
         if hook == CallbackHook::FrameEnd {
-            vec![DiagnosticRequest::Loss]
+            vec![DiagnosticRequest::Objective]
         } else {
             Vec::new()
         }
@@ -69,7 +69,7 @@ impl Callback for FrameRecorder {
             context.iteration,
             context.frame_index.unwrap(),
             context.batch_index.unwrap(),
-            context.diagnostics.loss.is_some(),
+            context.diagnostics.objective.is_some(),
         ));
         Ok(CallbackAction::Continue)
     }
@@ -93,7 +93,11 @@ impl Callback for StartResidualProbe {
             Some(context.model.frame_count())
         );
         assert_eq!(
-            context.diagnostics.per_frame_error.as_ref().map(Vec::len),
+            context
+                .diagnostics
+                .per_frame_objective
+                .as_ref()
+                .map(Vec::len),
             Some(context.model.frame_count())
         );
         Ok(CallbackAction::Stop)
@@ -234,7 +238,7 @@ fn callback_forward_diagnostics_use_the_injected_backend() {
 fn file_callbacks_obey_frequency_and_log_rows() {
     let directory = tempfile::tempdir().unwrap();
     let image_directory = directory.path().join("images");
-    let csv_path = directory.path().join("loss.csv");
+    let csv_path = directory.path().join("objective.csv");
     AlternatingProjection::default()
         .iterations(3)
         .run_with_callbacks(
@@ -345,7 +349,7 @@ fn checkpoint_round_trip_resumes_exactly() {
     let checkpoint =
         ReconstructionCheckpoint::load(directory.path().join("checkpoint_00002.json")).unwrap();
     assert_eq!(checkpoint.completed_iterations(), 2);
-    assert_eq!(checkpoint.history().iterations.len(), 2);
+    assert_eq!(checkpoint.trace().iterations.len(), 2);
 
     let resumed = AlternatingProjection::default()
         .iterations(4)
@@ -368,7 +372,7 @@ fn checkpoint_round_trip_resumes_exactly() {
         uninterrupted.recovered_pupil.values()
     );
     assert_eq!(resumed.runtime.completed_iterations, 4);
-    assert_eq!(resumed.history.iterations.len(), 4);
+    assert_eq!(resumed.trace.iterations.len(), 4);
 }
 
 #[test]
@@ -378,7 +382,7 @@ fn checkpoint_io_rejects_corruption_and_problem_mismatch_early() {
     let checkpoint = ReconstructionCheckpoint::capture(
         0,
         &state,
-        &fpm_rs::diagnostics::ReconstructionHistory::default(),
+        &fpm_rs::reconstruction::ReconstructionTrace::default(),
     );
     let directory = tempfile::tempdir().unwrap();
 

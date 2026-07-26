@@ -3,10 +3,12 @@ use std::thread;
 
 use crate::{
     Result,
-    algorithms::objective::{LossType, point_loss},
+    algorithms::{
+        NoIterationMetrics, StepOutput, StepSummary,
+        objective::{LossType, point_loss},
+    },
     array_layout::checked_len_2d,
     backend::FftDirection,
-    diagnostics::StepDiagnostics,
     error::Error,
     measurements::MeasurementRead,
     model::{FourierOffset, fftshift_copy, ifftshift_copy},
@@ -183,6 +185,8 @@ impl GradientDescent {
 }
 
 impl ReconstructionAlgorithm for GradientDescent {
+    type IterationMetrics = NoIterationMetrics;
+
     fn validate(&self) -> Result<()> {
         if !self.object_step.is_finite() || self.object_step <= 0.0 {
             return Err(Error::InvalidParameter {
@@ -269,7 +273,7 @@ impl ReconstructionAlgorithm for GradientDescent {
         state: &mut ReconstructionState,
         batch: &Batch,
         iteration: usize,
-    ) -> Result<StepDiagnostics> {
+    ) -> Result<StepOutput<Self::IterationMetrics>> {
         if self.parallel_workers > 1 && batch.indices.len() > 1 {
             return self.parallel_step(problem, state, batch, iteration);
         }
@@ -284,7 +288,7 @@ impl ReconstructionAlgorithm for GradientDescent {
             .map(|value| value.norm_sqr())
             .fold(0.0, f64::max)
             .max(self.epsilon);
-        let mut diagnostics = StepDiagnostics::default();
+        let mut diagnostics = StepSummary::default();
         let mut active_frames = 0;
         if self.recover_illumination {
             prepare_illumination_accumulators(model, state)?;
@@ -501,7 +505,7 @@ impl ReconstructionAlgorithm for GradientDescent {
         if self.recover_illumination {
             self.apply_illumination_update(model, state)?;
         }
-        Ok(diagnostics)
+        Ok(diagnostics.into())
     }
 
     fn iterations(&self) -> usize {
@@ -520,7 +524,7 @@ struct ParallelWorkerResult {
     illumination_gradient: Vec<(f64, f64)>,
     illumination_curvature: Vec<(f64, f64)>,
     illumination_weight: Vec<f64>,
-    diagnostics: StepDiagnostics,
+    diagnostics: StepSummary,
     active_frames: usize,
 }
 
@@ -531,7 +535,7 @@ impl GradientDescent {
         state: &mut ReconstructionState,
         batch: &Batch,
         iteration: usize,
-    ) -> Result<StepDiagnostics> {
+    ) -> Result<StepOutput<NoIterationMetrics>> {
         let worker_count = self.parallel_workers.min(batch.indices.len());
         if self.recover_illumination {
             prepare_illumination_accumulators(&problem.model, state)?;
@@ -579,7 +583,7 @@ impl GradientDescent {
                             } else {
                                 Vec::new()
                             },
-                            diagnostics: StepDiagnostics::default(),
+                            diagnostics: StepSummary::default(),
                             active_frames: 0,
                         };
                         for &frame in frames {
@@ -605,7 +609,7 @@ impl GradientDescent {
                                 &Batch::single(frame),
                                 iteration,
                             )?;
-                            if diagnostics.weight_sum > 0.0 {
+                            if diagnostics.summary.weight_sum > 0.0 {
                                 output.active_frames += 1;
                                 for ((sum, &value), &initial) in output
                                     .object_delta
@@ -640,7 +644,7 @@ impl GradientDescent {
                                     }
                                 }
                             }
-                            output.diagnostics.merge(diagnostics);
+                            output.diagnostics.merge(diagnostics.summary);
                         }
                         Ok(output)
                     })
@@ -671,7 +675,7 @@ impl GradientDescent {
             state.scratch.illumination_curvature.fill((0.0, 0.0));
             state.scratch.illumination_weight.fill(0.0);
         }
-        let mut diagnostics = StepDiagnostics::default();
+        let mut diagnostics = StepSummary::default();
         let mut active_frames = 0;
         for result in results {
             active_frames += result.active_frames;
@@ -760,7 +764,7 @@ impl GradientDescent {
         if self.recover_illumination {
             self.apply_illumination_update(model, state)?;
         }
-        Ok(diagnostics)
+        Ok(diagnostics.into())
     }
 
     fn apply_illumination_update(

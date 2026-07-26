@@ -105,13 +105,17 @@ fn benchmark_runs_ap_and_epry_on_the_same_problem() -> Result<()> {
         assert_eq!(record.image_shape, [32, 32]);
         assert_eq!(record.reconstruction_shape, [64, 64]);
         assert_eq!(record.completed_iterations, 4);
-        assert!(record.runtime_seconds.is_finite());
-        assert!(record.final_loss.unwrap().is_finite());
+        assert!(record.elapsed_seconds.is_finite());
+        assert!(record.final_objective.unwrap().is_finite());
         assert!(record.amplitude_rmse.unwrap().is_finite());
         assert!(record.phase_rmse.unwrap().is_finite());
         assert!(record.per_frame_residual_mean.unwrap().is_finite());
         assert_eq!(
-            record.selected_original_frame_indices,
+            record
+                .frames
+                .iter()
+                .map(|frame| frame.original_frame_index)
+                .collect::<Vec<_>>(),
             (0..9).collect::<Vec<_>>()
         );
     }
@@ -149,7 +153,7 @@ fn benchmark_preset_produces_regression_diagnostics() -> Result<()> {
     let diagnostics = recorder.diagnostics();
     assert_eq!(
         diagnostics
-            .iteration_history
+            .iteration_diagnostics
             .iter()
             .map(|entry| entry.iteration)
             .collect::<Vec<_>>(),
@@ -159,7 +163,7 @@ fn benchmark_preset_produces_regression_diagnostics() -> Result<()> {
         diagnostics.frame_diagnostics.len(),
         2 * problem.model.frame_count()
     );
-    assert!(diagnostics.raw_frame_stats.is_empty());
+    assert!(diagnostics.raw_frame_statistics.is_empty());
     let coverage = diagnostics.coverage.as_ref().unwrap();
     assert_eq!(
         coverage.pupil_centers_px.len(),
@@ -167,9 +171,9 @@ fn benchmark_preset_produces_regression_diagnostics() -> Result<()> {
     );
     assert_eq!(coverage.crop_indices.len(), problem.model.source_count());
     let losses = diagnostics
-        .iteration_history
+        .iteration_diagnostics
         .iter()
-        .map(|entry| entry.total_loss.unwrap())
+        .map(|entry| entry.total_objective.unwrap())
         .collect::<Vec<_>>();
     assert!(losses.iter().all(|loss| loss.is_finite()));
     assert!(losses[1] < losses[0]);
@@ -203,7 +207,7 @@ fn benchmark_writes_outputs_csv_json_and_failure_records() -> Result<()> {
     let directory = tempfile::tempdir()?;
     save_benchmark_outputs(&mut successful, result.as_ref().unwrap(), directory.path())?;
     assert_eq!(successful.output_paths.len(), 4);
-    assert!(successful.output_paths.iter().all(|path| path.is_file()));
+    assert!(successful.output_paths.iter().all(|path| path.exists()));
     let mut different_configuration = successful.clone();
     different_configuration.algorithm_configuration = "iterations=3".into();
     different_configuration.output_paths.clear();
@@ -236,10 +240,10 @@ fn benchmark_writes_outputs_csv_json_and_failure_records() -> Result<()> {
     write_benchmark_csv(&records, &csv_path)?;
     write_benchmark_json(&records, &json_path)?;
     let csv = fs::read_to_string(csv_path)?;
-    assert!(csv.contains("final_to_initial_loss_ratio"));
+    assert!(csv.contains("final_to_initial_objective_ratio"));
     let mut reader = csv::Reader::from_reader(csv.as_bytes());
     let first = reader.records().next().unwrap().unwrap();
-    assert_eq!(&first[1], "synthetic,\"noiseless\"");
+    assert_eq!(&first[3], "synthetic,\"noiseless\"");
     let json: serde_json::Value = serde_json::from_slice(&fs::read(json_path)?)?;
     assert_eq!(json["format_version"], BENCHMARK_RECORD_FORMAT_VERSION);
     assert_eq!(json["records"].as_array().unwrap().len(), 2);
