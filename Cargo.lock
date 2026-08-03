@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "fpm-rs"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "approx",
  "clap",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "fpm-rs-python"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 dependencies = [
  "fpm-rs",
  "numpy",

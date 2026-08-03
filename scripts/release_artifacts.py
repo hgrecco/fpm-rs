@@ -87,6 +87,7 @@ def classify_platform(platform_tags: set[str]) -> str:
 
 def inspect_distributions(directory: Path, version: str) -> None:
     from packaging.utils import parse_sdist_filename, parse_wheel_filename
+    from packaging.version import Version
 
     files = distributions(directory)
     wheels = [path for path in files if path.suffix == ".whl"]
@@ -96,10 +97,11 @@ def inspect_distributions(directory: Path, version: str) -> None:
             f"expected 15 wheels and one sdist, found {len(wheels)} and {len(sdists)}"
         )
 
+    expected_version = Version(version)
     observed: set[tuple[str, str]] = set()
     for wheel in wheels:
         name, wheel_version, _, tags = parse_wheel_filename(wheel.name)
-        if name != "fpm-rs" or str(wheel_version) != version:
+        if name != "fpm-rs" or wheel_version != expected_version:
             raise SystemExit(f"unexpected wheel identity: {wheel.name}")
         interpreters = {tag.interpreter for tag in tags}
         abis = {tag.abi for tag in tags}
@@ -123,7 +125,7 @@ def inspect_distributions(directory: Path, version: str) -> None:
         )
 
     sdist_name, sdist_version = parse_sdist_filename(sdists[0].name)
-    if sdist_name != "fpm-rs" or str(sdist_version) != version:
+    if sdist_name != "fpm-rs" or sdist_version != expected_version:
         raise SystemExit(f"unexpected sdist identity: {sdists[0].name}")
     inspect_sdist(sdists[0])
     print(f"Validated release matrix for fpm-rs {version}")

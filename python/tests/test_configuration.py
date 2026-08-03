@@ -10,7 +10,7 @@ def test_python_312_is_the_minimum_runtime() -> None:
     import sys
 
     assert sys.version_info >= (3, 12)
-    assert fpm.__version__ == "0.1.0"
+    assert fpm.__version__ == "0.2.0-beta.1"
 
 
 def test_compile_led_model_and_numpy_properties(optics: fpm.Optics) -> None:
