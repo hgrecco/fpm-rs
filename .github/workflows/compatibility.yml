@@ -1,0 +1,143 @@
+name: Compatibility
+
+on:
+  schedule:
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.97.0"
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install --upgrade pip
+      - name: Install full integration dependencies
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: python scripts/install_python_dependencies.py build runtime test-full
+      - name: Install core test dependencies
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
+        run: python scripts/install_python_dependencies.py build runtime test
+      - name: Build development extension
+        run: maturin develop --locked
+      - name: Run full optional-integration suite
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: python -m pytest python/tests --junitxml=target/python-full-tests.xml
+      - name: Reject unexpected skips
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: python scripts/check_pytest_skips.py target/python-full-tests.xml
+      - name: Run core suite
+        if: matrix.os != 'ubuntu-latest' || matrix.python != '3.12'
+        run: >-
+          python -m pytest python/tests
+          --ignore=python/tests/test_diagnostic_notebooks.py
+          --ignore=python/tests/test_diagnostics.py
+          --ignore=python/tests/test_plotting.py
+          --deselect=python/tests/test_bundles.py::test_bundle_tables_are_directly_scannable_when_polars_is_installed
+
+  rust-platforms:
+    name: Stable Rust on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            features: --all-features
+            jobs: "1"
+          - os: macos-latest
+            features: ""
+            jobs: "2"
+          - os: windows-latest
+            features: ""
+            jobs: "2"
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.jobs }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace ${{ matrix.features }} --locked
+
+  rust-features:
+    name: Rust selected feature combinations
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p fpm-rs --no-default-features --locked
+      - run: cargo test -p fpm-rs --no-default-features --features tabular --locked
+      - run: cargo test -p fpm-rs --no-default-features --features parquet --locked
+
+  coverage:
+    name: Rust and Python coverage baseline
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - name: Install pinned Rust coverage tool
+        run: cargo install cargo-llvm-cov --version 0.8.6 --locked
+      - name: Record Rust coverage
+        run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage/rust.lcov
+      - run: python -m pip install --upgrade pip
+      - run: python scripts/install_python_dependencies.py build runtime test-full coverage
+      - run: maturin develop --locked
+      - name: Record Python coverage
+        run: >-
+          python -m pytest python/tests
+          --junitxml=target/python-coverage-tests.xml
+          --cov=fpm_rs
+          --cov-report=term-missing
+          --cov-report=xml:coverage/python.xml
+      - run: python scripts/check_pytest_skips.py target/python-coverage-tests.xml
+      - uses: actions/upload-artifact@v6
+        with:
+          name: coverage-baseline
+          path: coverage

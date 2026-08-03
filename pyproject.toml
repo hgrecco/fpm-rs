@@ -3,7 +3,7 @@ name = "fpm-rs"
 version = "0.1.0"
 description = "High-performance Fourier ptychography reconstruction, simulation, and diagnostics for Python, powered by Rust."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.15"
 license = "MIT"
 authors = [{ name = "Hernán E. Grecco", email = "hernan.grecco@gmail.com" }]
 classifiers = [
@@ -31,6 +31,14 @@ notebook = ["jupyterlab>=4.3", "matplotlib>=3.9"]
 plot = ["matplotlib>=3.9"]
 polars = ["polars>=1"]
 test = ["pytest>=8.3"]
+test-full = [
+  "ipython>=8.30",
+  "matplotlib>=3.9",
+  "polars>=1",
+  "pytest>=8.3",
+]
+coverage = ["pytest-cov>=5"]
+release = ["packaging>=24", "twine>=6"]
 
 [build-system]
 requires = ["maturin>=1.9,<2"]

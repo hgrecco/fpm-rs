@@ -51,16 +51,19 @@ private `fpm_rs._core` extension, and installs the Python sources from
 
 ## Pixi development installation
 
-Pixi provides the reproducible development toolchain:
+Pixi provides the reproducible development toolchain and canonical validation
+entry point:
 
 ```sh
 pixi install -e py312
 pixi run -e py312 python-test
+pixi run ci
 ```
 
-`python-develop` runs `maturin develop --skip-install`; the activation
+`python-develop` runs `maturin develop --skip-install --locked`; the activation
 environment places `python/` on `PYTHONPATH`. Use the `py314` environment to
-validate CPython 3.14.
+validate CPython 3.14. `python-test-full` includes all optional test
+integrations, while `python-test` is the lighter core suite.
 
 ## Rust library
 

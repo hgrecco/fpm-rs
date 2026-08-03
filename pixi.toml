@@ -13,12 +13,21 @@ py313 = ["rust", "python", "pytest", "py313"]
 py314 = ["rust", "python", "pytest", "py314"]
 lint = ["rust", "lint"]
 
+[tasks]
+ci = { depends-on = ["rust-format", "rust-clippy", "rust-test", "rust-doc-test", "rust-examples", "rust-msrv", "python-test-full"], description = "Run the canonical local source-validation suite" }
+
 [feature.rust.dependencies]
 rust = "==1.97"
 rust-src = "==1.97"
 
 [feature.rust.tasks]
 datasets = "cargo run --bin fpm-datasets --"
+rust-clippy = { cmd = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings", description = "Run strict Clippy across the workspace" }
+rust-doc-test = { cmd = "cargo test --workspace --doc --all-features --locked -j 1", description = "Run Rust documentation tests" }
+rust-examples = { cmd = "cargo check --workspace --examples --all-features --locked", description = "Check every Rust example" }
+rust-format = { cmd = "cargo fmt --all -- --check", description = "Check Rust formatting" }
+rust-msrv = { cmd = "cargo check --workspace --all-targets --locked", description = "Check the workspace with the Pixi-pinned MSRV" }
+rust-test = { cmd = "cargo test --workspace --all-features --locked -j 1", description = "Run all Rust tests with all features and serialized linking" }
 
 [feature.python.dependencies]
 maturin = ">=1.9,<2"
@@ -26,18 +35,22 @@ numpy = ">=2.1"
 pip = ">=24"
 jupyter = "*"
 matplotlib = "*"
+ipython = ">=8.30"
+polars = ">=1"
 
 [feature.python.tasks]
-python-develop = "maturin develop --skip-install"
+python-develop = "maturin develop --skip-install --locked"
 python = { cmd = "python", depends-on = ["python-develop"] }
 jupyter = { cmd = "jupyter", depends-on = ["python-develop"] }
-python-wheel = "maturin build --release --out dist"
+python-wheel = { cmd = "maturin build --release --locked --out dist", description = "Build an optimized local wheel with Maturin" }
 
 [feature.pytest.dependencies]
 pytest = ">=8.3"
 
 [feature.pytest.tasks]
-python-test = { cmd = "pytest python/tests", depends-on = ["python-develop"] }
+python-test = { cmd = "pytest python/tests --ignore=python/tests/test_diagnostic_notebooks.py --ignore=python/tests/test_diagnostics.py --ignore=python/tests/test_plotting.py --deselect=python/tests/test_bundles.py::test_bundle_tables_are_directly_scannable_when_polars_is_installed", depends-on = ["python-develop"], description = "Run the core Python test suite" }
+python-test-full = { cmd = "pytest python/tests --junitxml=target/python-full-tests.xml && python scripts/check_pytest_skips.py target/python-full-tests.xml", depends-on = ["python-develop"], description = "Run every Python test and reject dependency-related skips" }
+python-test-gil = { cmd = "pytest python/tests/test_gil.py", depends-on = ["python-develop"], description = "Run the Python concurrency tests" }
 
 [feature.py312.dependencies]
 python = "3.12.*"

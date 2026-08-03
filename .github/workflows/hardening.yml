@@ -1,76 +1,104 @@
 name: Hardening
 
 on:
+  pull_request:
+    paths:
+      - ".cargo/audit.toml"
+      - ".github/workflows/hardening.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - "python/Cargo.toml"
+  push:
+    branches: [main]
+    paths:
+      - ".cargo/audit.toml"
+      - ".github/workflows/hardening.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "deny.toml"
+      - "python/Cargo.toml"
+  schedule:
+    - cron: "31 5 * * 6"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: hardening-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  NIGHTLY_TOOLCHAIN: "nightly-2026-07-15"
 
 jobs:
-  dependency-advisory:
-    name: Dependency advisory audit
+  dependency-policy:
+    name: Dependency advisory and policy checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Audit main workspace lockfile
-        run: cargo audit --file Cargo.lock
-  miri:
-    name: Miri invariant smoke
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - name: Install pinned dependency tools
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo audit --file Cargo.lock
+      - run: cargo deny --all-features check advisories licenses bans sources
+
+  miri:
+    name: Miri array and serialization invariants
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           components: miri
       - uses: Swatinem/rust-cache@v2
         with:
-          key: miri
-      - run: cargo +nightly miri setup
-      - name: Run Miri on serialization invariant tests
-        run: cargo +nightly miri test -p fpm-rs --test array_tests --locked
+          key: miri-${{ env.NIGHTLY_TOOLCHAIN }}
+          cache-targets: false
+      - run: cargo +${{ env.NIGHTLY_TOOLCHAIN }} miri setup
+      - name: Run selected invariant tests under Miri
+        run: >-
+          cargo +${{ env.NIGHTLY_TOOLCHAIN }} miri test
+          -p fpm-rs
+          --test complex_tests
+          --test configuration_tests
+          --locked
 
   address-sanitizer:
-    name: AddressSanitizer smoke
+    name: AddressSanitizer array and measurement tests
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: -Zsanitizer=address
       ASAN_OPTIONS: detect_leaks=1
+      CARGO_BUILD_JOBS: "1"
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           components: rust-src
       - uses: Swatinem/rust-cache@v2
         with:
-          key: asan
-      - name: Run ASan on serialization invariant tests
-        run: cargo +nightly test -p fpm-rs --test array_tests --target x86_64-unknown-linux-gnu -Zbuild-std --locked
-
-  python-packaging-smoke:
-    name: Python wheel install smoke
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install build dependency
-        run: python -m pip install "maturin>=1.9,<2" "numpy>=2.1"
-      - name: Build wheel
-        run: maturin build --release --out dist --interpreter python3.13
-      - name: Install wheel in a clean virtual environment
-        shell: bash
-        run: |
-          python -m venv .venv-smoke
-          source .venv-smoke/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install dist/*.whl
-          python -c "import fpm_rs; print(fpm_rs.__version__)"
+          key: asan-${{ env.NIGHTLY_TOOLCHAIN }}
+          cache-targets: false
+      - name: Run selected tests under AddressSanitizer
+        run: >-
+          cargo +${{ env.NIGHTLY_TOOLCHAIN }} test
+          -p fpm-rs
+          --test complex_tests
+          --test measurement_tests
+          --target x86_64-unknown-linux-gnu
+          -Zbuild-std
+          --locked

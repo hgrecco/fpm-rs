@@ -10,7 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    subprocess.run(["maturin", "develop", "--skip-install"], cwd=ROOT, check=True)
+    subprocess.run(
+        ["maturin", "develop", "--skip-install", "--locked"],
+        cwd=ROOT,
+        check=True,
+    )
     try:
         subprocess.run(
             ["mkdocs", "serve", "--strict", "--dev-addr", "127.0.0.1:8000"],

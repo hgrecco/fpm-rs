@@ -21,7 +21,7 @@ def run(*command: str, env: dict[str, str] | None = None) -> None:
 
 
 def main() -> None:
-    run("maturin", "develop", "--skip-install")
+    run("maturin", "develop", "--skip-install", "--locked")
     package = importlib.import_module("fpm_rs")
     print(f"Documenting fpm_rs {package.__version__}", flush=True)
 

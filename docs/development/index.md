@@ -62,16 +62,18 @@ different purposes.
 ## Build and test
 
 ```sh
-cargo test
-cargo test --all-targets
-cargo doc --workspace --no-deps --all-features
-pixi run -e py312 python-test
-pixi run lint
+pixi run ci
 ```
 
-Formatting tasks are `pixi run format-rust`, `pixi run format-python`, and
-`pixi run format-toml`. `pixi run lint` runs the configured pre-commit checks.
-Dataset tests use generated local bundles and never require network access.
+This is the canonical local source-validation command. It composes strict Rust
+formatting and Clippy checks, all-feature Rust tests, doctests and examples,
+and the complete Python suite with Polars, Matplotlib, and IPython installed.
+The heavy Rust test task serializes linker work. Individual tasks include
+`rust-format`, `rust-clippy`, `rust-test`, `rust-msrv`, `python-test`, and
+`python-test-full`. Formatting tasks that modify sources remain `format-rust`,
+`format-python`, and `format-toml`; `pixi run lint` runs the configured
+pre-commit checks. Dataset tests use generated local bundles and never require
+network access.
 
 ## Python extension
 
@@ -116,15 +118,46 @@ share one implementation. Generated `site/` and isolated rustdoc output under
 
 ## Release checks
 
-Before pushing a release tag, run the Rust and Python matrices, notebook
-validation, strict documentation build, package build, and the manual hardening
-workflow. A push of `v<package-version>` starts the Python workflow, checks that
-the tag matches `pyproject.toml`, builds wheels plus an sdist, smoke-tests the
-wheels, and then publishes the verified artifacts to PyPI.
+The workflows have separate costs and responsibilities:
+
+- `ci.yml` validates pull requests and `main` with comprehensive Linux Rust
+  checks, representative macOS/Windows checks, a Python boundary matrix, and
+  one optimized installed-wheel smoke test.
+- `compatibility.yml` runs weekly or manually across Python 3.12--3.14 on
+  Linux, macOS, and Windows, selected Rust feature combinations, and coverage.
+- `docs.yml` validates path-filtered documentation changes and deploys Pages
+  only from `main`.
+- `hardening.yml` checks dependency policy when Cargo inputs change and runs
+  pinned-nightly Miri and AddressSanitizer jobs weekly or manually.
+- `release.yml` is the only artifact publication pipeline. Release tags run
+  independent Rust, Python, documentation, and dependency gates before PyPI.
+
+The extension does not enable a PyO3 `abi3` feature, so releases build a wheel
+for every CPython ABI (3.12, 3.13, and 3.14) on Linux x86-64 and ARM64, macOS
+Intel and ARM64, and Windows x64. Linux ARM64 wheels execute on native ARM64
+runners. The sdist is installed and tested on the minimum and maximum Python
+versions. Every distribution is built once, hashed, installed in a clean
+environment, exercised, hash-verified, collected into the single
+`verified-distributions` artifact, and published without rebuilding.
+
+The MSRV and release compiler are separate policy choices even though both are
+currently pinned to Rust 1.97.0. Change them independently when the project
+raises compatibility requirements or adopts a newer release compiler.
+
+To make an optimized wheel for the current machine, run:
+
+```sh
+pixi run python-wheel
+```
+
+Maturin remains the package builder and Cargo remains authoritative for Rust
+resolution and compilation. A local native wheel is behaviorally comparable,
+but is not expected to be byte-identical to CI's manylinux, macOS, or Windows
+artifacts because their toolchains and target environments differ.
 
 The upload uses PyPI Trusted Publishing rather than a stored token. Before the
 first release, configure PyPI to trust the `hgrecco/fpm-rs` repository's
-`.github/workflows/python.yml` workflow and its `pypi` environment; PyPI supports
+`.github/workflows/release.yml` workflow and its `pypi` environment; PyPI supports
 a pending publisher for a project that does not yet exist. See the
 [PyPI Trusted Publishing guide](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
 for that one-time configuration.

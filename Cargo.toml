@@ -11,6 +11,7 @@ include = [
   "/Cargo.toml",
   "/LICENSE-MIT",
   "/README.md",
+  "/benches/**",
   "/dataset_registry.json",
   "/dataset_spec.md",
   "/examples/**",
@@ -105,3 +106,10 @@ tempfile.workspace = true
 default = []
 parquet = ["polars/parquet", "tabular"]
 tabular = ["dep:polars"]
+
+# Integration tests link the full scientific dependency graph into separate
+# executables. Keep test artifacts small and avoid retaining incremental state
+# so CI linkers have predictable memory and disk requirements.
+[profile.test]
+debug = 0
+incremental = false

@@ -53,7 +53,7 @@ def execute_notebook(relative_path: Path) -> None:
 
 def main() -> None:
     os.environ.setdefault("MPLBACKEND", "Agg")
-    run("maturin", "develop", "--skip-install")
+    run("maturin", "develop", "--skip-install", "--locked")
     shutil.rmtree(OUTPUT_ROOT, ignore_errors=True)
     OUTPUT_ROOT.mkdir(parents=True)
     for notebook in NOTEBOOKS:

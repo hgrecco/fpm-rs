@@ -1,0 +1,505 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_RUST_TOOLCHAIN: "1.97.0"
+
+jobs:
+  validate-version:
+    name: Validate version and tag provenance
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      - run: python scripts/validate_release.py
+      - name: Export package version
+        id: version
+        run: python -c "import tomllib; print('version=' + tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])" >> "$GITHUB_OUTPUT"
+
+  rust-release-gate:
+    name: Rust release gate
+    needs: validate-version
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Show runner resources
+        run: |
+          free -h
+          df -h
+          ulimit -a
+      - run: /usr/bin/time -v cargo test --workspace --all-features --locked
+      - run: cargo test --workspace --doc --all-features --locked
+      - run: cargo check --workspace --examples --all-features --locked
+
+  python-source-gate:
+    name: Python source release gate
+    needs: validate-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install --upgrade pip
+      - run: python scripts/install_python_dependencies.py build runtime test-full
+      - run: maturin develop --locked
+      - run: >-
+          python -c "import fpm_rs; assert fpm_rs.__version__ == '${{ needs.validate-version.outputs.version }}', fpm_rs.__version__"
+      - run: python -m pytest python/tests --junitxml=target/python-release-source.xml
+      - run: python scripts/check_pytest_skips.py target/python-release-source.xml
+
+  docs-release-check:
+    name: Documentation release check
+    needs: validate-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.9.3
+        with:
+          cache: true
+          cache-write: false
+          environments: docs
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - run: pixi run docs-notebooks-check
+      - run: pixi run docs-build
+
+  dependency-release-audit:
+    name: Dependency release audit
+    needs: validate-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - name: Install pinned dependency tools
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo audit --file Cargo.lock
+      - run: cargo deny --all-features check advisories licenses bans sources
+
+  build-wheels:
+    name: Build ${{ matrix.artifact }}
+    needs: validate-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+            python: "3.12"
+            artifact: wheel-linux-x86_64-py312
+            docker_options: ""
+          - os: ubuntu-latest
+            target: x86_64
+            python: "3.13"
+            artifact: wheel-linux-x86_64-py313
+            docker_options: ""
+          - os: ubuntu-latest
+            target: x86_64
+            python: "3.14"
+            artifact: wheel-linux-x86_64-py314
+            docker_options: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64
+            python: "3.12"
+            artifact: wheel-linux-aarch64-py312
+            docker_options: "-e CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8"
+          - os: ubuntu-24.04-arm
+            target: aarch64
+            python: "3.13"
+            artifact: wheel-linux-aarch64-py313
+            docker_options: "-e CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8"
+          - os: ubuntu-24.04-arm
+            target: aarch64
+            python: "3.14"
+            artifact: wheel-linux-aarch64-py314
+            docker_options: "-e CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8"
+          - os: macos-latest
+            target: aarch64
+            python: "3.12"
+            artifact: wheel-macos-aarch64-py312
+            docker_options: ""
+          - os: macos-latest
+            target: aarch64
+            python: "3.13"
+            artifact: wheel-macos-aarch64-py313
+            docker_options: ""
+          - os: macos-latest
+            target: aarch64
+            python: "3.14"
+            artifact: wheel-macos-aarch64-py314
+            docker_options: ""
+          - os: macos-15-intel
+            target: x86_64
+            python: "3.12"
+            artifact: wheel-macos-x86_64-py312
+            docker_options: ""
+          - os: macos-15-intel
+            target: x86_64
+            python: "3.13"
+            artifact: wheel-macos-x86_64-py313
+            docker_options: ""
+          - os: macos-15-intel
+            target: x86_64
+            python: "3.14"
+            artifact: wheel-macos-x86_64-py314
+            docker_options: ""
+          - os: windows-latest
+            target: x64
+            python: "3.12"
+            artifact: wheel-windows-x86_64-py312
+            docker_options: ""
+          - os: windows-latest
+            target: x64
+            python: "3.13"
+            artifact: wheel-windows-x86_64-py313
+            docker_options: ""
+          - os: windows-latest
+            target: x64
+            python: "3.14"
+            artifact: wheel-windows-x86_64-py314
+            docker_options: ""
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist --interpreter python${{ matrix.python }}
+          manylinux: auto
+          docker-options: ${{ matrix.docker_options }}
+          rust-toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}-v${{ needs.validate-version.outputs.version }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: Build source distribution
+    needs: validate-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          # Maturin 1.x does not accept --locked for the sdist subcommand.
+          # Cargo.lock is included and the exact sdist is built and tested below.
+          args: --out dist
+          rust-toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sdist-v${{ needs.validate-version.outputs.version }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  test-wheels:
+    name: Test ${{ matrix.artifact }}
+    needs: [validate-version, build-wheels]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+            artifact: wheel-linux-x86_64-py312
+          - os: ubuntu-latest
+            python: "3.13"
+            artifact: wheel-linux-x86_64-py313
+          - os: ubuntu-latest
+            python: "3.14"
+            artifact: wheel-linux-x86_64-py314
+          - os: ubuntu-24.04-arm
+            python: "3.12"
+            artifact: wheel-linux-aarch64-py312
+          - os: ubuntu-24.04-arm
+            python: "3.13"
+            artifact: wheel-linux-aarch64-py313
+          - os: ubuntu-24.04-arm
+            python: "3.14"
+            artifact: wheel-linux-aarch64-py314
+          - os: macos-latest
+            python: "3.12"
+            artifact: wheel-macos-aarch64-py312
+          - os: macos-latest
+            python: "3.13"
+            artifact: wheel-macos-aarch64-py313
+          - os: macos-latest
+            python: "3.14"
+            artifact: wheel-macos-aarch64-py314
+          - os: macos-15-intel
+            python: "3.12"
+            artifact: wheel-macos-x86_64-py312
+          - os: macos-15-intel
+            python: "3.13"
+            artifact: wheel-macos-x86_64-py313
+          - os: macos-15-intel
+            python: "3.14"
+            artifact: wheel-macos-x86_64-py314
+          - os: windows-latest
+            python: "3.12"
+            artifact: wheel-windows-x86_64-py312
+          - os: windows-latest
+            python: "3.13"
+            artifact: wheel-windows-x86_64-py313
+          - os: windows-latest
+            python: "3.14"
+            artifact: wheel-windows-x86_64-py314
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}-v${{ needs.validate-version.outputs.version }}
+          path: dist
+      - name: Record wheel hash before testing
+        run: python scripts/release_artifacts.py record dist provenance/${{ matrix.artifact }}.json
+      - name: Create clean test environment
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          virtualenv = Path(os.environ["RUNNER_TEMP"]) / "release-wheel-venv"
+          subprocess.run([sys.executable, "-m", "venv", str(virtualenv)], check=True)
+          bindir = virtualenv / ("Scripts" if os.name == "nt" else "bin")
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as path_file:
+              path_file.write(f"{bindir}\n")
+      - name: Install exact wheel with runtime dependencies
+        run: python -c "import glob, subprocess, sys; wheels = glob.glob('dist/*.whl'); assert len(wheels) == 1, wheels; subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheels[0]])"
+      - name: Install complete optional test integrations
+        run: python scripts/install_python_dependencies.py test-full
+      - name: Verify installed package version and provenance
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python "${{ github.workspace }}/scripts/verify_installed_package.py"
+          --expected-version "${{ needs.validate-version.outputs.version }}"
+      - name: Run complete installed-wheel suite
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -m pytest "${{ github.workspace }}/python/tests"
+          -o pythonpath=
+          --junitxml=wheel-tests.xml
+      - name: Reject unexpected skips
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python "${{ github.workspace }}/scripts/check_pytest_skips.py"
+          wheel-tests.xml
+      - name: Verify wheel hash after testing
+        run: python scripts/release_artifacts.py verify-record dist provenance/${{ matrix.artifact }}.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: tested-${{ matrix.artifact }}-v${{ needs.validate-version.outputs.version }}
+          path: provenance/${{ matrix.artifact }}.json
+          if-no-files-found: error
+
+  test-sdist:
+    name: Test sdist on Python ${{ matrix.python }}
+    needs: [validate-version, build-sdist]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.12"
+            abi: py312
+          - python: "3.14"
+            abi: py314
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_RUST_TOOLCHAIN }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: sdist-v${{ needs.validate-version.outputs.version }}
+          path: dist
+      - run: python scripts/release_artifacts.py record dist provenance/sdist-${{ matrix.abi }}.json
+      - name: Verify sdist workspace contents
+        run: python -c "import glob, subprocess, sys; files = glob.glob('dist/*.tar.gz'); assert len(files) == 1, files; subprocess.check_call([sys.executable, 'scripts/release_artifacts.py', 'inspect-sdist', files[0]])"
+      - name: Create clean source-build environment
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          virtualenv = Path(os.environ["RUNNER_TEMP"]) / "release-sdist-venv"
+          subprocess.run([sys.executable, "-m", "venv", str(virtualenv)], check=True)
+          bindir = virtualenv / ("Scripts" if os.name == "nt" else "bin")
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as path_file:
+              path_file.write(f"{bindir}\n")
+      - name: Install exact sdist through build isolation
+        run: python -c "import glob, subprocess, sys; files = glob.glob('dist/*.tar.gz'); assert len(files) == 1, files; subprocess.check_call([sys.executable, '-m', 'pip', 'install', files[0]])"
+      - run: python scripts/install_python_dependencies.py test-full
+      - name: Verify installed package version and provenance
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python "${{ github.workspace }}/scripts/verify_installed_package.py"
+          --expected-version "${{ needs.validate-version.outputs.version }}"
+      - name: Run complete sdist-installed suite
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python -m pytest "${{ github.workspace }}/python/tests"
+          -o pythonpath=
+          --junitxml=sdist-tests.xml
+      - name: Reject unexpected skips
+        working-directory: ${{ runner.temp }}
+        run: >-
+          python "${{ github.workspace }}/scripts/check_pytest_skips.py"
+          sdist-tests.xml
+      - run: python scripts/release_artifacts.py verify-record dist provenance/sdist-${{ matrix.abi }}.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: tested-sdist-${{ matrix.abi }}-v${{ needs.validate-version.outputs.version }}
+          path: provenance/sdist-${{ matrix.abi }}.json
+          if-no-files-found: error
+
+  inspect-distributions:
+    name: Inspect complete distribution set
+    needs: [validate-version, build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: wheel-*-v${{ needs.validate-version.outputs.version }}
+          path: incoming
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: sdist-v${{ needs.validate-version.outputs.version }}
+          path: incoming
+      - run: python scripts/install_python_dependencies.py release
+      - run: python -m twine check incoming/*
+      - run: >-
+          python scripts/release_artifacts.py inspect incoming
+          "${{ needs.validate-version.outputs.version }}"
+
+  collect-verified-distributions:
+    name: Collect hash-verified distributions
+    needs:
+      - validate-version
+      - rust-release-gate
+      - python-source-gate
+      - docs-release-check
+      - dependency-release-audit
+      - test-wheels
+      - test-sdist
+      - inspect-distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: wheel-*-v${{ needs.validate-version.outputs.version }}
+          path: incoming
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: sdist-v${{ needs.validate-version.outputs.version }}
+          path: incoming
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: tested-wheel-*-v${{ needs.validate-version.outputs.version }}
+          path: provenance
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: tested-sdist-*-v${{ needs.validate-version.outputs.version }}
+          path: provenance
+          merge-multiple: true
+      - run: python scripts/release_artifacts.py collect incoming provenance verified
+      - uses: actions/upload-artifact@v6
+        with:
+          name: verified-distributions
+          path: verified
+          if-no-files-found: error
+
+  publish:
+    name: Publish verified distributions to PyPI
+    needs: collect-verified-distributions
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/fpm-rs
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: verified-distributions
+          path: verified
+      - name: Verify release manifest immediately before publication
+        run: >-
+          python -c "import hashlib, json, pathlib;
+          root = pathlib.Path('verified');
+          expected = json.loads((root / 'RELEASE_MANIFEST.json').read_text())['files'];
+          actual = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((root / 'distributions').iterdir()) if p.is_file()};
+          assert actual == expected, (actual, expected);
+          print(f'Verified {len(actual)} release distributions')"
+      - name: Publish package distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: verified/distributions

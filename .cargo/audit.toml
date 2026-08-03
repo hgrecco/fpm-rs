@@ -1,0 +1,6 @@
+[advisories]
+# quick-xml 0.39.4 is present only through Polars' inactive optional
+# object_store dependency. `cargo tree --workspace --all-features --target all`
+# does not include it, while cargo-audit scans every Cargo.lock entry. Remove
+# these ignores when Polars' optional dependency accepts quick-xml >=0.41.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]

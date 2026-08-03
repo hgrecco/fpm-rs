@@ -1,0 +1,199 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.97.0"
+
+jobs:
+  rust-quality:
+    name: Rust format and strict Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  rust-tests:
+    name: Rust all-feature tests on Linux
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - name: Show runner resources
+        run: |
+          free -h
+          df -h
+          ulimit -a
+      - name: Unit and integration tests
+        run: /usr/bin/time -v cargo test --workspace --all-features --locked
+      - name: Doctests
+        run: cargo test --workspace --doc --all-features --locked
+      - name: Examples
+        run: cargo check --workspace --examples --all-features --locked
+
+  rust-platforms:
+    name: Rust compatibility on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --lib --tests --locked
+      - run: cargo test -p fpm-rs --doc --locked
+      - run: cargo check --workspace --examples --locked
+
+  msrv:
+    name: MSRV 1.97
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.97
+          cache-targets: false
+      - run: cargo +1.97.0 check --workspace --all-targets --locked
+
+  python-source:
+    name: Python ${{ matrix.python }} source tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.12"
+            dependencies: test-full
+            suite: full
+          - os: ubuntu-latest
+            python: "3.14"
+            dependencies: test
+            suite: core
+          - os: macos-latest
+            python: "3.14"
+            dependencies: test
+            suite: core
+          - os: windows-latest
+            python: "3.13"
+            dependencies: test
+            suite: core
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install --upgrade pip
+      - name: Install centralized build and test dependencies
+        run: python scripts/install_python_dependencies.py build runtime ${{ matrix.dependencies }}
+      - name: Build development extension
+        run: maturin develop --locked
+      - name: Run complete Python suite
+        if: matrix.suite == 'full'
+        run: python -m pytest python/tests --junitxml=target/python-full-tests.xml
+      - name: Reject unexpected skips
+        if: matrix.suite == 'full'
+        run: python scripts/check_pytest_skips.py target/python-full-tests.xml
+      - name: Run core Python suite
+        if: matrix.suite == 'core'
+        run: >-
+          python -m pytest python/tests
+          --ignore=python/tests/test_diagnostic_notebooks.py
+          --ignore=python/tests/test_diagnostics.py
+          --ignore=python/tests/test_plotting.py
+          --deselect=python/tests/test_bundles.py::test_bundle_tables_are_directly_scannable_when_polars_is_installed
+
+  optimized-wheel-smoke:
+    name: Optimized installed-wheel smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: python -m pip install --upgrade pip
+      - run: python scripts/install_python_dependencies.py build
+      - name: Build optimized wheel
+        run: maturin build --release --locked --out dist --interpreter python
+      - name: Create clean test environment
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          virtualenv = Path(os.environ["RUNNER_TEMP"]) / "wheel-venv"
+          subprocess.run([sys.executable, "-m", "venv", str(virtualenv)], check=True)
+          bindir = virtualenv / ("Scripts" if os.name == "nt" else "bin")
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as path_file:
+              path_file.write(f"{bindir}\n")
+      - name: Install exact wheel and its runtime dependencies
+        run: python -c "import glob, subprocess, sys; wheel = glob.glob('dist/*.whl'); assert len(wheel) == 1, wheel; subprocess.check_call([sys.executable, '-m', 'pip', 'install', wheel[0]])"
+      - name: Install core test dependencies
+        run: python scripts/install_python_dependencies.py test
+      - name: Verify installed package provenance
+        working-directory: ${{ runner.temp }}
+        run: python "${{ github.workspace }}/scripts/verify_installed_package.py"
+      - name: Test installed optimized wheel
+        run: >-
+          python -m pytest python/tests
+          -o pythonpath=
+          --ignore=python/tests/test_diagnostic_notebooks.py
+          --ignore=python/tests/test_diagnostics.py
+          --ignore=python/tests/test_plotting.py
+          --deselect=python/tests/test_bundles.py::test_bundle_tables_are_directly_scannable_when_polars_is_installed
