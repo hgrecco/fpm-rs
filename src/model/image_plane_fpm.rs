@@ -1,6 +1,6 @@
 use ndarray::{ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     Result,
@@ -48,7 +48,7 @@ pub(crate) struct CropDisplacementBounds {
 }
 
 /// Algorithm-facing image-plane FPM model. It contains no LED or camera geometry.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ImagePlaneModel {
     /// One transverse wave vector per illumination source.
     pub(crate) k_vectors: Vec<KVector>,
@@ -64,6 +64,47 @@ pub struct ImagePlaneModel {
     pub(crate) background: Option<Vec<f64>>,
     /// Optional measured-frame rows of `(source_index, incoherent_weight)`.
     pub(crate) multiplexing_matrix: Option<MultiplexingMatrix>,
+}
+
+impl<'de> Deserialize<'de> for ImagePlaneModel {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Representation {
+            k_vectors: Vec<KVector>,
+            pupil: Pupil,
+            crop_indices: CropIndices,
+            #[serde(default)]
+            subpixel_offsets: Option<Vec<FourierOffset>>,
+            sampling: Sampling,
+            image_shape: (usize, usize),
+            reconstruction_shape: (usize, usize),
+            frame_gains: Option<Vec<f64>>,
+            background: Option<Vec<f64>>,
+            multiplexing_matrix: Option<MultiplexingMatrix>,
+        }
+
+        let representation = Representation::deserialize(deserializer)?;
+        let model = Self {
+            k_vectors: representation.k_vectors,
+            pupil: representation.pupil,
+            crop_indices: representation.crop_indices,
+            subpixel_offsets: representation.subpixel_offsets,
+            sampling: representation.sampling,
+            image_shape: representation.image_shape,
+            reconstruction_shape: representation.reconstruction_shape,
+            frame_gains: representation.frame_gains,
+            background: representation.background,
+            multiplexing_matrix: representation.multiplexing_matrix,
+        };
+        model.validate().map_err(D::Error::custom)?;
+        Ok(model)
+    }
 }
 
 impl ImagePlaneModel {

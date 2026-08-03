@@ -634,6 +634,45 @@ fn non_finite_model_parameters_are_rejected() {
 }
 
 #[test]
+fn image_plane_model_deserialization_validates_schema_and_relationships() {
+    let model = ImagePlaneModel::from_experiment(
+        &optics(),
+        &LEDArray::new(),
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
+    )
+    .unwrap();
+    let serialized = serde_json::to_value(&model).unwrap();
+
+    let round_trip: ImagePlaneModel = serde_json::from_value(serialized.clone()).unwrap();
+    assert_eq!(serde_json::to_value(round_trip).unwrap(), serialized);
+
+    let mut unknown_field = serialized.clone();
+    unknown_field["unexpected"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<ImagePlaneModel>(unknown_field).is_err());
+
+    let mut source_crop_mismatch = serialized.clone();
+    source_crop_mismatch["crop_indices"]["crops"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<ImagePlaneModel>(source_crop_mismatch).is_err());
+
+    let mut offset_mismatch = serialized.clone();
+    offset_mismatch["subpixel_offsets"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<ImagePlaneModel>(offset_mismatch).is_err());
+
+    let mut frame_gain_mismatch = serialized.clone();
+    frame_gain_mismatch["frame_gains"] = serde_json::json!([1.0, 1.0]);
+    assert!(serde_json::from_value::<ImagePlaneModel>(frame_gain_mismatch).is_err());
+
+    let mut background_mismatch = serialized.clone();
+    background_mismatch["background"] = serde_json::json!([0.0]);
+    assert!(serde_json::from_value::<ImagePlaneModel>(background_mismatch).is_err());
+
+    let mut invalid_multiplexing = serialized;
+    invalid_multiplexing["multiplexing_matrix"] = serde_json::json!([[[1, 1.0]]]);
+    assert!(serde_json::from_value::<ImagePlaneModel>(invalid_multiplexing).is_err());
+}
+
+#[test]
 fn led_intensity_weights_compile_in_acquisition_order() {
     let array = LEDArray::new()
         .grid_shape((1, 3))

@@ -300,6 +300,8 @@ impl<T: Clone + Default> StandardArray3<T> {
 mod tests {
     use ndarray::{Array2, Array3, ShapeBuilder, array, s};
 
+    use crate::Error;
+
     use super::{StandardArray2, StandardArray3, StandardView2, StandardViewMut2};
 
     #[test]
@@ -354,5 +356,32 @@ mod tests {
 
         let fortran = Array3::from_shape_vec((2, 2, 2).f(), (0..8).collect()).unwrap();
         assert!(StandardArray3::try_from(fortran).is_err());
+    }
+
+    #[test]
+    fn nonstandard_owned_stack_layouts_are_rejected() {
+        let permuted = Array3::from_shape_vec((2, 3, 4), (0..24).collect())
+            .unwrap()
+            .permuted_axes([1, 0, 2]);
+        assert!(matches!(
+            StandardArray3::try_from(permuted),
+            Err(Error::NonStandardLayout { .. })
+        ));
+
+        let stepped = Array3::from_shape_vec((2, 3, 8), (0..48).collect())
+            .unwrap()
+            .slice_move(s![.., .., ..;2]);
+        assert!(matches!(
+            StandardArray3::try_from(stepped),
+            Err(Error::NonStandardLayout { .. })
+        ));
+
+        let reversed = Array3::from_shape_vec((2, 3, 4), (0..24).collect())
+            .unwrap()
+            .slice_move(s![.., ..;-1, ..]);
+        assert!(matches!(
+            StandardArray3::try_from(reversed),
+            Err(Error::NonStandardLayout { .. })
+        ));
     }
 }

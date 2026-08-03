@@ -81,6 +81,19 @@ def test_measurement_stack_rejects_noncontiguous_arrays_and_masks(
     np.testing.assert_allclose(stack.frame_weights, [0.5])
 
 
+def test_measurement_stack_requires_explicit_copy_for_stepped_slice() -> None:
+    values = np.arange(128, dtype=np.float64).reshape(1, 8, 16)[:, :, ::2]
+    assert values.shape == (1, 8, 8)
+    assert not values.flags.c_contiguous
+
+    with pytest.raises(fpm.InvalidShapeError, match="ascontiguousarray"):
+        fpm.MeasurementStack(values)
+
+    contiguous = np.ascontiguousarray(values)
+    stack = fpm.MeasurementStack(contiguous)
+    np.testing.assert_array_equal(stack.array, contiguous)
+
+
 def test_synthetic_object_rejects_noncontiguous_fields() -> None:
     field = np.ones((16, 16), dtype=np.complex128).T
     with pytest.raises(fpm.InvalidShapeError, match="ascontiguousarray"):
