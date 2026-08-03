@@ -1,6 +1,6 @@
 [project]
 name = "fpm-rs"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 description = "High-performance Fourier ptychography reconstruction, simulation, and diagnostics for Python, powered by Rust."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
