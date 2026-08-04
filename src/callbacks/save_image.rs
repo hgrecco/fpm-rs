@@ -8,12 +8,14 @@ use crate::{
 
 use super::{Callback, CallbackAction, CallbackHook, StepContext};
 
+/// Periodically writes reconstructed object amplitude and wrapped phase PNG previews.
 pub struct SaveImageEvery {
     frequency: usize,
     directory: PathBuf,
 }
 
 impl SaveImageEvery {
+    /// Creates an image callback; zero `frequency` is normalized to one.
     pub fn new(frequency: usize, directory: impl Into<PathBuf>) -> Self {
         Self {
             frequency: frequency.max(1),
@@ -66,12 +68,14 @@ impl Callback for SaveImageEvery {
     }
 }
 
+/// Periodically writes recovered pupil amplitude and wrapped phase PNG previews.
 pub struct SavePupilEvery {
     frequency: usize,
     directory: PathBuf,
 }
 
 impl SavePupilEvery {
+    /// Creates a pupil callback; zero `frequency` is normalized to one.
     pub fn new(frequency: usize, directory: impl Into<PathBuf>) -> Self {
         Self {
             frequency: frequency.max(1),
@@ -131,6 +135,7 @@ pub struct SaveResidualsEvery {
 }
 
 impl SaveResidualsEvery {
+    /// Creates a residual callback; zero `frequency` is normalized to one.
     pub fn new(frequency: usize, directory: impl Into<PathBuf>) -> Self {
         Self {
             frequency: frequency.max(1),

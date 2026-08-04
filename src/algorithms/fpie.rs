@@ -29,9 +29,9 @@ use super::{
 ///
 /// # Reference
 ///
-/// A. Maiden, D. Johnson, and P. Li, “Further improvements to the
-/// ptychographical iterative engine,” *Optica* **4**(7), 736–745 (2017),
-/// [doi:10.1364/OPTICA.4.000736](https://doi.org/10.1364/OPTICA.4.000736).
+/// [A. Maiden, D. Johnson, and P. Li, “Further improvements to the
+/// ptychographical iterative engine” (2017)](https://doi.org/10.1364/OPTICA.4.000736),
+/// *Optica* **4**(7), 736–745.
 #[derive(Clone, Debug)]
 pub struct Fpie {
     /// Number of complete passes through the acquisition schedule.
@@ -64,16 +64,19 @@ impl Default for Fpie {
 }
 
 impl Fpie {
+    /// Sets the number of complete acquisition-schedule passes; validation requires non-zero.
     pub fn iterations(mut self, iterations: usize) -> Self {
         self.iterations = iterations;
         self
     }
 
+    /// Sets the finite positive relaxation applied to object-spectrum corrections.
     pub fn object_step(mut self, step: f64) -> Self {
         self.object_step = step;
         self
     }
 
+    /// Sets the rPIE pupil-power blend after clamping the value to `[0, 1]`.
     pub fn stability(mut self, stability: f64) -> Self {
         self.stability = stability.clamp(0.0, 1.0);
         self

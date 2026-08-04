@@ -14,14 +14,19 @@ use crate::{
 
 use super::{ReconstructionCheckpoint, ReconstructionProblem};
 
+/// Resumable per-source auxiliary and scaled-dual fields for ADMM.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AdmmAuxiliaryState {
+    /// Row-major complex auxiliary detector fields for all individual sources.
     pub auxiliary_fields: Vec<Complex64>,
+    /// Row-major complex scaled-dual fields with the same length and ordering.
     pub dual_fields: Vec<Complex64>,
 }
 
+/// Solver-specific state preserved in checkpoints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AlgorithmAuxiliaryState {
+    /// ADMM auxiliary and scaled-dual fields.
     Admm(AdmmAuxiliaryState),
 }
 
@@ -75,6 +80,11 @@ impl ReconstructionScratch {
     }
 }
 
+/// Mutable numerical state shared by algorithms during reconstruction.
+///
+/// The object spectrum is centered and shaped on the high-resolution grid. The pupil and
+/// scratch arrays use the low-resolution grid. Accessors borrow storage without copying;
+/// mutating the spectrum invalidates the cached object-domain field.
 #[derive(Clone)]
 pub struct ReconstructionState {
     pub(crate) object_spectrum: StandardArray2<Complex64>,
@@ -104,27 +114,33 @@ impl std::fmt::Debug for ReconstructionState {
 }
 
 impl ReconstructionState {
+    /// Borrows the centered high-resolution complex object spectrum.
     pub fn object_spectrum(&self) -> ArrayView2<'_, Complex64> {
         self.object_spectrum.ndarray_view()
     }
 
+    /// Mutably borrows the object spectrum and invalidates the object-domain cache.
     pub fn object_spectrum_mut(&mut self) -> ArrayViewMut2<'_, Complex64> {
         self.object_real_space_cache = None;
         self.object_spectrum.ndarray_view_mut()
     }
 
+    /// Borrows the current low-resolution complex pupil and binary support.
     pub fn pupil(&self) -> &Pupil {
         &self.pupil
     }
 
+    /// Borrows optional per-source `(row, column)` corrections in Fourier-grid pixels.
     pub fn illumination_corrections(&self) -> Option<&[(f64, f64)]> {
         self.illumination_corrections.as_deref()
     }
 
+    /// Borrows optional positive gains in acquisition-frame order.
     pub fn frame_gains(&self) -> Option<&[f64]> {
         self.frame_gains.as_deref()
     }
 
+    /// Borrows optional additive backgrounds in acquisition-frame order.
     pub fn background(&self) -> Option<&[f64]> {
         self.background.as_deref()
     }
@@ -138,6 +154,7 @@ impl ReconstructionState {
         self.object_spectrum.view()
     }
 
+    /// Adds the current calibration correction to a model source offset and validates bounds.
     pub fn effective_source_offset(
         &self,
         model: &ImagePlaneModel,
@@ -162,6 +179,7 @@ impl ReconstructionState {
         Ok(effective)
     }
 
+    /// Initializes a CPU-backed object estimate from weighted measured amplitudes.
     pub fn initialize<M: MeasurementRead>(problem: &ReconstructionProblem<M>) -> Result<Self> {
         let backend: Arc<dyn Backend> = Arc::new(CpuBackend::new(
             problem.model.image_shape,
@@ -170,6 +188,8 @@ impl ReconstructionState {
         Self::initialize_with_backend(problem, backend)
     }
 
+    /// Initializes an object estimate, pupil, calibration variables, and scratch storage
+    /// using `backend` after validating `problem`.
     pub fn initialize_with_backend<M: MeasurementRead>(
         problem: &ReconstructionProblem<M>,
         backend: Arc<dyn Backend>,
@@ -245,6 +265,7 @@ impl ReconstructionState {
         })
     }
 
+    /// Initializes state from an owned standard-layout high-resolution complex object.
     pub fn from_object<M: MeasurementRead>(
         problem: &ReconstructionProblem<M>,
         object: Array2<Complex64>,
@@ -272,6 +293,7 @@ impl ReconstructionState {
         Ok(state)
     }
 
+    /// Restores CPU-backed state from a checkpoint validated against `problem`.
     pub fn from_checkpoint<M: MeasurementRead>(
         problem: &ReconstructionProblem<M>,
         checkpoint: &ReconstructionCheckpoint,
@@ -283,6 +305,7 @@ impl ReconstructionState {
         Self::from_checkpoint_with_backend(problem, checkpoint, backend)
     }
 
+    /// Restores state from a compatible checkpoint using `backend`.
     pub fn from_checkpoint_with_backend<M: MeasurementRead>(
         problem: &ReconstructionProblem<M>,
         checkpoint: &ReconstructionCheckpoint,

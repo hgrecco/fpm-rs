@@ -5,12 +5,19 @@ use serde::{Deserialize, Serialize};
 /// Summary statistics calculated from one intensity image.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IntensityStats {
+    /// Arithmetic mean intensity.
     pub mean: f64,
+    /// Population standard deviation of intensity.
     pub std: f64,
+    /// Minimum intensity.
     pub min: f64,
+    /// Maximum intensity.
     pub max: f64,
+    /// Sum of intensities.
     pub sum: f64,
+    /// Pixels at or above the optional saturation threshold, or zero when absent.
     pub saturated_pixels: usize,
+    /// Pixels exactly equal to zero.
     pub zero_pixels: usize,
 }
 

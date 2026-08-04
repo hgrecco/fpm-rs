@@ -29,11 +29,13 @@ pub struct AdmmIterationMetrics {
 }
 
 impl AdmmIterationMetrics {
+    /// Returns the root-mean-square consensus residual, or `None` before any mode is visited.
     pub fn primal_residual_rms(&self) -> Option<f64> {
         (self.residual_count > 0)
             .then(|| (self.primal_residual_sum_squares / self.residual_count as f64).sqrt())
     }
 
+    /// Returns the penalty-scaled RMS auxiliary-field change, or `None` when empty.
     pub fn dual_residual_rms(&self) -> Option<f64> {
         (self.residual_count > 0)
             .then(|| (self.dual_residual_sum_squares / self.residual_count as f64).sqrt())
@@ -108,10 +110,9 @@ impl AlgorithmIterationMetrics for AdmmIterationMetrics {
 ///
 /// # Reference
 ///
-/// A. Wang, Z. Zhang, S. Wang, A. Pan, C. Ma, and B. Yao, “Fourier
-/// Ptychographic Microscopy via Alternating Direction Method of Multipliers,”
-/// *Cells* **11**(9), 1512 (2022),
-/// [doi:10.3390/cells11091512](https://doi.org/10.3390/cells11091512).
+/// [A. Wang, Z. Zhang, S. Wang, A. Pan, C. Ma, and B. Yao, “Fourier
+/// Ptychographic Microscopy via Alternating Direction Method of Multipliers”
+/// (2022)](https://doi.org/10.3390/cells11091512), *Cells* **11**(9), 1512.
 #[derive(Clone, Debug)]
 pub struct Admm {
     /// Number of complete passes through the acquisition schedule.
@@ -144,26 +145,31 @@ impl Default for Admm {
 }
 
 impl Admm {
+    /// Sets the number of complete acquisition-schedule passes; validation requires non-zero.
     pub fn iterations(mut self, iterations: usize) -> Self {
         self.iterations = iterations;
         self
     }
 
+    /// Sets the finite positive step size for the linearized object update.
     pub fn object_step(mut self, step: f64) -> Self {
         self.object_step = step;
         self
     }
 
+    /// Sets the finite positive augmented-Lagrangian consensus penalty.
     pub fn penalty(mut self, penalty: f64) -> Self {
         self.penalty = penalty;
         self
     }
 
+    /// Sets finite scaled-dual relaxation in the inclusive interval `[0, 2]`.
     pub fn dual_relaxation(mut self, relaxation: f64) -> Self {
         self.dual_relaxation = relaxation;
         self
     }
 
+    /// Sets the positive acquisition-frame batch size.
     pub fn batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self

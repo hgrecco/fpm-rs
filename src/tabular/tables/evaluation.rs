@@ -2,6 +2,7 @@ use polars::prelude::*;
 
 use crate::{Result, evaluation::FrameIntensityEvaluation};
 
+/// Builds one predicted-versus-measured intensity comparison row per acquisition frame.
 pub fn frame_evaluation_dataframe(
     run_id: &str,
     evaluation: &FrameIntensityEvaluation,

@@ -1,8 +1,15 @@
+//! Allocation-aware helpers for two-dimensional complex sample fields.
+//!
+//! Use [`crate::complex::amplitude`] and [`crate::complex::phase`] to derive real arrays,
+//! or [`crate::complex::from_amplitude_phase`] to construct a complex field. Inputs are borrowed
+//! [`ndarray`] views and results are newly allocated in standard row-major order.
+
 use ndarray::{Array2, ArrayView2, Zip};
 use num_complex::Complex64;
 
 use crate::{Error, Result};
 
+/// Double-precision complex scalar used for fields, spectra, and pupils.
 pub type Complex = Complex64;
 
 /// Computes amplitude from any logical two-dimensional layout.

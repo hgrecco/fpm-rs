@@ -35,6 +35,7 @@ impl ForwardWorkspace {
         })
     }
 
+    /// Borrows the most recently computed coherent detector field in row-major order.
     pub fn field(&self) -> &[Complex64] {
         &self.field
     }
@@ -53,6 +54,7 @@ pub struct ForwardModel<'a> {
 }
 
 impl<'a> ForwardModel<'a> {
+    /// Validates `model` and creates a CPU-backed evaluator borrowing it.
     pub fn new(model: &'a ImagePlaneModel) -> Result<Self> {
         let backend: Arc<dyn Backend> = Arc::new(CpuBackend::new(
             model.image_shape,
@@ -61,19 +63,23 @@ impl<'a> ForwardModel<'a> {
         Self::with_backend(model, backend)
     }
 
+    /// Validates `model` and creates an evaluator using the shared execution `backend`.
     pub fn with_backend(model: &'a ImagePlaneModel, backend: Arc<dyn Backend>) -> Result<Self> {
         model.validate()?;
         Ok(Self { model, backend })
     }
 
+    /// Returns the compiled model borrowed by this evaluator.
     pub fn model(&self) -> &ImagePlaneModel {
         self.model
     }
 
+    /// Allocates reusable buffers sized for the model's low-resolution grid.
     pub fn workspace(&self) -> Result<ForwardWorkspace> {
         ForwardWorkspace::new(self.model)
     }
 
+    /// Allocates and returns one source's low-resolution complex Fourier patch.
     pub fn extract_patch(
         &self,
         object_spectrum: ArrayView2<'_, Complex64>,
@@ -86,6 +92,7 @@ impl<'a> ForwardModel<'a> {
         Ok(Array2::from_shape_vec(self.model.image_shape, values)?)
     }
 
+    /// Adds `scale * update` through the adjoint crop operator into `object_spectrum`.
     pub fn insert_patch_update(
         &self,
         object_spectrum: ArrayViewMut2<'_, Complex64>,
@@ -97,6 +104,7 @@ impl<'a> ForwardModel<'a> {
             .insert_patch_adjoint(object_spectrum, source, update, scale)
     }
 
+    /// Multiplies a row-major complex patch by the same-shaped sampled `pupil`.
     pub fn apply_pupil(
         &self,
         patch: &[Complex64],
@@ -193,6 +201,10 @@ impl<'a> ForwardModel<'a> {
         }
     }
 
+    /// Allocates the predicted `(row, column)` intensity array for one acquisition frame.
+    ///
+    /// Coded frames are incoherent weighted sums of source intensities. Optional frame
+    /// gain and optical background are applied to the result.
     pub fn forward_intensity(
         &self,
         object_spectrum: ArrayView2<'_, Complex64>,
@@ -212,6 +224,7 @@ impl<'a> ForwardModel<'a> {
         Ok(Array2::from_shape_vec(self.model.image_shape, values)?)
     }
 
+    /// Writes one predicted frame to row-major `destination`, reusing `workspace`.
     pub fn forward_intensity_into(
         &self,
         object_spectrum: ArrayView2<'_, Complex64>,
@@ -380,6 +393,7 @@ impl<'a> ForwardModel<'a> {
         Ok(destination)
     }
 
+    /// Returns row-major `predicted - measured` intensity residuals for one frame.
     pub fn residual(
         &self,
         object_spectrum: ArrayView2<'_, Complex64>,
@@ -400,6 +414,10 @@ impl<'a> ForwardModel<'a> {
             .collect())
     }
 
+    /// Replaces coherent-field amplitude with measured amplitude while retaining phase.
+    ///
+    /// Frame gain and background are inverted before taking the square root of measured
+    /// intensity. `epsilon` is a positive floor for dark predicted amplitudes.
     pub fn amplitude_projection(
         &self,
         field: &[Complex64],
@@ -454,6 +472,7 @@ impl<'a> ForwardModel<'a> {
             .collect())
     }
 
+    /// Evaluates `loss_type` between one predicted and measured intensity frame.
     pub fn frame_loss(
         &self,
         object_spectrum: ArrayView2<'_, Complex64>,

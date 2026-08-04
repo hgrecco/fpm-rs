@@ -4,16 +4,28 @@ use crate::error::{Error, Result};
 
 use super::{IlluminationSource, KVector, Optics};
 
+/// Regular planar LED grid centered above the sample.
+///
+/// The grid shape is `(rows, columns)`, while [`Self::center`] is `(column, row)` in
+/// grid-index coordinates. Natural source order is row-major; an optional permutation
+/// changes the compiled source order to match acquisition-frame order.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LEDArray {
+    /// Number of LEDs as `(rows, columns)`; both dimensions must be non-zero.
     pub grid_shape: (usize, usize),
+    /// Centre-to-centre spacing between adjacent LEDs, in metres.
     pub pitch: f64,
+    /// Positive perpendicular distance from the LED plane to the sample, in metres.
     pub distance: f64,
     /// LED-grid coordinate that lies on the optical axis, `(column, row)`.
     pub center: (f64, f64),
+    /// Optional vacuum wavelength in metres, replacing [`Optics::wavelength`] for this array.
     pub wavelength_override: Option<f64>,
+    /// Optional permutation from acquisition order to natural row-major LED indices.
     pub illumination_order: Option<Vec<usize>>,
+    /// Optional positive multiplicative intensity gain per natural-order LED.
     pub intensity_weights: Option<Vec<f64>>,
+    /// Counter-clockwise in-plane grid rotation about its centre, in radians.
     pub rotation_radians: f64,
 }
 
@@ -33,50 +45,61 @@ impl Default for LEDArray {
 }
 
 impl LEDArray {
+    /// Creates the default one-LED grid with 4 mm pitch and 90 mm distance.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets `(rows, columns)`; validation later rejects zero dimensions or count overflow.
     pub fn grid_shape(mut self, shape: (usize, usize)) -> Self {
         self.grid_shape = shape;
         self
     }
 
+    /// Sets the positive LED pitch in metres.
     pub fn pitch(mut self, pitch: f64) -> Self {
         self.pitch = pitch;
         self
     }
 
+    /// Sets the positive LED-plane-to-sample distance in metres.
     pub fn distance(mut self, distance: f64) -> Self {
         self.distance = distance;
         self
     }
 
+    /// Sets the optical-axis grid coordinate as `(column, row)`, including fractional indices.
     pub fn center(mut self, center: (f64, f64)) -> Self {
         self.center = center;
         self
     }
 
+    /// Overrides the vacuum illumination wavelength with a positive value in metres.
     pub fn wavelength_override(mut self, wavelength: f64) -> Self {
         self.wavelength_override = Some(wavelength);
         self
     }
 
+    /// Sets the acquisition-to-natural source permutation.
     pub fn illumination_order(mut self, order: Vec<usize>) -> Self {
         self.illumination_order = Some(order);
         self
     }
 
+    /// Sets one finite positive intensity gain for each natural-order LED.
     pub fn intensity_weights(mut self, weights: Vec<f64>) -> Self {
         self.intensity_weights = Some(weights);
         self
     }
 
+    /// Sets the counter-clockwise in-plane rotation in degrees, stored internally in radians.
     pub fn rotation_deg(mut self, degrees: f64) -> Self {
         self.rotation_radians = degrees.to_radians();
         self
     }
 
+    /// Checks non-zero dimensions, positive finite geometry and wavelength, finite pose,
+    /// a complete source permutation, and one finite positive weight per LED.
     pub fn validate(&self) -> Result<()> {
         let count = self
             .grid_shape

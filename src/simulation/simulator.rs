@@ -17,6 +17,11 @@ use super::{
     result::SimulationParameters,
 };
 
+/// Builder for deterministic synthetic image-plane FPM acquisitions.
+///
+/// The simulator owns its true model and optional object, assumed reconstruction model,
+/// camera, and illumination errors. [`Self::simulate`] consumes the builder and returns
+/// all measurements and ground-truth artifacts.
 pub struct Simulator {
     true_model: ImagePlaneModel,
     reconstruction_model: Option<ImagePlaneModel>,
@@ -44,6 +49,7 @@ impl Simulator {
         }
     }
 
+    /// Creates an ideal optical-intensity simulator without camera or acquisition errors.
     pub fn ideal(model: ImagePlaneModel) -> Self {
         Self {
             ideal: true,
@@ -51,11 +57,13 @@ impl Simulator {
         }
     }
 
+    /// Sets the owned high-resolution complex ground-truth object.
     pub fn object(mut self, object: SyntheticObject) -> Self {
         self.object = Some(object);
         self
     }
 
+    /// Adds a detector response and marks the acquisition non-ideal.
     pub fn camera(mut self, camera: CameraModel) -> Self {
         self.camera = Some(camera);
         self.ideal = false;
@@ -83,6 +91,7 @@ impl Simulator {
         self
     }
 
+    /// Sets the deterministic random seed used by acquisition and camera noise.
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = seed;
         self

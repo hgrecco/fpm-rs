@@ -99,6 +99,7 @@ impl Clone for LazyMeasurementStack {
 }
 
 impl LazyMeasurementStack {
+    /// Opens same-shaped grayscale files without decoding their pixels until requested.
     pub fn from_image_files<P: AsRef<Path>>(
         paths: &[P],
         frame_metadata: Vec<FrameMetadata>,
@@ -159,6 +160,7 @@ impl LazyMeasurementStack {
         Self::from_manifest_definition(manifest, base_directory)
     }
 
+    /// Opens a manifest value lazily, resolving relative paths beneath `base_directory`.
     pub fn from_manifest_definition(
         manifest: MeasurementSpec,
         base_directory: impl AsRef<Path>,
@@ -251,6 +253,7 @@ impl LazyMeasurementStack {
         Ok(stack)
     }
 
+    /// Stores one finite row-major dark frame and enables subtraction during decoding.
     pub fn with_dark_frame(mut self, dark: Vec<f64>) -> Result<Self> {
         self.validate_correction("dark frame", &dark, false)?;
         self.dark_frame = Some(dark);
@@ -259,6 +262,7 @@ impl LazyMeasurementStack {
         Ok(self)
     }
 
+    /// Stores one positive finite row-major flat field and enables division during decoding.
     pub fn with_flat_field(mut self, flat: Vec<f64>) -> Result<Self> {
         self.validate_correction("flat field", &flat, false)?;
         if flat.iter().any(|&value| value <= 0.0) {
@@ -272,6 +276,7 @@ impl LazyMeasurementStack {
         Ok(self)
     }
 
+    /// Stores a finite broadcast frame or full `(frame, row, column)` background stack.
     pub fn with_background(mut self, background: Vec<f64>) -> Result<Self> {
         self.validate_correction("background", &background, true)?;
         self.background = Some(background);
@@ -280,6 +285,7 @@ impl LazyMeasurementStack {
         Ok(self)
     }
 
+    /// Stores a binary broadcast mask or full row-major `(frame, row, column)` mask stack.
     pub fn with_masks(mut self, masks: Vec<u8>) -> Result<Self> {
         let frame_len = self.frame_len();
         let stack_len = self.stack_len()?;
@@ -293,12 +299,14 @@ impl LazyMeasurementStack {
         Ok(self)
     }
 
+    /// Enables division by each frame's positive exposure time during decoding.
     pub fn normalize_exposure(mut self) -> Self {
         self.preprocessing.normalize_exposure = true;
         self.reset_cache();
         self
     }
 
+    /// Enables clamping corrected negative intensities to zero during decoding.
     pub fn clamp_negative(mut self) -> Self {
         self.preprocessing.clamp_negative = true;
         self.reset_cache();
@@ -342,22 +350,27 @@ impl LazyMeasurementStack {
         Ok(self)
     }
 
+    /// Returns the acquisition-frame count.
     pub fn frame_count(&self) -> usize {
         self.paths.len()
     }
 
+    /// Returns low-resolution frame shape as `(height, width)`.
     pub fn image_shape(&self) -> (usize, usize) {
         self.image_shape
     }
 
+    /// Returns the row-major element count of one decoded frame.
     pub fn frame_len(&self) -> usize {
         self.image_shape.0 * self.image_shape.1
     }
 
+    /// Borrows metadata in acquisition-frame order.
     pub fn frame_metadata(&self) -> &[FrameMetadata] {
         &self.frame_metadata
     }
 
+    /// Borrows corrections applied when an uncached frame is decoded.
     pub fn preprocessing(&self) -> &PreprocessingConfig {
         &self.preprocessing
     }
@@ -368,6 +381,7 @@ impl LazyMeasurementStack {
         &self.paths
     }
 
+    /// Returns the decoded-frame count, or zero if the cache lock is poisoned.
     pub fn cached_frame_count(&self) -> usize {
         // These lightweight status accessors predate fallible cache metrics.
         // Zero is deliberately a conservative value when a poisoned lock makes
@@ -375,10 +389,12 @@ impl LazyMeasurementStack {
         self.cache.lock().map_or(0, |cache| cache.frames.len())
     }
 
+    /// Returns bytes occupied by decoded `f64` frames, or zero after lock poisoning.
     pub fn cached_byte_count(&self) -> usize {
         self.cache.lock().map_or(0, |cache| cache.bytes)
     }
 
+    /// Returns a shared row-major decoded intensity frame, loading and caching on a miss.
     pub fn frame(&self, index: usize) -> Result<Arc<Vec<f64>>> {
         if index >= self.frame_count() {
             return Err(Error::FrameOutOfRange {
@@ -460,6 +476,7 @@ impl LazyMeasurementStack {
         Ok(loaded)
     }
 
+    /// Returns a frame's non-negative reconstruction weight.
     pub fn frame_weight(&self, index: usize) -> Result<f64> {
         self.frame_metadata
             .get(index)
@@ -470,6 +487,7 @@ impl LazyMeasurementStack {
             })
     }
 
+    /// Borrows a frame's binary row-major mask, including a broadcast mask.
     pub fn frame_mask(&self, index: usize) -> Result<Option<&[u8]>> {
         if index >= self.frame_count() {
             return Err(Error::FrameOutOfRange {
@@ -489,6 +507,7 @@ impl LazyMeasurementStack {
         }
     }
 
+    /// Decodes every frame into a new resident [`MeasurementStack`].
     pub fn materialize(&self) -> Result<MeasurementStack> {
         let mut data = Vec::with_capacity(self.stack_len()?);
         for frame in 0..self.frame_count() {
@@ -510,6 +529,8 @@ impl LazyMeasurementStack {
         Ok(stack)
     }
 
+    /// Checks paths/page indices/metadata counts, shape and cache capacities, metadata,
+    /// required correction buffers, background and mask lengths, and finite values.
     pub fn validate(&self) -> Result<()> {
         if self.paths.is_empty()
             || self.frame_metadata.len() != self.paths.len()

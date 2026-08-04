@@ -5,6 +5,7 @@ use crate::{
     benchmark::{BenchmarkFrameRecord, BenchmarkRecord},
 };
 
+/// Builds one stable summary row per benchmark run.
 pub fn benchmark_runs_dataframe(records: &[BenchmarkRecord]) -> Result<DataFrame> {
     let length = records.len();
     let mut run_ids = Vec::with_capacity(length);
@@ -78,6 +79,7 @@ pub fn benchmark_runs_dataframe(records: &[BenchmarkRecord]) -> Result<DataFrame
     )?)
 }
 
+/// Builds one row per recorded acquisition-frame benchmark metric.
 pub fn benchmark_frames_dataframe(records: &[BenchmarkRecord]) -> Result<DataFrame> {
     let length = records.iter().map(|record| record.frames.len()).sum();
     let mut run_ids = Vec::with_capacity(length);
@@ -110,6 +112,7 @@ pub fn benchmark_frames_dataframe(records: &[BenchmarkRecord]) -> Result<DataFra
     )?)
 }
 
+/// Builds one result-bundle artifact row per run with a supplied relative path.
 pub fn benchmark_artifacts_dataframe(
     records: &[BenchmarkRecord],
     relative_result_paths: &std::collections::BTreeMap<String, String>,
@@ -132,6 +135,7 @@ pub fn benchmark_artifacts_dataframe(
     )?)
 }
 
+/// Builds long-form non-promoted key/value metadata rows for benchmark runs.
 pub fn benchmark_metadata_dataframe(records: &[BenchmarkRecord]) -> Result<DataFrame> {
     const PROMOTED: &[&str] = &[
         "repetition",

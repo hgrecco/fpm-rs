@@ -21,6 +21,10 @@ use super::{
     ReconstructionState, ReconstructionTrace, RunOptions, RuntimeInfo, state_object,
 };
 
+/// Configurable executor for one reconstruction algorithm.
+///
+/// A runner owns the algorithm, run options, callbacks, optional checkpoint, and optional
+/// backend. [`Self::run`] consumes the runner and borrows a validated problem.
 pub struct Runner<A> {
     algorithm: A,
     options: RunOptions,
@@ -30,6 +34,7 @@ pub struct Runner<A> {
 }
 
 impl<A: ReconstructionAlgorithm> Runner<A> {
+    /// Creates a runner from an algorithm and algorithm-independent options.
     pub fn new(algorithm: A, options: RunOptions) -> Self {
         Self {
             algorithm,
@@ -40,26 +45,34 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
         }
     }
 
+    /// Appends one callback in invocation order.
     pub fn with_callback(mut self, callback: Box<dyn Callback>) -> Self {
         self.callbacks.push(callback);
         self
     }
 
+    /// Appends callbacks in their vector order.
     pub fn with_callbacks(mut self, callbacks: Vec<Box<dyn Callback>>) -> Self {
         self.callbacks.extend(callbacks);
         self
     }
 
+    /// Sets a validated checkpoint from which state and elapsed trace are restored.
     pub fn resume_from(mut self, checkpoint: ReconstructionCheckpoint) -> Self {
         self.initial_checkpoint = Some(checkpoint);
         self
     }
 
+    /// Selects an execution backend used to initialize or restore state.
     pub fn with_backend(mut self, backend: Arc<dyn Backend>) -> Self {
         self.backend = Some(backend);
         self
     }
 
+    /// Validates inputs, executes scheduled batches and callbacks, and returns owned results.
+    ///
+    /// The run stops at `max_iterations` or when a callback returns a stop action. A supplied
+    /// checkpoint must match the problem and the algorithm's required auxiliary state.
     pub fn run<M: MeasurementRead>(
         mut self,
         problem: &ReconstructionProblem<M>,

@@ -21,8 +21,11 @@ use crate::{
 /// image sampling pitch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadialFourierSpectrum {
+    /// Mean annular radius in Fourier-grid pixels for each non-empty bin.
     pub radius_px: Vec<f64>,
+    /// Mean Fourier power per bin, normalized by total field element count squared.
     pub power: Vec<f64>,
+    /// Number of Fourier pixels accumulated into each bin.
     pub sample_count: Vec<usize>,
 }
 

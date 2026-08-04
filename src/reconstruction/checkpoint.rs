@@ -16,6 +16,7 @@ use super::{
     AlgorithmAuxiliaryState, ReconstructionProblem, ReconstructionState, ReconstructionTrace,
 };
 
+/// Current JSON checkpoint serialization format version.
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
 
 /// Serializable algorithm state used to resume a reconstruction exactly.
@@ -34,6 +35,7 @@ pub struct ReconstructionCheckpoint {
 }
 
 impl ReconstructionCheckpoint {
+    /// Clones resumable state and trace after `completed_iterations` complete passes.
     pub fn capture(
         completed_iterations: usize,
         state: &ReconstructionState,
@@ -52,42 +54,52 @@ impl ReconstructionCheckpoint {
         }
     }
 
+    /// Returns the serialized checkpoint format version.
     pub const fn format_version(&self) -> u32 {
         self.format_version
     }
 
+    /// Returns the number of complete iterations represented by this state.
     pub const fn completed_iterations(&self) -> usize {
         self.completed_iterations
     }
 
+    /// Borrows the centered high-resolution complex object spectrum.
     pub fn object_spectrum(&self) -> ArrayView2<'_, Complex64> {
         self.object_spectrum.view()
     }
 
+    /// Borrows the low-resolution recovered pupil state.
     pub fn pupil(&self) -> &Pupil {
         &self.pupil
     }
 
+    /// Borrows optional per-source `(row, column)` corrections in Fourier-grid pixels.
     pub fn illumination_corrections(&self) -> Option<&[(f64, f64)]> {
         self.illumination_corrections.as_deref()
     }
 
+    /// Borrows optional positive calibration gains in acquisition-frame order.
     pub fn frame_gains(&self) -> Option<&[f64]> {
         self.frame_gains.as_deref()
     }
 
+    /// Borrows optional additive intensity backgrounds in acquisition-frame order.
     pub fn background(&self) -> Option<&[f64]> {
         self.background.as_deref()
     }
 
+    /// Borrows optional solver-specific resumable state.
     pub fn algorithm_auxiliary(&self) -> Option<&AlgorithmAuxiliaryState> {
         self.algorithm_auxiliary.as_ref()
     }
 
+    /// Borrows the iteration trace accumulated before capture.
     pub const fn trace(&self) -> &ReconstructionTrace {
         &self.trace
     }
 
+    /// Validates and serializes this checkpoint as JSON.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         self.validate()?;
         let writer = BufWriter::new(File::create(path)?);
@@ -95,6 +107,7 @@ impl ReconstructionCheckpoint {
         Ok(())
     }
 
+    /// Deserializes and validates a JSON checkpoint independently of a problem.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let reader = BufReader::new(File::open(path)?);
         let checkpoint: Self = serde_json::from_reader(reader)?;

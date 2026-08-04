@@ -1,3 +1,5 @@
+"""Filesystem report generation for structured reconstruction diagnostics."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -16,6 +18,11 @@ from .io import coerce_diagnostics, ensure_output_dir, latest_frame_diagnostics
 
 
 def write_ground_truth_metrics(diag: dict[str, Any], output_dir: str | Path) -> None:
+    """Write available ground-truth scalars to ``ground_truth_metrics.txt``.
+
+    No file is produced when ``diag`` has no nonempty ``ground_truth_metrics``
+    mapping. The output directory is created when needed.
+    """
     metrics = diag.get("ground_truth_metrics")
     if not isinstance(metrics, dict) or not metrics:
         return
@@ -38,6 +45,7 @@ def write_ground_truth_metrics(diag: dict[str, Any], output_dir: str | Path) -> 
 
 
 def write_summary(diag: dict[str, Any], output_dir: str | Path) -> None:
+    """Write diagnostic counts, final iteration values, and worst frame to text."""
     output_path = ensure_output_dir(output_dir) / "summary.txt"
     iteration_diagnostics = diag.get("iteration_diagnostics")
     all_frame_diagnostics = diag.get("frame_diagnostics")
@@ -88,6 +96,12 @@ def make_diagnostic_report(
     diagnostics: Mapping[str, Any] | str | Path,
     output_dir: str | Path = "diagnostic_report",
 ) -> None:
+    """Create available diagnostic plots and text summaries in ``output_dir``.
+
+    ``diagnostics`` may be a recorder mapping or a JSON path. Plot files whose
+    required diagnostic section is absent are skipped. Existing files with the
+    standard report names are replaced.
+    """
     diagnostics = coerce_diagnostics(diagnostics)
     output_path = ensure_output_dir(output_dir)
     for filename, plotter in (

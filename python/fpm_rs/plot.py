@@ -14,7 +14,9 @@ if TYPE_CHECKING:
 
 
 PlotResult = tuple[Any, dict[str, Any]]
+"""Matplotlib figure and mapping of stable axis names to axes."""
 DiagnosticsData = Mapping[str, Any]
+"""Dictionary-like diagnostics payload returned by ``DiagnosticRecorder``."""
 
 _RECONSTRUCTION_LAYOUT = (
     ("true_amplitude", "true_phase", "objective"),
@@ -36,7 +38,13 @@ def plot_reconstruction(
     layout: Sequence[Sequence[str]] | str | None = None,
     figsize: tuple[float, float] = (13.0, 7.0),
 ) -> PlotResult:
-    """Plot ground truth, reconstruction, and objective history."""
+    """Plot ground truth, reconstruction, and objective history.
+
+    ``truth`` is a complex 2D field matching ``result.object``. ``layout`` may
+    be a Matplotlib subplot-mosaic specification containing the required named
+    axes. Returns the figure and those axes; invalid shapes or layouts raise
+    ``ValueError``.
+    """
     plt = _import_pyplot()
 
     truth_array = np.asarray(truth)
@@ -103,7 +111,11 @@ def plot_convergence(
     *,
     figsize: tuple[float, float] = (13.0, 9.0),
 ) -> PlotResult | None:
-    """Plot convergence diagnostics and return the figure and named axes."""
+    """Plot objective, relative-change, frame, and timing histories.
+
+    Returns the figure and named axes, or ``None`` when
+    ``iteration_diagnostics`` is absent or empty.
+    """
     history = diagnostics.get("iteration_diagnostics")
     if not isinstance(history, list) or not history:
         return None
@@ -181,7 +193,11 @@ def plot_frame_residuals(
     *,
     figsize: tuple[float, float] = (13.0, 9.0),
 ) -> PlotResult | None:
-    """Plot latest per-frame residual summaries and return named axes."""
+    """Plot residual summaries from the latest recorded iteration.
+
+    Returns the figure and named axes, or ``None`` when no frame diagnostics
+    are available.
+    """
     frame_diagnostics = latest_frame_diagnostics(diagnostics.get("frame_diagnostics"))
     if not frame_diagnostics:
         return None
@@ -283,7 +299,11 @@ def plot_raw_stack_stats(
     *,
     figsize: tuple[float, float] = (13.0, 9.0),
 ) -> PlotResult | None:
-    """Plot raw measurement-stack statistics and return named axes."""
+    """Plot per-frame mean, spread, extrema, saturation, and zero counts.
+
+    Returns the figure and named axes, or ``None`` when
+    ``raw_frame_statistics`` is absent or empty.
+    """
     raw_stats = diagnostics.get("raw_frame_statistics")
     if not isinstance(raw_stats, list) or not raw_stats:
         return None
@@ -352,7 +372,11 @@ def plot_fourier_coverage(
     *,
     figsize: tuple[float, float] = (8.5, 8.5),
 ) -> PlotResult | None:
-    """Plot shifted pupils in Fourier space and return the figure and axis."""
+    """Plot shifted pupil disks and illumination NA in Fourier-pixel coordinates.
+
+    Returns the figure and a ``{"coverage": axis}`` mapping, or ``None`` when
+    coverage centers or the positive pupil radius are unavailable.
+    """
     coverage = diagnostics.get("coverage")
     if not isinstance(coverage, dict):
         return None
@@ -406,7 +430,11 @@ def plot_crop_indices(
     *,
     figsize: tuple[float, float] = (8.5, 8.5),
 ) -> PlotResult | None:
-    """Plot Fourier crop boxes and return the figure and axis."""
+    """Plot compiled Fourier crop boxes and centers in pixel coordinates.
+
+    Returns the figure and a ``{"crop_indices": axis}`` mapping, or ``None``
+    when no valid crop records are available.
+    """
     coverage = diagnostics.get("coverage")
     if not isinstance(coverage, dict):
         return None
@@ -465,7 +493,11 @@ def plot_residuals_on_fourier_centers(
     *,
     figsize: tuple[float, float] = (8.5, 8.5),
 ) -> PlotResult | None:
-    """Map latest frame residuals onto Fourier centers and return the axis."""
+    """Map latest normalized frame residuals onto illumination Fourier centers.
+
+    Returns the figure and a named axis, or ``None`` when coverage or matching
+    per-frame residuals are unavailable.
+    """
     coverage = diagnostics.get("coverage")
     frame_diagnostics = latest_frame_diagnostics(diagnostics.get("frame_diagnostics"))
     if not isinstance(coverage, dict) or not frame_diagnostics:

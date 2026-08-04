@@ -40,10 +40,10 @@ use super::{
 ///
 /// # Reference
 ///
-/// L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, “Fourier
-/// ptychographic reconstruction using Wirtinger flow optimization,” *Optics
-/// Express* **23**(4), 4856–4866 (2015),
-/// [doi:10.1364/OE.23.004856](https://doi.org/10.1364/OE.23.004856).
+/// [L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, “Fourier
+/// ptychographic reconstruction using Wirtinger flow optimization”
+/// (2015)](https://doi.org/10.1364/OE.23.004856), *Optics Express* **23**(4),
+/// 4856–4866.
 #[derive(Clone, Debug)]
 pub struct GradientDescent {
     /// Number of complete passes through the acquisition schedule.
@@ -106,71 +106,85 @@ impl Default for GradientDescent {
 }
 
 impl GradientDescent {
+    /// Sets the number of complete acquisition-schedule passes; validation requires non-zero.
     pub fn iterations(mut self, iterations: usize) -> Self {
         self.iterations = iterations;
         self
     }
 
+    /// Sets the finite positive step size of the preconditioned object update.
     pub fn object_step(mut self, step: f64) -> Self {
         self.object_step = step;
         self
     }
 
+    /// Sets the positive number of frame gradients averaged into one update.
     pub fn batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
     }
 
+    /// Selects the differentiable data-fidelity objective used for updates and reporting.
     pub fn loss_type(mut self, loss_type: LossType) -> Self {
         self.loss_type = loss_type;
         self
     }
 
+    /// Enables or disables per-source Fourier-grid offset recovery.
     pub fn recover_illumination(mut self, recover: bool) -> Self {
         self.recover_illumination = recover;
         self
     }
 
+    /// Sets the finite positive illumination-offset step size.
     pub fn illumination_step(mut self, step: f64) -> Self {
         self.illumination_step = step;
         self
     }
 
+    /// Sets positive central finite-difference spacing in Fourier-grid pixels.
     pub fn illumination_finite_difference(mut self, distance: f64) -> Self {
         self.illumination_finite_difference = distance;
         self
     }
 
+    /// Sets the non-negative maximum absolute row or column correction in grid pixels.
     pub fn illumination_bounds(mut self, maximum_absolute_correction: f64) -> Self {
         self.maximum_illumination_correction = maximum_absolute_correction;
         self
     }
 
+    /// Enables or disables simultaneous complex-pupil recovery.
     pub fn recover_pupil(mut self, recover: bool) -> Self {
         self.recover_pupil = recover;
         self
     }
 
+    /// Sets the finite positive normalized pupil-update step size.
     pub fn pupil_step(mut self, step: f64) -> Self {
         self.pupil_step = step;
         self
     }
 
+    /// Selects whether pupil values outside the compiled binary support are forced to zero.
     pub fn constrain_pupil_support(mut self, constrain: bool) -> Self {
         self.constrain_pupil_support = constrain;
         self
     }
 
+    /// Sets a non-negative complex-object isotropic total-variation weight.
     pub fn object_tv(mut self, weight: f64) -> Self {
         self.object_tv_weight = weight;
         self
     }
 
+    /// Sets the finite positive smoothing constant in the differentiable TV norm.
     pub fn object_tv_epsilon(mut self, epsilon: f64) -> Self {
         self.object_tv_epsilon = epsilon;
         self
     }
 
+    /// Sets a non-negative quadratic nearest-neighbor pupil-smoothing weight.
     pub fn pupil_smoothing(mut self, weight: f64) -> Self {
         self.pupil_smoothing_weight = weight;
         self

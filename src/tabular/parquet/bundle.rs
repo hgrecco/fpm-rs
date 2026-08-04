@@ -36,55 +36,92 @@ use super::{
     write::sha256,
 };
 
+/// Verified manifest metadata for one file inside a result bundle.
 #[derive(Clone, Debug)]
 pub struct BundleArtifact {
+    /// Stable semantic artifact role.
     pub role: String,
+    /// Absolute or bundle-root-relative resolved local path.
     pub path: PathBuf,
+    /// Declared MIME media type.
     pub media_type: String,
+    /// Exact artifact size in bytes.
     pub byte_size: u64,
+    /// Lowercase hexadecimal SHA-256 digest.
     pub sha256: String,
+    /// Optional NPY element-dtype descriptor.
     pub dtype: Option<String>,
+    /// Optional array shape in axis order.
     pub shape: Option<Vec<u64>>,
 }
 
+/// Parquet table artifact descriptors in a result bundle.
 #[derive(Clone, Debug)]
 pub struct BundleTables {
+    /// Required one-row run summary table.
     pub summary: BundleArtifact,
+    /// Required iteration history table.
     pub history: BundleArtifact,
+    /// Optional algorithm-specific scalar metric table.
     pub algorithm_metrics: Option<BundleArtifact>,
+    /// Optional convergence diagnostics table.
     pub iteration_diagnostics: Option<BundleArtifact>,
+    /// Optional per-frame diagnostic comparison table.
     pub frame_diagnostics: Option<BundleArtifact>,
+    /// Optional raw measured-frame statistics table.
     pub raw_frame_statistics: Option<BundleArtifact>,
+    /// Optional predicted-versus-measured frame evaluation table.
     pub frame_evaluation: Option<BundleArtifact>,
+    /// Optional per-source Fourier-grid correction table.
     pub illumination_calibration: Option<BundleArtifact>,
+    /// Optional per-frame gain and background table.
     pub frame_calibration: Option<BundleArtifact>,
+    /// Optional named scalar diagnostics table.
     pub scalar_diagnostics: Option<BundleArtifact>,
+    /// Optional extensible string metadata table.
     pub metadata: Option<BundleArtifact>,
 }
 
+/// Lossless NPY array artifact descriptors in a result bundle.
 #[derive(Clone, Debug)]
 pub struct BundleArrays {
+    /// High-resolution `(height, width)` complex object field.
     pub object: BundleArtifact,
+    /// Centered high-resolution complex object spectrum.
     pub object_spectrum: BundleArtifact,
+    /// Low-resolution complex pupil values.
     pub pupil: BundleArtifact,
+    /// Low-resolution binary pupil support.
     pub pupil_support: BundleArtifact,
+    /// Optional source-order `(row, column)` corrections in Fourier-grid pixels.
     pub illumination_calibration: Option<BundleArtifact>,
+    /// Optional acquisition-frame gains.
     pub frame_gains: Option<BundleArtifact>,
+    /// Optional acquisition-frame additive backgrounds.
     pub background: Option<BundleArtifact>,
 }
 
+/// Optional derived PNG preview artifact descriptors.
 #[derive(Clone, Debug, Default)]
 pub struct BundlePreviews {
+    /// Linearly normalized object-amplitude preview.
     pub object_amplitude: Option<BundleArtifact>,
+    /// Wrapped object-phase preview.
     pub object_phase: Option<BundleArtifact>,
+    /// Linearly normalized pupil-amplitude preview.
     pub pupil_amplitude: Option<BundleArtifact>,
+    /// Wrapped pupil-phase preview.
     pub pupil_phase: Option<BundleArtifact>,
+    /// Rendered individual-source Fourier-coverage preview.
     pub fourier_coverage: Option<BundleArtifact>,
 }
 
+/// Aggregate result of verifying every artifact in a bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BundleVerificationResult {
+    /// Number of manifest-declared artifacts verified.
     pub artifact_count: usize,
+    /// Sum of verified artifact sizes in bytes.
     pub total_bytes: u64,
 }
 
@@ -117,21 +154,30 @@ struct ResultBundleInner {
 /// objects are hash-checked, loaded, and cached on first access.
 #[derive(Clone)]
 pub struct ResultBundle {
+    /// Bundle root directory.
     pub path: PathBuf,
+    /// Path to the bundle manifest JSON file.
     pub manifest_path: PathBuf,
+    /// Unique run identifier shared by tables and manifest.
     pub run_id: String,
+    /// Optional human-readable result label.
     pub label: Option<String>,
+    /// Parquet table descriptors.
     pub tables: BundleTables,
+    /// Lossless scientific-array descriptors.
     pub arrays: BundleArrays,
+    /// Optional derived preview descriptors.
     pub previews: BundlePreviews,
     inner: Arc<ResultBundleInner>,
 }
 
+/// Opens and validates a complete bundle manifest without eagerly loading scientific arrays.
 pub fn read_bundle(path: impl AsRef<Path>) -> Result<ResultBundle> {
     ResultBundle::read(path)
 }
 
 impl ResultBundle {
+    /// Opens a complete bundle and validates manifest paths and required artifact metadata.
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         if path
@@ -213,6 +259,7 @@ impl ResultBundle {
         })
     }
 
+    /// Hash-checks, lazily loads, and caches the high-resolution complex object.
     pub fn object(&self) -> Result<Arc<Array2<Complex64>>> {
         let mut cache = self.cache();
         if let Some(value) = &cache.object {
@@ -228,6 +275,7 @@ impl ResultBundle {
         Ok(value)
     }
 
+    /// Hash-checks, lazily loads, and caches the centered complex object spectrum.
     pub fn object_spectrum(&self) -> Result<Arc<Array2<Complex64>>> {
         let mut cache = self.cache();
         if let Some(value) = &cache.object_spectrum {
@@ -243,6 +291,7 @@ impl ResultBundle {
         Ok(value)
     }
 
+    /// Hash-checks, lazily loads, and caches low-resolution complex pupil values.
     pub fn pupil(&self) -> Result<Arc<Array2<Complex64>>> {
         let mut cache = self.cache();
         if let Some(value) = &cache.pupil {
@@ -258,6 +307,7 @@ impl ResultBundle {
         Ok(value)
     }
 
+    /// Hash-checks, lazily loads, and caches the low-resolution binary pupil support.
     pub fn pupil_support(&self) -> Result<Arc<Array2<u8>>> {
         let mut cache = self.cache();
         if let Some(value) = &cache.pupil_support {
@@ -273,6 +323,7 @@ impl ResultBundle {
         Ok(value)
     }
 
+    /// Lazily reconstructs and caches a validated domain result from lossless artifacts.
     pub fn result(&self) -> Result<Arc<ReconstructionResult>> {
         let mut cache = self.cache();
         if let Some(value) = &cache.result {
@@ -387,6 +438,7 @@ impl ResultBundle {
         Ok(result)
     }
 
+    /// Lazily loads and caches optional structured diagnostics JSON.
     pub fn diagnostics(&self) -> Result<Option<Arc<ReconstructionDiagnostics>>> {
         if !self.inner.artifacts.contains_key(DOMAIN_DIAGNOSTICS) {
             return Ok(None);
@@ -401,6 +453,7 @@ impl ResultBundle {
         Ok(Some(value))
     }
 
+    /// Lazily loads and caches optional structured ground-truth evaluation JSON.
     pub fn evaluation(&self) -> Result<Option<Arc<ReconstructionEvaluation>>> {
         if !self.inner.artifacts.contains_key(DOMAIN_EVALUATION) {
             return Ok(None);
@@ -415,10 +468,12 @@ impl ResultBundle {
         Ok(Some(value))
     }
 
+    /// Drops this bundle's shared in-memory array and domain-object cache.
     pub fn clear_cache(&self) {
         *self.cache() = BundleCache::default();
     }
 
+    /// Verifies existence, byte size, SHA-256, NPY metadata, Parquet schema, and run IDs.
     pub fn verify(&self) -> Result<BundleVerificationResult> {
         let mut total_bytes = 0_u64;
         for artifact in self.inner.artifacts.values() {

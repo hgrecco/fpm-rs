@@ -11,7 +11,9 @@ use super::{IlluminationSource, KVector, Optics};
 /// toward positive `y`. The sphere pose is applied as `Rz * Ry * Rx`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LEDSphere {
+    /// Nominal `(theta, phi)` LED positions in radians and natural source order.
     pub angles: Vec<(f64, f64)>,
+    /// Positive nominal sphere radius in metres.
     pub radius: f64,
     /// Sphere-centre displacement `(x, y, z)` from the sample, in metres.
     pub center_offset: (f64, f64, f64),
@@ -19,12 +21,16 @@ pub struct LEDSphere {
     pub orientation_radians: (f64, f64, f64),
     /// Optional per-LED `(delta_theta, delta_phi)` placement corrections.
     pub angular_corrections: Option<Vec<(f64, f64)>>,
+    /// Optional vacuum wavelength in metres replacing [`Optics::wavelength`].
     pub wavelength_override: Option<f64>,
+    /// Optional acquisition-to-natural LED permutation.
     pub illumination_order: Option<Vec<usize>>,
+    /// Optional finite positive intensity gain per natural-order LED.
     pub intensity_weights: Option<Vec<f64>>,
 }
 
 impl LEDSphere {
+    /// Creates a sphere from natural-order `(theta, phi)` radians and a radius in metres.
     pub fn new(angles: Vec<(f64, f64)>, radius: f64) -> Self {
         Self {
             angles,
@@ -38,11 +44,13 @@ impl LEDSphere {
         }
     }
 
+    /// Sets the sphere-centre displacement `(x, y, z)` from the sample, in metres.
     pub fn center_offset(mut self, offset: (f64, f64, f64)) -> Self {
         self.center_offset = offset;
         self
     }
 
+    /// Sets extrinsic mount rotations `(rx, ry, rz)` in degrees, applied as `Rz * Ry * Rx`.
     pub fn orientation_deg(mut self, degrees: (f64, f64, f64)) -> Self {
         self.orientation_radians = (
             degrees.0.to_radians(),
@@ -52,26 +60,32 @@ impl LEDSphere {
         self
     }
 
+    /// Sets one `(delta_theta, delta_phi)` correction in radians per natural-order LED.
     pub fn angular_corrections(mut self, corrections: Vec<(f64, f64)>) -> Self {
         self.angular_corrections = Some(corrections);
         self
     }
 
+    /// Overrides the positive vacuum illumination wavelength in metres.
     pub fn wavelength_override(mut self, wavelength: f64) -> Self {
         self.wavelength_override = Some(wavelength);
         self
     }
 
+    /// Sets the acquisition-to-natural source permutation.
     pub fn illumination_order(mut self, order: Vec<usize>) -> Self {
         self.illumination_order = Some(order);
         self
     }
 
+    /// Sets one finite positive gain per natural-order LED.
     pub fn intensity_weights(mut self, weights: Vec<f64>) -> Self {
         self.intensity_weights = Some(weights);
         self
     }
 
+    /// Validates angles, positive radius and wavelength, finite pose/corrections,
+    /// source permutation, and intensity-weight length and range.
     pub fn validate(&self) -> Result<()> {
         validate_angle_list(&self.angles, "LED sphere angles")?;
         validate_length(self.radius, "radius")?;
@@ -147,15 +161,21 @@ impl IlluminationSource for LEDSphere {
 /// that backlash direction is unambiguous.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SphericalLEDArm {
+    /// Movement-order `(theta, phi)` encoder commands in radians.
     pub commanded_angles: Vec<(f64, f64)>,
+    /// Positive distance from pivot to LED, in metres.
     pub arm_length: f64,
     /// Arm-pivot displacement `(x, y, z)` from the sample, in metres.
     pub pivot_offset: (f64, f64, f64),
     /// Rigid mount rotation `(rx, ry, rz)` in radians.
     pub orientation_radians: (f64, f64, f64),
+    /// Additive elevation-encoder zero offset, in radians.
     pub theta_zero_radians: f64,
+    /// Additive azimuth-encoder zero offset, in radians.
     pub phi_zero_radians: f64,
+    /// Positive dimensionless elevation-encoder scale.
     pub theta_scale: f64,
+    /// Positive dimensionless azimuth-encoder scale.
     pub phi_scale: f64,
     /// Tilt of the elevation axis toward the azimuth axis, in radians.
     pub elevation_axis_tilt_radians: f64,
@@ -163,11 +183,14 @@ pub struct SphericalLEDArm {
     pub theta_backlash_radians: f64,
     /// Total separation between increasing and decreasing encoder branches.
     pub phi_backlash_radians: f64,
+    /// Optional positive vacuum wavelength in metres replacing [`Optics::wavelength`].
     pub wavelength_override: Option<f64>,
+    /// Optional finite positive gain per movement-order source.
     pub intensity_weights: Option<Vec<f64>>,
 }
 
 impl SphericalLEDArm {
+    /// Creates an arm from movement-order commands in radians and length in metres.
     pub fn new(commanded_angles: Vec<(f64, f64)>, arm_length: f64) -> Self {
         Self {
             commanded_angles,
@@ -186,11 +209,13 @@ impl SphericalLEDArm {
         }
     }
 
+    /// Sets pivot displacement `(x, y, z)` from the sample in metres.
     pub fn pivot_offset(mut self, offset: (f64, f64, f64)) -> Self {
         self.pivot_offset = offset;
         self
     }
 
+    /// Sets extrinsic mount rotations `(rx, ry, rz)` in degrees, applied as `Rz * Ry * Rx`.
     pub fn orientation_deg(mut self, degrees: (f64, f64, f64)) -> Self {
         self.orientation_radians = (
             degrees.0.to_radians(),
@@ -200,39 +225,47 @@ impl SphericalLEDArm {
         self
     }
 
+    /// Sets additive elevation and azimuth encoder-zero offsets in degrees.
     pub fn encoder_zero_deg(mut self, theta: f64, phi: f64) -> Self {
         self.theta_zero_radians = theta.to_radians();
         self.phi_zero_radians = phi.to_radians();
         self
     }
 
+    /// Sets positive dimensionless elevation and azimuth encoder scales.
     pub fn encoder_scale(mut self, theta: f64, phi: f64) -> Self {
         self.theta_scale = theta;
         self.phi_scale = phi;
         self
     }
 
+    /// Sets the elevation-axis non-orthogonality tilt in degrees.
     pub fn elevation_axis_tilt_deg(mut self, degrees: f64) -> Self {
         self.elevation_axis_tilt_radians = degrees.to_radians();
         self
     }
 
+    /// Sets total elevation and azimuth backlash branch separations in degrees.
     pub fn backlash_deg(mut self, theta: f64, phi: f64) -> Self {
         self.theta_backlash_radians = theta.to_radians();
         self.phi_backlash_radians = phi.to_radians();
         self
     }
 
+    /// Overrides the positive vacuum illumination wavelength in metres.
     pub fn wavelength_override(mut self, wavelength: f64) -> Self {
         self.wavelength_override = Some(wavelength);
         self
     }
 
+    /// Sets one finite positive intensity gain per commanded source position.
     pub fn intensity_weights(mut self, weights: Vec<f64>) -> Self {
         self.intensity_weights = Some(weights);
         self
     }
 
+    /// Checks non-empty finite commands, positive geometry and encoder scales, finite
+    /// pose and calibration values, and optional wavelength and gain constraints.
     pub fn validate(&self) -> Result<()> {
         validate_angle_list(&self.commanded_angles, "arm commanded_angles")?;
         validate_length(self.arm_length, "arm_length")?;
@@ -334,6 +367,7 @@ pub struct RotatingLEDArc {
     pub led_thetas: Vec<f64>,
     /// Commanded arm azimuths in physical movement order, in radians.
     pub rotation_angles: Vec<f64>,
+    /// Positive nominal arc radius in metres.
     pub radius: f64,
     /// Point on the rotation axis relative to the sample, in metres.
     pub axis_origin_offset: (f64, f64, f64),
@@ -343,16 +377,21 @@ pub struct RotatingLEDArc {
     pub led_angular_corrections: Option<Vec<(f64, f64)>>,
     /// Per-LED radial corrections to the nominal arm radius, in metres.
     pub led_radial_offsets: Option<Vec<f64>>,
+    /// Additive rotation-encoder zero offset in radians.
     pub rotation_zero_radians: f64,
+    /// Positive dimensionless rotation-encoder scale.
     pub rotation_scale: f64,
     /// Total separation between increasing and decreasing rotation branches.
     pub rotation_backlash_radians: f64,
+    /// Optional positive vacuum wavelength in metres replacing [`Optics::wavelength`].
     pub wavelength_override: Option<f64>,
     /// Intrinsic intensity weight for each LED, repeated at every rotation.
     pub led_intensity_weights: Option<Vec<f64>>,
 }
 
 impl RotatingLEDArc {
+    /// Creates an arc from LED polar angles and movement-order rotations in radians,
+    /// with a positive radius in metres.
     pub fn new(led_thetas: Vec<f64>, rotation_angles: Vec<f64>, radius: f64) -> Self {
         Self {
             led_thetas,
@@ -370,51 +409,61 @@ impl RotatingLEDArc {
         }
     }
 
+    /// Sets a point on the rotation axis `(x, y, z)` relative to the sample, in metres.
     pub fn axis_origin_offset(mut self, offset: (f64, f64, f64)) -> Self {
         self.axis_origin_offset = offset;
         self
     }
 
+    /// Sets extrinsic `x` and `y` tilts of the rotation axis in degrees.
     pub fn axis_tilt_deg(mut self, x: f64, y: f64) -> Self {
         self.axis_tilt_radians = (x.to_radians(), y.to_radians());
         self
     }
 
+    /// Sets per-LED `(delta_theta, delta_phi)` mounting corrections in radians.
     pub fn led_angular_corrections(mut self, corrections: Vec<(f64, f64)>) -> Self {
         self.led_angular_corrections = Some(corrections);
         self
     }
 
+    /// Sets per-LED radial corrections in metres.
     pub fn led_radial_offsets(mut self, offsets: Vec<f64>) -> Self {
         self.led_radial_offsets = Some(offsets);
         self
     }
 
+    /// Sets the additive rotation-encoder zero offset in degrees.
     pub fn rotation_encoder_zero_deg(mut self, degrees: f64) -> Self {
         self.rotation_zero_radians = degrees.to_radians();
         self
     }
 
+    /// Sets the positive dimensionless rotation-encoder scale.
     pub fn rotation_encoder_scale(mut self, scale: f64) -> Self {
         self.rotation_scale = scale;
         self
     }
 
+    /// Sets total separation between increasing and decreasing rotation branches in degrees.
     pub fn rotation_backlash_deg(mut self, degrees: f64) -> Self {
         self.rotation_backlash_radians = degrees.to_radians();
         self
     }
 
+    /// Overrides the positive vacuum illumination wavelength in metres.
     pub fn wavelength_override(mut self, wavelength: f64) -> Self {
         self.wavelength_override = Some(wavelength);
         self
     }
 
+    /// Sets one finite positive intrinsic gain per LED, repeated for every rotation.
     pub fn led_intensity_weights(mut self, weights: Vec<f64>) -> Self {
         self.led_intensity_weights = Some(weights);
         self
     }
 
+    /// Returns `led_thetas.len() * rotation_angles.len()`, failing on `usize` overflow.
     pub fn source_count(&self) -> Result<usize> {
         self.led_thetas
             .len()
@@ -425,6 +474,8 @@ impl RotatingLEDArc {
             })
     }
 
+    /// Validates angular domains, positive radius and scale, finite pose and encoder
+    /// calibration, per-LED correction lengths, optional wavelength, and gains.
     pub fn validate(&self) -> Result<()> {
         if self.led_thetas.is_empty()
             || self.led_thetas.iter().any(|&theta| {

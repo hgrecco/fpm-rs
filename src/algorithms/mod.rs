@@ -1,3 +1,12 @@
+//! Iterative reconstruction algorithms for compiled image-plane models.
+//!
+//! Choose a concrete solver such as [`crate::algorithms::AlternatingProjection`],
+//! [`crate::algorithms::Fpie`], [`crate::algorithms::Epry`],
+//! [`crate::algorithms::Admm`], or [`crate::algorithms::GradientDescent`]. All
+//! implement [`crate::algorithms::ReconstructionAlgorithm`] and consume a validated
+//! [`crate::reconstruction::ReconstructionProblem`]; illumination geometry is compiled
+//! beforehand into the problem's [`crate::model::ImagePlaneModel`].
+
 mod admm;
 mod alternating_projection;
 mod common;
@@ -27,13 +36,22 @@ use crate::{
 };
 use std::sync::Arc;
 
+/// Contract implemented by iterative image-plane reconstruction solvers.
+///
+/// Implementors validate their configuration, initialize a [`ReconstructionState`],
+/// and update one scheduled [`Batch`] at a time. The trait's convenience methods own
+/// the algorithm, borrow the problem for the duration of the run, and return an owned
+/// [`ReconstructionResult`].
 pub trait ReconstructionAlgorithm {
+    /// Algorithm-specific metrics emitted by each step and appended to the trace.
     type IterationMetrics: AlgorithmIterationMetrics;
 
+    /// Validates solver parameters independently of a reconstruction problem.
     fn validate(&self) -> Result<()> {
         Ok(())
     }
 
+    /// Validates solver requirements that depend on `problem`.
     fn validate_problem<M: MeasurementRead>(
         &self,
         _problem: &ReconstructionProblem<M>,
@@ -41,6 +59,7 @@ pub trait ReconstructionAlgorithm {
         Ok(())
     }
 
+    /// Creates the default CPU-backed state for `problem`.
     fn initialize<M: MeasurementRead>(
         &self,
         problem: &ReconstructionProblem<M>,
@@ -48,6 +67,7 @@ pub trait ReconstructionAlgorithm {
         ReconstructionState::initialize(problem)
     }
 
+    /// Creates reconstruction state using the supplied execution `backend`.
     fn initialize_with_backend<M: MeasurementRead>(
         &self,
         problem: &ReconstructionProblem<M>,
@@ -56,6 +76,7 @@ pub trait ReconstructionAlgorithm {
         ReconstructionState::initialize_with_backend(problem, backend)
     }
 
+    /// Updates `state` for one scheduled batch in zero-based `iteration`.
     fn step<M: MeasurementRead>(
         &mut self,
         problem: &ReconstructionProblem<M>,
@@ -64,12 +85,15 @@ pub trait ReconstructionAlgorithm {
         iteration: usize,
     ) -> Result<StepOutput<Self::IterationMetrics>>;
 
+    /// Returns the requested number of complete schedule passes.
     fn iterations(&self) -> usize;
 
+    /// Returns the number of measured frames combined into one step.
     fn batch_size(&self) -> usize {
         1
     }
 
+    /// Runs the algorithm with default sequential scheduling and no callbacks.
     fn run<M: MeasurementRead>(
         self,
         problem: &ReconstructionProblem<M>,
@@ -85,6 +109,7 @@ pub trait ReconstructionAlgorithm {
         Runner::new(self, options).run(problem)
     }
 
+    /// Runs the algorithm and invokes `callbacks` at their declared hooks.
     fn run_with_callbacks<M: MeasurementRead>(
         self,
         problem: &ReconstructionProblem<M>,
@@ -103,6 +128,7 @@ pub trait ReconstructionAlgorithm {
             .run(problem)
     }
 
+    /// Resumes a run from a checkpoint after validating it against `problem`.
     fn run_from_checkpoint<M: MeasurementRead>(
         self,
         problem: &ReconstructionProblem<M>,

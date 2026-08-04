@@ -48,6 +48,10 @@ pub(crate) struct CropDisplacementBounds {
 }
 
 /// Algorithm-facing image-plane FPM model. It contains no LED or camera geometry.
+///
+/// Source-indexed vectors, crops, and optional subpixel offsets describe individual
+/// illuminations. Acquisition-frame-indexed gains, background, and multiplexing describe
+/// measured frames. Shapes are `(height, width)` and stored arrays own their data.
 #[derive(Clone, Debug, Serialize)]
 pub struct ImagePlaneModel {
     /// One transverse wave vector per illumination source.
@@ -108,6 +112,11 @@ impl<'de> Deserialize<'de> for ImagePlaneModel {
 }
 
 impl ImagePlaneModel {
+    /// Builds and validates a non-multiplexed model from explicitly compiled components.
+    ///
+    /// `k_vectors` and `crop_indices` must have equal non-zero source counts. `pupil`
+    /// and each crop must have `image_shape`; `sampling` and `reconstruction_shape`
+    /// must be mutually consistent.
     pub fn new(
         k_vectors: Vec<KVector>,
         pupil: Pupil,
@@ -311,64 +320,82 @@ impl ImagePlaneModel {
         }
     }
 
+    /// Returns the number of individual illumination sources.
     pub fn source_count(&self) -> usize {
         self.k_vectors.len()
     }
 
+    /// Returns the acquisition-frame count, which can differ when sources are multiplexed.
     pub fn frame_count(&self) -> usize {
         self.multiplexing_matrix
             .as_ref()
             .map_or_else(|| self.source_count(), Vec::len)
     }
 
+    /// Returns whether acquisition frames contain incoherent combinations of sources.
     pub fn is_multiplexed(&self) -> bool {
         self.multiplexing_matrix.is_some()
     }
 
+    /// Borrows transverse wave vectors in source order, in radians per metre.
     pub fn k_vectors(&self) -> &[KVector] {
         &self.k_vectors
     }
 
+    /// Borrows the low-resolution complex pupil and binary support.
     pub fn pupil(&self) -> &Pupil {
         &self.pupil
     }
 
+    /// Mutably borrows the pupil; callers must preserve its shape and support invariants.
     pub fn pupil_mut(&mut self) -> &mut Pupil {
         &mut self.pupil
     }
 
+    /// Borrows integer Fourier crops in individual source order.
     pub fn crop_indices(&self) -> &CropIndices {
         &self.crop_indices
     }
 
+    /// Borrows optional fractional `(row, column)` offsets in source order.
     pub fn subpixel_offsets(&self) -> Option<&[FourierOffset]> {
         self.subpixel_offsets.as_deref()
     }
 
+    /// Borrows real- and Fourier-space sampling metadata.
     pub const fn sampling(&self) -> &Sampling {
         &self.sampling
     }
 
+    /// Returns low-resolution detector shape as `(height, width)`.
     pub const fn image_shape(&self) -> (usize, usize) {
         self.image_shape
     }
 
+    /// Returns high-resolution object shape as `(height, width)`.
     pub const fn reconstruction_shape(&self) -> (usize, usize) {
         self.reconstruction_shape
     }
 
+    /// Borrows optional positive multiplicative gains in acquisition-frame order.
     pub fn frame_gains(&self) -> Option<&[f64]> {
         self.frame_gains.as_deref()
     }
 
+    /// Borrows optional non-negative optical intensity background.
+    ///
+    /// Length is one low-resolution frame (broadcast) or a complete row-major
+    /// `(frame, row, column)` stack.
     pub fn background(&self) -> Option<&[f64]> {
         self.background.as_deref()
     }
 
+    /// Borrows optional acquisition-frame rows of positive source weights.
     pub fn multiplexing_matrix(&self) -> Option<&MultiplexingMatrix> {
         self.multiplexing_matrix.as_ref()
     }
 
+    /// Replaces gains, requiring one finite positive value per acquisition frame.
     pub fn with_frame_gains(mut self, values: Option<Vec<f64>>) -> Result<Self> {
         self.frame_gains = values;
         self.validate()?;
@@ -389,24 +416,28 @@ impl ImagePlaneModel {
         Ok(())
     }
 
+    /// Replaces optical intensity background with a broadcast frame, full stack, or `None`.
     pub fn with_background(mut self, values: Option<Vec<f64>>) -> Result<Self> {
         self.background = values;
         self.validate()?;
         Ok(self)
     }
 
+    /// Enables coded illumination with one non-empty positive source-weight row per frame.
     pub fn with_multiplexing(mut self, matrix: MultiplexingMatrix) -> Result<Self> {
         self.multiplexing_matrix = Some(matrix);
         self.validate()?;
         Ok(self)
     }
 
+    /// Sets one finite fractional Fourier-grid offset per individual source.
     pub fn with_subpixel_offsets(mut self, offsets: Vec<FourierOffset>) -> Result<Self> {
         self.subpixel_offsets = Some(offsets);
         self.validate()?;
         Ok(self)
     }
 
+    /// Returns a source's fractional Fourier-grid offset, or zero when absent.
     pub fn source_offset(&self, source: usize) -> Result<FourierOffset> {
         self.crop_indices.get(source)?;
         match &self.subpixel_offsets {
@@ -417,6 +448,10 @@ impl ImagePlaneModel {
         }
     }
 
+    /// Extracts one source patch from a standard-layout high-resolution object spectrum.
+    ///
+    /// `destination` has `image_shape.0 * image_shape.1` row-major complex values.
+    /// Fractional offsets use bilinear Fourier-grid interpolation.
     pub fn extract_patch(
         &self,
         object_spectrum: ArrayView2<'_, Complex64>,
@@ -459,6 +494,7 @@ impl ImagePlaneModel {
         crop.extract_subpixel_standard(object_spectrum, destination, offset)
     }
 
+    /// Adds an update into a high-resolution spectrum through the adjoint crop operator.
     pub fn insert_patch_adjoint(
         &self,
         destination: ArrayViewMut2<'_, Complex64>,
@@ -529,6 +565,7 @@ impl ImagePlaneModel {
         )
     }
 
+    /// Checks that `source` exists and the interpolation stencil for `offset` is in bounds.
     pub fn validate_source_offset(&self, source: usize, offset: FourierOffset) -> Result<()> {
         self.crop_indices
             .get(source)?
@@ -584,6 +621,7 @@ impl ImagePlaneModel {
         Ok((crop, offset))
     }
 
+    /// Returns a frame's positive gain, defaulting to `1.0` when gains are absent.
     pub fn frame_gain(&self, frame: usize) -> Result<f64> {
         if frame >= self.frame_count() {
             return Err(Error::FrameOutOfRange {
@@ -597,6 +635,9 @@ impl ImagePlaneModel {
             .map_or(1.0, |values| values[frame]))
     }
 
+    /// Returns background intensity for a frame and row-major pixel index.
+    ///
+    /// Returns zero when background is absent and handles broadcast backgrounds.
     pub fn background_value(&self, frame: usize, pixel: usize) -> Result<f64> {
         if frame >= self.frame_count() {
             return Err(Error::FrameOutOfRange {
@@ -620,6 +661,8 @@ impl ImagePlaneModel {
         }))
     }
 
+    /// Validates source/crop counts, shapes, pupil, sampling, vectors, interpolation
+    /// bounds, gains, background, and optional multiplexing rows.
     pub fn validate(&self) -> Result<()> {
         self.sampling.validate()?;
         if self.k_vectors.is_empty() || self.source_count() != self.crop_indices.len() {

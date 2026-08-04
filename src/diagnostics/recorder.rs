@@ -12,17 +12,26 @@ use super::{
     DiagnosticRequest, IterationDiagnostics, ReconstructionDiagnostics, compute_fourier_coverage,
 };
 
+/// Controls which diagnostics a [`DiagnosticRecorder`] captures and how often.
 #[derive(Clone, Debug)]
 pub struct DiagnosticRecorderConfig {
+    /// Iteration-recording frequency; zero is normalized to one by the recorder.
     pub every: usize,
 
+    /// Record convergence scalars at the selected frequency.
     pub record_iteration_diagnostics: bool,
+    /// Record predicted-versus-measured metrics for every acquisition frame.
     pub record_frame_summaries: bool,
+    /// Record raw measured-intensity statistics once at run start.
     pub record_raw_stack_stats: bool,
+    /// Record model Fourier coverage once at run start.
     pub record_coverage: bool,
 
+    /// Retain owned object amplitude and phase snapshots.
     pub record_object_snapshots: bool,
+    /// Retain owned pupil amplitude and phase snapshots.
     pub record_pupil_snapshots: bool,
+    /// Snapshot frequency; zero is normalized to one.
     pub snapshot_every: usize,
 }
 
@@ -76,6 +85,7 @@ pub struct DiagnosticRecorder {
 type Complex64Proxy = num_complex::Complex64;
 
 impl DiagnosticRecorder {
+    /// Creates a recorder with shared state so clones observe the same captured data.
     pub fn new(config: DiagnosticRecorderConfig) -> Self {
         Self {
             config,
@@ -83,18 +93,22 @@ impl DiagnosticRecorder {
         }
     }
 
+    /// Returns a cloned, serializable snapshot of all collected diagnostic records.
     pub fn diagnostics(&self) -> ReconstructionDiagnostics {
         self.lock_state().diagnostics.clone()
     }
 
+    /// Consumes this handle and returns a cloned diagnostics snapshot shared with any clones.
     pub fn into_diagnostics(self) -> ReconstructionDiagnostics {
         self.diagnostics()
     }
 
+    /// Returns cloned `(iteration, amplitude, wrapped_phase)` object snapshots.
     pub fn object_snapshots(&self) -> Vec<(usize, Array2<f64>, Array2<f64>)> {
         self.lock_state().object_snapshots.clone()
     }
 
+    /// Returns cloned `(iteration, amplitude, wrapped_phase)` pupil snapshots.
     pub fn pupil_snapshots(&self) -> Vec<(usize, Array2<f64>, Array2<f64>)> {
         self.lock_state().pupil_snapshots.clone()
     }

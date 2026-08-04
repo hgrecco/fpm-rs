@@ -12,29 +12,39 @@ use crate::{
 /// Fractional Fourier-grid displacement relative to an integer crop origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FourierOffset {
+    /// Fractional displacement along the Fourier-array row axis, in grid pixels.
     pub row: f64,
+    /// Fractional displacement along the Fourier-array column axis, in grid pixels.
     pub column: f64,
 }
 
 impl FourierOffset {
+    /// Creates a `(row, column)` fractional displacement in Fourier-grid pixels.
     pub const fn new(row: f64, column: f64) -> Self {
         Self { row, column }
     }
 
+    /// Returns whether both components are within `1e-12` pixel of zero.
     pub fn is_zero(self) -> bool {
         self.row.abs() <= 1e-12 && self.column.abs() <= 1e-12
     }
 }
 
+/// Integer rectangular region within a centered high-resolution Fourier array.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FourierCrop {
+    /// Zero-based first row in the high-resolution spectrum.
     pub start_row: usize,
+    /// Zero-based first column in the high-resolution spectrum.
     pub start_col: usize,
+    /// Number of rows, normally equal to the low-resolution image height.
     pub height: usize,
+    /// Number of columns, normally equal to the low-resolution image width.
     pub width: usize,
 }
 
 impl FourierCrop {
+    /// Creates an unchecked integer crop; call [`Self::validate_inside`] before use.
     pub fn new(start_row: usize, start_col: usize, height: usize, width: usize) -> Self {
         Self {
             start_row,
@@ -44,6 +54,7 @@ impl FourierCrop {
         }
     }
 
+    /// Checks non-zero crop dimensions and containment in `(height, width)` `shape`.
     pub fn validate_inside(&self, shape: (usize, usize)) -> Result<()> {
         let end_row = self.start_row.checked_add(self.height);
         let end_col = self.start_col.checked_add(self.width);
@@ -90,6 +101,7 @@ impl FourierCrop {
         Ok(())
     }
 
+    /// Checks that a bilinear stencil for `offset` remains inside `(height, width)` `shape`.
     pub fn validate_subpixel_inside(
         &self,
         shape: (usize, usize),
@@ -300,24 +312,29 @@ fn interpolation_axis(
     })
 }
 
+/// Source-order collection of Fourier crops.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CropIndices {
     pub(crate) crops: Vec<FourierCrop>,
 }
 
 impl CropIndices {
+    /// Stores crop rectangles in individual illumination-source order.
     pub fn new(crops: Vec<FourierCrop>) -> Self {
         Self { crops }
     }
 
+    /// Returns the number of individual source crops.
     pub fn len(&self) -> usize {
         self.crops.len()
     }
 
+    /// Returns whether no source crops are stored.
     pub fn is_empty(&self) -> bool {
         self.crops.is_empty()
     }
 
+    /// Returns the crop for `frame`, interpreted here as an individual source index.
     pub fn get(&self, frame: usize) -> Result<FourierCrop> {
         self.crops
             .get(frame)
@@ -328,6 +345,7 @@ impl CropIndices {
             })
     }
 
+    /// Borrows all crops in individual source order.
     pub fn as_slice(&self) -> &[FourierCrop] {
         &self.crops
     }

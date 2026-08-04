@@ -48,7 +48,7 @@ let quality_db = psnr(reference.view(), estimate.view(), None, 65_535.0)?;
 | `amplitude_nrmse` | NRMSE after applying `sqrt` to both intensities; requires non-negative values. |
 | `correlation` | Pearson correlation; undefined for a constant valid image. |
 | `psnr` | Peak signal-to-noise ratio in dB. `data_range` is required, finite, and positive; identical inputs produce `+∞`. |
-| `ssim` | Single-scale SSIM, higher is more similar. Uses an 11×11 Gaussian window with σ=1.5, `K1=0.01`, and `K2=0.03`. |
+| `ssim` | Single-scale SSIM, higher is more similar. Uses an 11×11 Gaussian window with σ=1.5, `K1=0.01`, and `K2=0.03`, following [Wang, Bovik, Sheikh, and Simoncelli, “Image quality assessment: From error visibility to structural similarity” (2004)](https://doi.org/10.1109/TIP.2003.819861). |
 | `poisson_deviance` | Summed Poisson deviance for non-negative intensities. A positive `epsilon` floors estimate intensity. |
 | `mean_poisson_deviance` | Poisson deviance divided by valid-pixel count. |
 | `fitted_gain` | Least-squares gain in `estimate ≈ gain × reference`. |

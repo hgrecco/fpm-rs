@@ -2,6 +2,7 @@ use polars::prelude::*;
 
 use crate::{Result, reconstruction::ReconstructionTrace};
 
+/// Builds one row per algorithm-specific trace metric with stable identity columns.
 pub fn algorithm_metrics_dataframe(run_id: &str, trace: &ReconstructionTrace) -> Result<DataFrame> {
     let length = trace.algorithm_metrics.len();
     let mut run_ids = Vec::with_capacity(length);

@@ -16,4 +16,5 @@ pub use tables::{
 };
 
 #[cfg(feature = "parquet")]
+/// Parquet/NPY result and benchmark bundle persistence.
 pub mod parquet;

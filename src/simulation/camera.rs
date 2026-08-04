@@ -9,18 +9,27 @@ use crate::{Result, array_layout::checked_len_2d, error::Error, model::ImagePlan
 pub struct CameraModel {
     /// Expected photoelectrons per pixel at unit optical intensity.
     pub photons_per_pixel: f64,
+    /// Linear conversion gain in digital camera counts per collected electron.
     pub gain_counts_per_electron: f64,
+    /// Additive electronic bias in camera counts.
     pub offset_counts: f64,
+    /// Gaussian read-noise standard deviation in electrons per pixel.
     pub read_noise_electrons: f64,
+    /// Expected dark-current electrons per pixel per simulated exposure.
     pub dark_current_electrons: f64,
     /// Whether to Poisson-sample photoelectrons and dark current.
     pub shot_noise: bool,
     /// Multiplicative detector sensitivity for each pixel.
     pub pixel_sensitivity: Option<Vec<f64>>,
+    /// Optional digitizer bit depth; maximum code is `2^bits - 1` counts.
     pub bit_depth: Option<u8>,
+    /// Optional upper clipping threshold in camera counts.
     pub saturation_counts: Option<f64>,
+    /// Whether to round final camera counts to the nearest integer.
     pub quantize: bool,
+    /// Row-major pixel indices replaced after all other detector effects.
     pub bad_pixels: Vec<usize>,
+    /// Replacement value for [`Self::bad_pixels`], in camera counts.
     pub bad_pixel_value_counts: Option<f64>,
 }
 
@@ -44,6 +53,7 @@ impl Default for CameraModel {
 }
 
 impl CameraModel {
+    /// Creates the default noiseless linear detector with 1000 photons per unit intensity.
     pub fn new() -> Self {
         Self::default()
     }
@@ -66,62 +76,75 @@ impl CameraModel {
         }
     }
 
+    /// Sets the positive expected photoelectrons per pixel at unit optical intensity.
     pub fn photons_per_pixel(mut self, value: f64) -> Self {
         self.photons_per_pixel = value;
         self
     }
 
+    /// Sets positive linear gain in camera counts per electron.
     pub fn gain(mut self, counts_per_electron: f64) -> Self {
         self.gain_counts_per_electron = counts_per_electron;
         self
     }
 
+    /// Sets finite additive camera-count bias.
     pub fn offset_counts(mut self, value: f64) -> Self {
         self.offset_counts = value;
         self
     }
 
+    /// Sets non-negative Gaussian read-noise standard deviation in electrons.
     pub fn read_noise_electrons(mut self, value: f64) -> Self {
         self.read_noise_electrons = value;
         self
     }
 
+    /// Sets non-negative expected dark-current electrons per pixel and exposure.
     pub fn dark_current_electrons(mut self, value: f64) -> Self {
         self.dark_current_electrons = value;
         self
     }
 
+    /// Enables or disables Poisson sampling of photoelectrons plus dark current.
     pub fn shot_noise(mut self, enabled: bool) -> Self {
         self.shot_noise = enabled;
         self
     }
 
+    /// Sets one finite non-negative sensitivity multiplier per row-major detector pixel.
     pub fn pixel_sensitivity(mut self, values: Vec<f64>) -> Self {
         self.pixel_sensitivity = Some(values);
         self
     }
 
+    /// Sets digitizer bit depth in `1..=53`, enabling the corresponding maximum code.
     pub fn bit_depth(mut self, bits: u8) -> Self {
         self.bit_depth = Some(bits);
         self
     }
 
+    /// Sets a finite non-negative saturation threshold in camera counts.
     pub fn saturation(mut self, counts: f64) -> Self {
         self.saturation_counts = Some(counts);
         self
     }
 
+    /// Enables or disables rounding final counts to integer-valued `f64` values.
     pub fn quantize(mut self, enabled: bool) -> Self {
         self.quantize = enabled;
         self
     }
 
+    /// Replaces unique row-major detector indices with `value_counts` after measurement.
     pub fn bad_pixels(mut self, indices: Vec<usize>, value_counts: f64) -> Self {
         self.bad_pixels = indices;
         self.bad_pixel_value_counts = Some(value_counts);
         self
     }
 
+    /// Validates gains, noise parameters, clipping/quantization settings, sensitivities,
+    /// and uniqueness of bad-pixel indices independently of frame shape.
     pub fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("photons_per_pixel", self.photons_per_pixel),
@@ -200,6 +223,7 @@ impl CameraModel {
         Ok(())
     }
 
+    /// Additionally checks sensitivity length and bad-pixel bounds for `frame_len` pixels.
     pub fn validate_for_frame(&self, frame_len: usize) -> Result<()> {
         self.validate()?;
         if self

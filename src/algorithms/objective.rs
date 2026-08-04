@@ -4,15 +4,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Result, error::Error};
 
+/// Scalar data-fidelity objective between predicted and measured intensity frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LossType {
+    /// Mean squared error between predicted and measured amplitudes.
     #[default]
     AmplitudeMse,
+    /// Mean squared error between predicted and measured intensities.
     IntensityMse,
+    /// Mean Poisson negative log likelihood, omitting measurement-only constants.
     PoissonNegativeLogLikelihood,
+    /// Huber loss on amplitude residuals with the implementation's fixed unit transition.
     HuberAmplitude,
 }
 
+/// Computes the selected mean frame loss from equal non-empty intensity slices.
+///
+/// Values must be finite and non-negative; invalid lengths or values return an error.
 pub fn loss(predicted: &[f64], measured: &[f64], loss_type: LossType) -> Result<f64> {
     if predicted.len() != measured.len() || predicted.is_empty() {
         return Err(Error::InvalidShape(format!(

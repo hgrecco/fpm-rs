@@ -143,7 +143,15 @@ def ssim(
     valid_mask: Any | None = None,
     data_range: float,
 ) -> float:
-    """Return canonical single-scale SSIM using an 11×11 Gaussian window (σ=1.5)."""
+    """Return canonical single-scale SSIM using an 11×11 Gaussian window (σ=1.5).
+
+    References
+    ----------
+    [Wang, Bovik, Sheikh, and Simoncelli, *Image quality assessment: From error
+    visibility to structural similarity*
+    (2004)](https://doi.org/10.1109/TIP.2003.819861), IEEE Transactions on Image
+    Processing 13(4), 600–612.
+    """
     reference, estimate, valid_mask = _comparison_inputs(
         reference, estimate, valid_mask
     )

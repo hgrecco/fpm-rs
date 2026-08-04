@@ -2,6 +2,7 @@ use crate::{Result, diagnostics::DiagnosticRequest};
 
 use super::{Callback, CallbackAction, CallbackHook, StepContext};
 
+/// Stops after a configured number of iterations without sufficient objective improvement.
 pub struct StopOnPlateau {
     patience: usize,
     minimum_improvement: f64,
@@ -10,6 +11,8 @@ pub struct StopOnPlateau {
 }
 
 impl StopOnPlateau {
+    /// Creates a stopper with at least one iteration of patience and a non-negative
+    /// absolute `minimum_improvement`.
     pub fn new(patience: usize, minimum_improvement: f64) -> Self {
         Self {
             patience: patience.max(1),

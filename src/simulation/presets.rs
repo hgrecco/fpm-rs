@@ -12,8 +12,11 @@ use crate::{
 
 use super::{CameraModel, SimulationResult, Simulator, SyntheticObject};
 
+/// Stable identifier for [`noiseless_mixed_fpm`].
 pub const NOISELESS_MIXED_PRESET: &str = "noiseless_mixed_v1";
+/// Stable identifier for [`aberrated_pupil_fpm`].
 pub const ABERRATED_PUPIL_PRESET: &str = "aberrated_pupil_v1";
+/// Stable identifier for [`poisson_gaussian_fpm`].
 pub const POISSON_GAUSSIAN_PRESET: &str = "poisson_gaussian_v1";
 
 /// A 3×3 LED, 32×32 measurement, 64×64 mixed-object ideal acquisition.

@@ -66,14 +66,15 @@ pixi run ci
 ```
 
 This is the canonical local source-validation command. It composes strict Rust
-formatting and Clippy checks, all-feature Rust tests, doctests and examples,
+formatting and Clippy checks, warning-free all-feature Rustdoc, all-feature Rust
+tests, doctests and examples, Python API documentation and runtime/stub checks,
 and the complete Python suite with Polars, Matplotlib, and IPython installed.
 The heavy Rust test task serializes linker work. Individual tasks include
-`rust-format`, `rust-clippy`, `rust-test`, `rust-msrv`, `python-test`, and
-`python-test-full`. Formatting tasks that modify sources remain `format-rust`,
-`format-python`, and `format-toml`; `pixi run lint` runs the configured
-pre-commit checks. Dataset tests use generated local bundles and never require
-network access.
+`rust-format`, `rust-clippy`, `rust-test`, `rust-doc`, `rust-msrv`,
+`python-api-docs`, `python-test`, and `python-test-full`. Formatting tasks that
+modify sources remain `format-rust`, `format-python`, and `format-toml`; `pixi
+run lint` runs the configured pre-commit checks. Dataset tests use generated
+local bundles and never require network access.
 
 ## Python extension
 
@@ -89,6 +90,25 @@ Keep Python-visible signatures synchronized with
 `python/fpm_rs/__init__.pyi`. Document array shapes, dtypes, physical units,
 ownership, blocking/GIL behavior, return values, and typed failures when adding
 public calls.
+
+### Python API documentation sources
+
+The checked-in `.pyi` files are the authoritative generated-reference source:
+`python/fpm_rs/__init__.pyi` describes the root extension API, while
+`metrics.pyi` and `evaluation.pyi` describe those public modules. Public Python
+wrappers retain their own docstrings. `scripts/mkdocs_hooks.py` stages those
+sources under `target/docs-python-api/` so mkdocstrings renders Python
+signatures and terminology without exposing the private PyO3 implementation.
+Edit the checked-in source, never the staged copy.
+
+`python/src/` remains authoritative for extension behavior and runtime
+signatures. When an API changes, update the binding and stub together; keep a
+publication citation in the public stub and use the same publication in a
+runtime docstring that also discusses the method. `scripts/check_python_api.py`
+compares exports, public class members, and callable parameter shapes against an
+installed local extension. `scripts/check_python_docs.py` checks every routed
+public stub and wrapper item for meaningful prose without a broad exclusion
+list. Both run through `pixi run python-api-docs` after `maturin develop`.
 
 ## Notebook maintenance
 
@@ -115,6 +135,23 @@ builds that exact output, including rustdoc, then serves it at the same address.
 The Pages workflow invokes `pixi run docs-build`, so local and deployed builds
 share one implementation. Generated `site/` and isolated rustdoc output under
 `target/docs-rust/` are ignored.
+
+The documentation build first checks Python documentation coverage,
+runtime/stub synchronization, and citation syntax. It then builds MkDocs in
+strict mode and workspace Rustdoc with all features and `-D warnings`.
+`#![deny(missing_docs)]` in the library crate makes missing public Rust
+documentation a compiler error. The same gates run in pull-request CI; the
+fast citation check also runs in pre-commit.
+
+Scientific references belong beside the claim or method they support. Include
+authors, linked title, venue, volume/pages or article number, and year; use a
+canonical `https://doi.org/...` target where one exists. `pixi run
+citation-check` rejects bare identifiers and noncanonical DOI resolvers in
+authored Rust, Python, Markdown, and notebook sources. Live publisher checks
+are intentionally not a merge gate because publisher outages and bot blocking
+are nondeterministic; verify new or changed metadata manually against the DOI
+resolver and an authoritative publisher or archival record and report that
+source in the change summary.
 
 ## Release checks
 

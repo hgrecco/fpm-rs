@@ -6,12 +6,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Result, error::Error, model::ImagePlaneModel};
 
+/// Complex-pupil amplitude and support-aware phase error.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PupilComparisonMetrics {
+    /// Root-mean-square pupil-amplitude error over supported pixels.
     pub amplitude_rmse: f64,
+    /// Root-mean-square wrapped pupil-phase error in radians after global-phase alignment.
     pub phase_rmse: f64,
 }
 
+/// Compares equal-shaped complex pupils over non-zero entries of a binary support mask.
 pub fn compare_pupils(
     reference: ArrayView2<'_, Complex64>,
     candidate: ArrayView2<'_, Complex64>,
@@ -67,11 +71,14 @@ pub fn compare_pupils(
     })
 }
 
+/// Root-mean-square difference between source positions on the Fourier grid.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IlluminationPositionMetrics {
+    /// RMS Euclidean `(row, column)` displacement in Fourier-grid pixels.
     pub position_rmse: f64,
 }
 
+/// Compares source-order crop centers after applying optional candidate corrections.
 pub fn compare_illumination_positions(
     reference: &ImagePlaneModel,
     candidate: &ImagePlaneModel,
@@ -112,11 +119,14 @@ pub fn compare_illumination_positions(
     })
 }
 
+/// Scale-invariant error between positive acquisition-frame gains.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FrameGainComparisonMetrics {
+    /// Relative L2 error after fitting one global positive scale.
     pub relative_error: f64,
 }
 
+/// Compares equal non-empty positive gain vectors after global-scale alignment.
 pub fn compare_frame_gains(
     reference: &[f64],
     candidate: &[f64],

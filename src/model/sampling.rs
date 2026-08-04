@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+/// Storage and sign convention relating physical wave vectors to Fourier indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoordinateConvention {
     /// Spectra are stored with zero frequency at the array centre. Positive
@@ -9,18 +10,27 @@ pub enum CoordinateConvention {
     CenteredPositiveK,
 }
 
+/// Physical sampling metadata for low- and high-resolution grids.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sampling {
+    /// Sample-plane low-resolution pixel pitch in metres.
     pub low_res_pixel_size: f64,
+    /// Sample-plane high-resolution reconstruction pixel pitch in metres.
     pub high_res_pixel_size: f64,
+    /// Fourier angular-frequency spacing along columns (`x`), in radians per metre.
     pub dkx: f64,
+    /// Fourier angular-frequency spacing along rows (`y`), in radians per metre.
     pub dky: f64,
+    /// Optional vacuum illumination wavelength in metres.
     pub wavelength: Option<f64>,
+    /// Optional dimensionless synthetic numerical aperture.
     pub synthetic_na: Option<f64>,
+    /// Convention used to store zero frequency and map positive wave vectors.
     pub coordinate_convention: CoordinateConvention,
 }
 
 impl Sampling {
+    /// Creates centered-positive-k sampling from positive finite SI spacings.
     pub fn new(
         low_res_pixel_size: f64,
         high_res_pixel_size: f64,
@@ -40,6 +50,8 @@ impl Sampling {
         Ok(sampling)
     }
 
+    /// Checks positive finite pixel/frequency spacings and positive finite optional
+    /// wavelength and synthetic numerical aperture.
     pub fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("low_res_pixel_size", self.low_res_pixel_size),

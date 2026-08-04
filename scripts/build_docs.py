@@ -24,16 +24,18 @@ def main() -> None:
     run("maturin", "develop", "--skip-install", "--locked")
     package = importlib.import_module("fpm_rs")
     print(f"Documenting fpm_rs {package.__version__}", flush=True)
+    run(sys.executable, "scripts/check_api_docs.py")
 
     run(sys.executable, "-m", "mkdocs", "build", "--strict", "--clean")
 
     rustdoc_env = os.environ.copy()
     rustdoc_env["CARGO_TARGET_DIR"] = str(RUSTDOC_TARGET)
+    rustdoc_env["RUSTDOCFLAGS"] = "-D warnings"
     run(
         "cargo",
         "doc",
-        "--package",
-        "fpm-rs",
+        "--workspace",
+        "--all-features",
         "--no-deps",
         "--locked",
         env=rustdoc_env,

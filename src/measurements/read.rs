@@ -10,20 +10,28 @@ use super::{FrameMetadata, LazyMeasurementStack, MeasurementStack};
 /// and mutation. The opaque frame view may borrow directly from the
 /// implementation or own a shared cache handle.
 pub trait MeasurementRead: Sync {
+    /// Returns the number of acquisition frames.
     fn frame_count(&self) -> usize;
 
+    /// Returns low-resolution image shape as `(height, width)`.
     fn image_shape(&self) -> (usize, usize);
 
+    /// Returns `height * width`, the row-major element count of one frame.
     fn frame_len(&self) -> usize;
 
+    /// Borrows or shares a row-major intensity frame by zero-based acquisition index.
     fn frame(&self, index: usize) -> Result<impl Deref<Target = [f64]> + '_>;
 
+    /// Returns a frame's non-negative reconstruction weight.
     fn frame_weight(&self, index: usize) -> Result<f64>;
 
+    /// Borrows an optional row-major binary validity mask for one frame.
     fn frame_mask(&self, index: usize) -> Result<Option<&[u8]>>;
 
+    /// Borrows metadata in acquisition-frame order.
     fn frame_metadata(&self) -> &[FrameMetadata];
 
+    /// Checks shapes, counts, finite intensities, metadata, weights, and masks.
     fn validate(&self) -> Result<()>;
 }
 

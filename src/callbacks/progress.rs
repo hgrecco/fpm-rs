@@ -2,11 +2,13 @@ use crate::{Result, diagnostics::DiagnosticRequest};
 
 use super::{Callback, CallbackAction, CallbackHook, StepContext};
 
+/// Prints iteration, objective, and elapsed-time progress to standard error.
 pub struct ProgressLogger {
     frequency: usize,
 }
 
 impl ProgressLogger {
+    /// Creates a logger active every `frequency` iterations; zero is normalized to one.
     pub fn new(frequency: usize) -> Self {
         Self {
             frequency: frequency.max(1),

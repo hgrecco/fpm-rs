@@ -4,6 +4,7 @@ use polars::prelude::*;
 
 use crate::{Result, diagnostics::ReconstructionDiagnostics};
 
+/// Builds one row per recorded convergence-diagnostic iteration.
 pub fn iteration_diagnostics_dataframe(
     run_id: &str,
     diagnostics: &ReconstructionDiagnostics,
@@ -45,6 +46,7 @@ pub fn iteration_diagnostics_dataframe(
     )?)
 }
 
+/// Builds one row per predicted-versus-reference frame diagnostic record.
 pub fn frame_diagnostics_dataframe(
     run_id: &str,
     diagnostics: &ReconstructionDiagnostics,
@@ -95,6 +97,7 @@ pub fn frame_diagnostics_dataframe(
     )?)
 }
 
+/// Builds one row per raw measured-frame statistics record.
 pub fn raw_frame_statistics_dataframe(
     run_id: &str,
     diagnostics: &ReconstructionDiagnostics,
@@ -133,6 +136,7 @@ pub fn raw_frame_statistics_dataframe(
     )?)
 }
 
+/// Builds long-form run-ID/key/value rows from named scalar diagnostics.
 pub fn scalar_diagnostics_dataframe(
     run_id: &str,
     values: &BTreeMap<String, f64>,
@@ -153,6 +157,7 @@ pub fn scalar_diagnostics_dataframe(
     )?)
 }
 
+/// Builds long-form non-promoted run metadata rows.
 pub fn metadata_dataframe(run_id: &str, values: &BTreeMap<String, String>) -> Result<DataFrame> {
     const PROMOTED: &[&str] = &[
         "case_id",

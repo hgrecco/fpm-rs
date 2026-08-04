@@ -2,6 +2,7 @@ use polars::prelude::*;
 
 use crate::{Result, reconstruction::ReconstructionResult};
 
+/// Builds source-order `(row, column)` correction rows in Fourier-grid pixels.
 pub fn illumination_calibration_dataframe(
     run_id: &str,
     result: &ReconstructionResult,
@@ -26,6 +27,7 @@ pub fn illumination_calibration_dataframe(
     )?)
 }
 
+/// Builds acquisition-frame gain and additive-background rows.
 pub fn frame_calibration_dataframe(
     run_id: &str,
     result: &ReconstructionResult,

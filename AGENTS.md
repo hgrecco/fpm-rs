@@ -66,12 +66,48 @@ GPU execution are not implemented today.
 - If docs and code disagree, report the discrepancy and update the most suitable
   existing document.
 
+## Public API documentation policy
+
+- Documentation is part of every intentionally public Rust or Python API
+  change. Update affected reference prose, examples, bindings, stubs, and tests
+  in the same change whenever behavior, units, shapes, ordering, ownership,
+  validation, errors, or return values change. Bare signatures, placeholders,
+  and prose that only repeats an identifier or type are not acceptable.
+- Rust public crates, modules, types, traits, associated items, fields,
+  variants, constants, functions, and methods require semantic rustdoc; new
+  modules require useful `//!` landing documentation. Keep
+  `#![deny(missing_docs)]` enabled and add small compiling examples for principal
+  workflows.
+- The checked-in public stubs under `python/fpm_rs/` are authoritative for
+  generated Python signatures and long-form API prose. Keep them synchronized
+  with `python/src/` bindings and public Python wrappers. Use NumPy-style
+  docstrings and document scientific array shape, dtype, axis order, copying,
+  mutability, units, optional values, failures, and blocking behavior where
+  relevant. Do not expose private `_core` implementation details as public API.
+- Cite publication-derived methods and scientific claims near their use with
+  complete, verified bibliographic metadata and a clickable canonical
+  `https://doi.org/...` link when available. Prefer primary sources, document
+  material implementation differences, and never leave bare DOI strings or
+  guess citation metadata.
+- Evaluate API changes in generated Rustdoc and MkDocs pages. Keep Python API
+  domains split by purpose, source implementations collapsed, stable symbol
+  links discoverable, and generated `site/` or `target/` output uncommitted.
+
+Run `pixi run rust-doc`, `pixi run rust-doc-test`, `pixi run python-api-docs`,
+`pixi run docs-build`, and relevant examples/notebook tests for documentation
+changes; `pixi run ci` is the canonical complete source suite. Report public
+items and examples changed, semantic convention changes, citations and their
+verification sources, checks run, and any unresolved API or attribution
+inconsistency.
+
 ## Useful commands
 
 ```sh
 cargo test
 cargo test --all-targets
-cargo doc --workspace --no-deps --all-features
+pixi run rust-doc
+pixi run python-api-docs
+pixi run docs-build
 cargo run --example simulate_and_reconstruct
 cargo run --example benchmark_algorithms
 pixi run -e py312 python-test

@@ -4,12 +4,14 @@ use crate::{Result, diagnostics::DiagnosticRequest};
 
 use super::{Callback, CallbackAction, CallbackHook, StepContext};
 
+/// Streams universal iteration history to a CSV file.
 pub struct CsvLogger {
     path: PathBuf,
     writer: Option<csv::Writer<File>>,
 }
 
 impl CsvLogger {
+    /// Creates a logger that opens or replaces `path` when reconstruction starts.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),

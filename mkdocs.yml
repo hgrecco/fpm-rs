@@ -33,6 +33,11 @@ theme:
 plugins:
   - search
   - mkdocs-jupyter:
+      # These docs publish notebooks only; skip Jupytext/Pandoc probing of
+      # ordinary Markdown, where mkdocstrings directives resemble fenced divs.
+      ignore:
+        - "*.md"
+        - "*.py"
       include:
         - docs/tutorials/notebooks/quickstart.ipynb
         - docs/tutorials/notebooks/synthetic_objects_quickstart.ipynb
@@ -55,11 +60,16 @@ plugins:
             inherited_members: true
             merge_init_into_class: true
             members: true
+            members_order: source
+            separate_signature: true
+            show_category_heading: false
             show_attribute_values: false
             show_root_heading: true
             show_root_full_path: false
             show_source: false
             show_signature_annotations: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
             signature_crossrefs: true
 
 markdown_extensions:
@@ -68,8 +78,7 @@ markdown_extensions:
   - def_list
   - footnotes
   - pymdownx.details
-  - pymdownx.highlight:
-      anchor_linenums: true
+  - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
@@ -107,9 +116,14 @@ nav:
       - Overview: reference/index.md
       - Python API:
           - Package overview: reference/python/index.md
-          - Models, measurements, and simulation: reference/python/model-and-simulation.md
-          - Reconstruction and callbacks: reference/python/reconstruction.md
-          - Plotting and reports: reference/python/diagnostics.md
+          - Datasets: reference/python/datasets.md
+          - Experiment and illumination: reference/python/experiment.md
+          - Models and measurements: reference/python/model-and-measurements.md
+          - Simulation: reference/python/simulation.md
+          - Reconstruction algorithms: reference/python/algorithms.md
+          - Results and bundles: reference/python/results-and-bundles.md
+          - Callbacks and diagnostics: reference/python/diagnostics.md
+          - Evaluation and metrics: reference/python/evaluation-and-metrics.md
       - Rust API: reference/rust.md
   - Development:
       - Contributor guide: development/index.md

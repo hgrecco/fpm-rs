@@ -10,18 +10,28 @@ use crate::{
     error::Error,
 };
 
+/// Aggregate errors between reference and globally phase-aligned complex fields.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ComplexFieldComparisonMetrics {
+    /// Root-mean-square amplitude error.
     pub amplitude_rmse: f64,
+    /// Amplitude L2 error normalized by reference-field L2 norm.
     pub amplitude_nrmse: f64,
+    /// Root-mean-square complex residual after global-phase alignment.
     pub complex_rmse: f64,
+    /// Complex residual L2 norm divided by reference-field L2 norm.
     pub complex_nrmse: f64,
+    /// Root-mean-square wrapped phase error in radians over non-dark reference pixels.
     pub phase_rmse: f64,
+    /// Mean absolute wrapped phase error in radians over non-dark reference pixels.
     pub phase_mae: f64,
+    /// Centered Fourier-spectrum residual L2 norm divided by reference-spectrum norm.
     pub fourier_nrmse: f64,
+    /// Fitted global candidate-to-reference phase offset in radians.
     pub global_phase_offset: f64,
 }
 
+/// Compares equal-shaped fields after fitting one global phase offset.
 pub fn compare_complex_fields(
     reference: ArrayView2<'_, Complex64>,
     candidate: ArrayView2<'_, Complex64>,
@@ -29,6 +39,7 @@ pub fn compare_complex_fields(
     compare_complex_fields_masked(reference, candidate, None)
 }
 
+/// Compares equal-shaped fields over non-zero entries of an optional byte mask.
 pub fn compare_complex_fields_masked(
     reference: ArrayView2<'_, Complex64>,
     candidate: ArrayView2<'_, Complex64>,

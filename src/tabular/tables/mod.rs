@@ -29,19 +29,31 @@ use crate::{
 
 /// All stable reconstruction tables materialized together on explicit request.
 pub struct ReconstructionTables {
+    /// Required one-row run summary.
     pub summary: DataFrame,
+    /// Required one-row-per-completed-iteration trace.
     pub history: DataFrame,
+    /// Optional algorithm-specific scalar metrics.
     pub algorithm_metrics: Option<DataFrame>,
+    /// Optional convergence diagnostics by iteration.
     pub iteration_diagnostics: Option<DataFrame>,
+    /// Optional comparison metrics by frame and iteration.
     pub frame_diagnostics: Option<DataFrame>,
+    /// Optional raw measured-intensity statistics by frame.
     pub raw_frame_statistics: Option<DataFrame>,
+    /// Optional predicted-versus-measured evaluation by frame.
     pub frame_evaluation: Option<DataFrame>,
+    /// Optional per-source Fourier-grid calibration corrections.
     pub illumination_calibration: Option<DataFrame>,
+    /// Optional acquisition-frame gains and backgrounds.
     pub frame_calibration: Option<DataFrame>,
+    /// Optional key/value scalar diagnostics.
     pub scalar_diagnostics: Option<DataFrame>,
+    /// Optional key/value string metadata.
     pub metadata: Option<DataFrame>,
 }
 
+/// Materializes all required and non-empty optional tables for one result and run ID.
 pub fn reconstruction_tables(
     run_id: &str,
     result: &ReconstructionResult,

@@ -20,20 +20,31 @@ use crate::{
     reconstruction::{ReconstructionProblem, ReconstructionResult},
 };
 
+/// Predicted-versus-measured intensity metrics in acquisition-frame order.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FrameIntensityEvaluation {
+    /// One comparison record per acquisition frame.
     pub per_frame: Vec<IntensityComparisonMetrics>,
 }
 
+/// Ground-truth comparisons for reconstructed object, model calibration, and frames.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReconstructionEvaluation {
+    /// Complex-field metrics after the documented global alignment.
     pub object: ComplexFieldComparisonMetrics,
+    /// Optional complex-pupil comparison when a reference model is supplied.
     pub pupil: Option<PupilComparisonMetrics>,
+    /// Optional source-position comparison in Fourier-grid pixels.
     pub illumination: Option<IlluminationPositionMetrics>,
+    /// Optional acquisition-frame gain comparison.
     pub frame_gains: Option<FrameGainComparisonMetrics>,
+    /// Optional predicted-versus-measured intensity comparison.
     pub intensity: Option<FrameIntensityEvaluation>,
 }
 
+/// Compares a result with a reference complex object and optional reference model.
+///
+/// `valid_object_mask`, when present, is a same-shaped binary `(row, column)` mask.
 pub fn evaluate_reconstruction(
     result: &ReconstructionResult,
     reference_object: ArrayView2<'_, Complex64>,
@@ -74,6 +85,7 @@ pub fn evaluate_reconstruction(
     })
 }
 
+/// Evaluates ground truth and also predicts every measurement in `problem`.
 pub fn evaluate_reconstruction_with_problem<M: MeasurementRead>(
     result: &ReconstructionResult,
     problem: &ReconstructionProblem<M>,
@@ -96,6 +108,7 @@ pub fn evaluate_reconstruction_with_problem<M: MeasurementRead>(
     Ok(evaluation)
 }
 
+/// Evaluates predicted result intensities against measured acquisition frames.
 pub fn evaluate_frame_intensity<M: MeasurementRead>(
     result: &ReconstructionResult,
     problem: &ReconstructionProblem<M>,

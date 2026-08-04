@@ -13,15 +13,21 @@ use crate::{
 
 use super::Dataset;
 
+/// Axis-aligned detector/object crop using zero-based pixel indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
+    /// First included row (`y`).
     pub row: usize,
+    /// First included column (`x`).
     pub column: usize,
+    /// Positive number of rows.
     pub height: usize,
+    /// Positive number of columns.
     pub width: usize,
 }
 
 impl Rect {
+    /// Creates a non-empty rectangle; containment is checked when a subset is built.
     pub fn new(row: usize, column: usize, height: usize, width: usize) -> Result<Self> {
         if height == 0 || width == 0 {
             return Err(Error::Dataset(
@@ -37,13 +43,18 @@ impl Rect {
     }
 }
 
+/// Deterministic acquisition-frame selection for a dataset subset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrameSelector {
+    /// Retain every acquisition frame in original order.
     All,
+    /// Retain indices `0, step, 2*step, ...`; `step` must be positive.
     EveryNth(usize),
+    /// Retain explicit unique acquisition-frame indices in the supplied order.
     Indices(Vec<usize>),
 }
 
+/// Owned dataset values after deterministic frame selection and optional spatial crop.
 #[derive(Clone, Debug)]
 pub struct DatasetSubset {
     measurements: MeasurementStack,
@@ -55,30 +66,37 @@ pub struct DatasetSubset {
 }
 
 impl DatasetSubset {
+    /// Borrows subsetted resident measurements.
     pub fn measurements(&self) -> &MeasurementStack {
         &self.measurements
     }
 
+    /// Borrows models and descriptions updated for the subset dimensions and sources.
     pub fn configuration(&self) -> &SimulationConfiguration {
         &self.configuration
     }
 
+    /// Borrows optional cropped high-resolution complex ground truth.
     pub fn ground_truth_object(&self) -> Option<&Array2<Complex64>> {
         self.ground_truth_object.as_ref()
     }
 
+    /// Borrows optional cropped binary object-validity mask.
     pub fn valid_object_mask(&self) -> Option<&Array2<u8>> {
         self.valid_object_mask.as_ref()
     }
 
+    /// Borrows original provenance plus deterministic subset annotations.
     pub fn provenance(&self) -> &std::collections::BTreeMap<String, String> {
         &self.provenance
     }
 
+    /// Borrows unchanged semantic measurement units.
     pub fn measurement_units(&self) -> Option<&str> {
         self.measurement_units.as_deref()
     }
 
+    /// Clones subset measurements and assumed model into a validated reconstruction problem.
     pub fn reconstruction_problem(&self) -> Result<ReconstructionProblem<MeasurementStack>> {
         ReconstructionProblem::new(
             self.measurements.clone(),
@@ -90,6 +108,7 @@ impl DatasetSubset {
     }
 }
 
+/// Borrowing builder for deterministic dataset frame and spatial subsets.
 #[derive(Clone, Debug)]
 pub struct DatasetSubsetBuilder<'a> {
     dataset: &'a Dataset,
@@ -106,20 +125,24 @@ impl<'a> DatasetSubsetBuilder<'a> {
         }
     }
 
+    /// Selects acquisition frames; validation occurs in [`Self::build`].
     pub fn frames(mut self, selector: FrameSelector) -> Self {
         self.frames = selector;
         self
     }
 
+    /// Selects acquisition indices `0, step, 2*step, ...`.
     pub fn every_nth_frame(self, step: usize) -> Self {
         self.frames(FrameSelector::EveryNth(step))
     }
 
+    /// Selects a low-resolution detector rectangle; corresponding object/model grids are updated.
     pub fn crop(mut self, crop: Rect) -> Self {
         self.crop = Some(crop);
         self
     }
 
+    /// Creates and selects a detector crop from zero-based row/column and positive size.
     pub fn crop_pixels(
         self,
         row: usize,
@@ -130,6 +153,8 @@ impl<'a> DatasetSubsetBuilder<'a> {
         Ok(self.crop(Rect::new(row, column, height, width)?))
     }
 
+    /// Validates selection and crop bounds, then owns subsetted measurements, models,
+    /// optional ground truth/mask, and provenance.
     pub fn build(self) -> Result<DatasetSubset> {
         let source = self.dataset.measurements();
         let model = &self

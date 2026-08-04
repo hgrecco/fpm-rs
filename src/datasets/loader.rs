@@ -24,8 +24,11 @@ pub const DATASET_FORMAT_VERSION: u32 = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetManifest {
+    /// Dataset-bundle schema version; must equal [`DATASET_FORMAT_VERSION`].
     pub format_version: u32,
+    /// Relative path to a [`crate::measurements::MeasurementSpec`] JSON file.
     pub measurement_manifest: PathBuf,
+    /// Relative path to a [`crate::configuration::SimulationConfiguration`] JSON file.
     pub configuration: PathBuf,
     /// Optional JSON-serialized `Array2<Complex64>` in reconstruction space.
     #[serde(default)]
@@ -34,8 +37,10 @@ pub struct DatasetManifest {
     #[serde(default)]
     pub valid_object_mask: Option<PathBuf>,
     #[serde(default)]
+    /// User-visible provenance key/value metadata.
     pub provenance: BTreeMap<String, String>,
     #[serde(default)]
+    /// Optional semantic units for stored measurements, such as camera counts.
     pub measurement_units: Option<String>,
 }
 
@@ -74,6 +79,7 @@ impl Dataset {
         })
     }
 
+    /// Borrows the resident measured-intensity stack.
     pub fn measurements(&self) -> &MeasurementStack {
         &self.measurements
     }
@@ -83,26 +89,32 @@ impl Dataset {
         self.source_path.as_deref()
     }
 
+    /// Borrows the validated true/assumed experiment configuration.
     pub fn configuration(&self) -> &SimulationConfiguration {
         &self.configuration
     }
 
+    /// Borrows optional high-resolution complex ground truth shaped `(height, width)`.
     pub fn ground_truth_object(&self) -> Option<&Array2<Complex64>> {
         self.ground_truth_object.as_ref()
     }
 
+    /// Borrows an optional same-shaped binary validity mask for object metrics.
     pub fn valid_object_mask(&self) -> Option<&Array2<u8>> {
         self.valid_object_mask.as_ref()
     }
 
+    /// Borrows provenance metadata from the dataset manifest.
     pub fn provenance(&self) -> &BTreeMap<String, String> {
         &self.provenance
     }
 
+    /// Borrows optional semantic measurement units.
     pub fn measurement_units(&self) -> Option<&str> {
         self.measurement_units.as_deref()
     }
 
+    /// Clones measurements and the assumed model into a validated reconstruction problem.
     pub fn reconstruction_problem(&self) -> Result<ReconstructionProblem<MeasurementStack>> {
         ReconstructionProblem::new(
             self.measurements.clone(),
@@ -113,6 +125,7 @@ impl Dataset {
         )
     }
 
+    /// Starts a deterministic frame-selection and spatial-cropping builder.
     pub fn subset(&self) -> super::DatasetSubsetBuilder<'_> {
         super::DatasetSubsetBuilder::new(self)
     }
@@ -146,6 +159,7 @@ pub struct DatasetLoader {
 }
 
 impl DatasetLoader {
+    /// Opens an existing local bundle root without performing network access.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         if !root.is_dir() {
@@ -157,14 +171,18 @@ impl DatasetLoader {
         Ok(Self { root })
     }
 
+    /// Returns the local dataset-bundle root.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Returns `root/dataset.json` without checking whether the file exists.
     pub fn manifest_path(&self) -> PathBuf {
         self.root.join("dataset.json")
     }
 
+    /// Loads and validates the manifest, measurements, configuration, optional ground truth,
+    /// mask, provenance, and measurement units entirely from local files.
     pub fn load(&self) -> Result<Dataset> {
         let manifest_path = self.manifest_path();
         let manifest: DatasetManifest =

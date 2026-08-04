@@ -86,6 +86,7 @@ pub struct CpuBackend {
 }
 
 impl CpuBackend {
+    /// Creates cached FFT plans for non-zero low- and high-resolution `(height, width)` grids.
     pub fn new(low_shape: (usize, usize), high_shape: (usize, usize)) -> Result<Self> {
         if low_shape.0 == 0 || low_shape.1 == 0 || high_shape.0 == 0 || high_shape.1 == 0 {
             return Err(Error::InvalidShape(

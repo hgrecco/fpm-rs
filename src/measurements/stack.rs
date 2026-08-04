@@ -55,6 +55,8 @@ pub struct MeasurementStack {
 }
 
 impl MeasurementStack {
+    /// Stores an owned row-major `(frame, row, column)` buffer with image shape
+    /// `(height, width)`, deriving default metadata when `frame_metadata` is empty.
     pub fn from_vec(
         data: Vec<f64>,
         image_shape: (usize, usize),
@@ -140,6 +142,7 @@ impl MeasurementStack {
         Ok(stack)
     }
 
+    /// Copies equally shaped row-major intensity frames into one resident stack.
     pub fn from_frames(frames: &[Vec<f64>], image_shape: (usize, usize)) -> Result<Self> {
         let frame_len = checked_len_2d(image_shape)?;
         if frames.iter().any(|frame| frame.len() != frame_len) {
@@ -157,6 +160,7 @@ impl MeasurementStack {
         Self::from_vec(data, image_shape, Vec::new())
     }
 
+    /// Loads grayscale image files in acquisition order, converting native pixel values to `f64`.
     pub fn from_image_files<P: AsRef<Path>>(
         paths: &[P],
         frame_metadata: Vec<FrameMetadata>,
@@ -202,6 +206,7 @@ impl MeasurementStack {
         Self::from_vec(data, shape, metadata)
     }
 
+    /// Loads every page of a same-shaped grayscale TIFF as one acquisition frame.
     pub fn from_tiff_stack(
         path: impl AsRef<Path>,
         frame_metadata: Vec<FrameMetadata>,
@@ -231,6 +236,7 @@ impl MeasurementStack {
         Self::from_vec(pages.into_iter().flatten().collect(), shape, metadata)
     }
 
+    /// Loads a JSON [`MeasurementSpec`](super::MeasurementSpec) and all referenced images.
     pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let manifest = MeasurementSpec::load(path)?;
@@ -238,6 +244,7 @@ impl MeasurementStack {
         Self::from_manifest_definition(manifest, base_directory)
     }
 
+    /// Loads a manifest value, resolving relative paths beneath `base_directory`.
     pub fn from_manifest_definition(
         manifest: MeasurementSpec,
         base_directory: impl AsRef<Path>,
@@ -304,38 +311,46 @@ impl MeasurementStack {
         Ok(stack)
     }
 
+    /// Borrows intensity data as `(frame, row, column)` without allocating or copying.
     pub fn data(&self) -> ArrayView3<'_, f64> {
         self.data.ndarray_view()
     }
 
+    /// Borrows one `(row, column)` intensity frame without copying.
     pub fn frame_view(&self, index: usize) -> Result<ArrayView2<'_, f64>> {
         self.check_frame(index)?;
         Ok(self.data.ndarray_view().index_axis_move(Axis(0), index))
     }
 
+    /// Mutably borrows one `(row, column)` intensity frame without copying.
     pub fn frame_view_mut(&mut self, index: usize) -> Result<ArrayViewMut2<'_, f64>> {
         self.check_frame(index)?;
         Ok(self.data.ndarray_view_mut().index_axis_move(Axis(0), index))
     }
 
+    /// Returns the acquisition-frame count.
     pub fn frame_count(&self) -> usize {
         self.data.dim().0
     }
 
+    /// Returns low-resolution frame shape as `(height, width)`.
     pub fn image_shape(&self) -> (usize, usize) {
         let shape = self.data.dim();
         (shape.1, shape.2)
     }
 
+    /// Returns the row-major element count of one frame.
     pub fn frame_len(&self) -> usize {
         let shape = self.data.dim();
         shape.1 * shape.2
     }
 
+    /// Borrows the complete standard-layout `(frame, row, column)` stack as a flat slice.
     pub fn as_slice(&self) -> &[f64] {
         self.data.as_slice()
     }
 
+    /// Borrows metadata in acquisition-frame order.
     pub fn frame_metadata(&self) -> &[FrameMetadata] {
         &self.frame_metadata
     }
@@ -352,10 +367,13 @@ impl MeasurementStack {
         Ok(())
     }
 
+    /// Borrows the correction flags associated with this stack.
     pub fn preprocessing(&self) -> &PreprocessingConfig {
         &self.preprocessing
     }
 
+    /// Checks non-empty consistent shapes and counts, standard layout, finite intensities,
+    /// metadata indices/exposures/weights, correction arrays, and binary masks.
     pub fn validate(&self) -> Result<()> {
         let shape = self.data.dim();
         let expected = checked_len_3d(shape)?;
@@ -446,6 +464,7 @@ impl MeasurementStack {
         Ok(())
     }
 
+    /// Borrows one row-major intensity frame by acquisition index.
     pub fn frame(&self, index: usize) -> Result<&[f64]> {
         self.check_frame(index)?;
         let frame_len = self.frame_len();
@@ -453,6 +472,7 @@ impl MeasurementStack {
         Ok(&self.data.as_slice()[start..start + frame_len])
     }
 
+    /// Mutably borrows one row-major intensity frame by acquisition index.
     pub fn frame_mut(&mut self, index: usize) -> Result<&mut [f64]> {
         self.check_frame(index)?;
         let frame_len = self.frame_len();
@@ -460,6 +480,7 @@ impl MeasurementStack {
         Ok(&mut self.data.as_slice_mut()[start..start + frame_len])
     }
 
+    /// Returns a frame's non-negative reconstruction weight.
     pub fn frame_weight(&self, index: usize) -> Result<f64> {
         self.frame_metadata
             .get(index)
@@ -470,6 +491,7 @@ impl MeasurementStack {
             })
     }
 
+    /// Borrows a frame's row-major binary validity mask, including a broadcast mask.
     pub fn frame_mask(&self, index: usize) -> Result<Option<&[u8]>> {
         self.check_frame(index)?;
         Ok(self
@@ -478,6 +500,7 @@ impl MeasurementStack {
             .map(|values| values.frame(index, self.frame_len())))
     }
 
+    /// Stores a finite same-shaped detector dark image and enables dark subtraction.
     pub fn with_dark_frame(mut self, dark: Array2<f64>) -> Result<Self> {
         let dark = StandardArray2::try_from(dark)?;
         if dark.dim() != self.image_shape() || !all_finite(dark.as_slice()) {
@@ -490,6 +513,7 @@ impl MeasurementStack {
         Ok(self)
     }
 
+    /// Stores a positive finite same-shaped flat field and enables division by it.
     pub fn with_flat_field(mut self, flat: Array2<f64>) -> Result<Self> {
         let flat = StandardArray2::try_from(flat)?;
         if flat.dim() != self.image_shape()
@@ -507,6 +531,7 @@ impl MeasurementStack {
         Ok(self)
     }
 
+    /// Stores one finite background image broadcast to every frame and enables subtraction.
     pub fn with_background(mut self, background: Array2<f64>) -> Result<Self> {
         let values = StandardArray2::try_from(background)?;
         if values.dim() != self.image_shape() || !all_finite(values.as_slice()) {
@@ -519,6 +544,7 @@ impl MeasurementStack {
         Ok(self)
     }
 
+    /// Stores a finite `(frame, row, column)` background stack and enables subtraction.
     pub fn with_per_frame_background(mut self, background: Array3<f64>) -> Result<Self> {
         let values = StandardArray3::try_from(background)?;
         if values.dim() != self.data.dim() || !all_finite(values.as_slice()) {
@@ -531,6 +557,7 @@ impl MeasurementStack {
         Ok(self)
     }
 
+    /// Stores one same-shaped binary mask broadcast to every frame.
     pub fn with_masks(mut self, masks: Array2<u8>) -> Result<Self> {
         let values = StandardArray2::try_from(masks)?;
         if values.dim() != self.image_shape() || values.as_slice().iter().any(|&value| value > 1) {
@@ -542,6 +569,7 @@ impl MeasurementStack {
         Ok(self)
     }
 
+    /// Stores binary validity masks shaped `(frame, row, column)`.
     pub fn with_per_frame_masks(mut self, masks: Array3<u8>) -> Result<Self> {
         let values = StandardArray3::try_from(masks)?;
         if values.dim() != self.data.dim() || values.as_slice().iter().any(|&value| value > 1) {
@@ -553,22 +581,29 @@ impl MeasurementStack {
         Ok(self)
     }
 
+    /// Enables division by each frame's positive exposure time during preprocessing.
     pub fn normalize_exposure(mut self) -> Self {
         self.preprocessing.normalize_exposure = true;
         self
     }
 
+    /// Enables clamping corrected negative intensities to zero.
     pub fn clamp_negative(mut self) -> Self {
         self.preprocessing.clamp_negative = true;
         self
     }
 
+    /// Replaces correction flags, requiring every enabled correction array to be present.
     pub fn with_preprocessing(mut self, preprocessing: PreprocessingConfig) -> Result<Self> {
         self.preprocessing = preprocessing;
         self.validate()?;
         Ok(self)
     }
 
+    /// Applies configured corrections in place and returns the owned stack.
+    ///
+    /// Order is dark subtraction, flat-field division, exposure normalization,
+    /// background subtraction, then optional non-negative clamping.
     pub fn apply_preprocessing(mut self) -> Result<Self> {
         self.validate()?;
         let frame_len = self.frame_len();

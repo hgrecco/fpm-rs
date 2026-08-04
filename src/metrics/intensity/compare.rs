@@ -17,36 +17,67 @@ const SSIM_K2: f64 = 0.03;
 /// Errors returned by intensity comparison metrics.
 #[derive(Debug, Error, PartialEq)]
 pub enum IntensityMetricError {
+    /// Reference and estimate have different `(height, width)` shapes.
     #[error("reference and estimate shapes differ: {reference:?} and {estimate:?}")]
     ShapeMismatch {
+        /// Reference image shape.
         reference: (usize, usize),
+        /// Estimate image shape.
         estimate: (usize, usize),
     },
+    /// A validity mask does not match the image shape.
     #[error("valid_mask shape {actual:?} does not match image shape {expected:?}")]
     MaskShapeMismatch {
+        /// Supplied mask shape.
         actual: (usize, usize),
+        /// Required image shape.
         expected: (usize, usize),
     },
+    /// No pixel was selected by the optional mask.
     #[error("at least one valid pixel is required")]
     EmptyValidMask,
+    /// A generic scalar could not be represented as `f64`.
     #[error("{input} contains a value that cannot be represented as f64")]
-    UnsupportedScalar { input: &'static str },
+    UnsupportedScalar {
+        /// Name of the input containing the unsupported scalar.
+        input: &'static str,
+    },
+    /// An input contains NaN or infinity.
     #[error("{input} contains a non-finite value")]
-    NonFinite { input: &'static str },
+    NonFinite {
+        /// Name of the non-finite input.
+        input: &'static str,
+    },
+    /// A relative metric has zero reference norm.
     #[error("{metric} is undefined because the reference normalization is zero")]
-    ZeroReferenceNormalization { metric: &'static str },
+    ZeroReferenceNormalization {
+        /// Metric whose denominator was zero.
+        metric: &'static str,
+    },
+    /// Pearson correlation is undefined because an input has zero variance.
     #[error("correlation is undefined for a constant input")]
     ZeroVariance,
+    /// A square-root or Poisson metric received a negative intensity.
     #[error("{metric} requires non-negative intensities")]
-    NegativeIntensity { metric: &'static str },
+    NegativeIntensity {
+        /// Metric requiring non-negative values.
+        metric: &'static str,
+    },
+    /// PSNR or SSIM received a non-positive or non-finite data range.
     #[error("data_range must be finite and strictly positive")]
     InvalidDataRange,
+    /// A Poisson metric received a non-positive or non-finite numerical floor.
     #[error("epsilon must be finite and strictly positive")]
     InvalidEpsilon,
+    /// An image is smaller than the canonical 11-by-11 SSIM window.
     #[error(
         "SSIM requires images at least {SSIM_WINDOW_SIZE} by {SSIM_WINDOW_SIZE}, got {shape:?}"
     )]
-    SsimImageTooSmall { shape: (usize, usize) },
+    SsimImageTooSmall {
+        /// Supplied image shape.
+        shape: (usize, usize),
+    },
+    /// A mask excludes every complete SSIM window.
     #[error(
         "SSIM requires at least one fully valid {SSIM_WINDOW_SIZE} by {SSIM_WINDOW_SIZE} window"
     )]
@@ -56,14 +87,23 @@ pub enum IntensityMetricError {
 /// Aggregate residual statistics comparing an estimate with a reference image.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IntensityComparisonMetrics {
+    /// Sum of selected reference intensities.
     pub reference_sum: f64,
+    /// Sum of selected estimate intensities.
     pub estimate_sum: f64,
+    /// Sum of absolute signed residuals.
     pub residual_l1: f64,
+    /// Euclidean norm of signed residuals.
     pub residual_l2: f64,
+    /// Mean signed residual `estimate - reference`.
     pub residual_mean: f64,
+    /// Population standard deviation of signed residuals.
     pub residual_std: f64,
+    /// Maximum absolute residual.
     pub residual_max_abs: f64,
+    /// Residual L2 norm divided by reference L2 norm.
     pub normalized_l2: f64,
+    /// Selected reference pixels at or above the optional saturation threshold.
     pub saturated_pixels: Option<usize>,
 }
 
@@ -359,6 +399,13 @@ where
 }
 
 /// Return canonical single-scale SSIM using an 11×11 Gaussian window (σ=1.5).
+///
+/// # References
+///
+/// [Z. Wang, A. C. Bovik, H. R. Sheikh, and E. P. Simoncelli, “Image quality
+/// assessment: From error visibility to structural similarity”
+/// (2004)](https://doi.org/10.1109/TIP.2003.819861), *IEEE Transactions on
+/// Image Processing* **13**(4), 600–612.
 pub fn ssim<T>(
     reference: ArrayView2<'_, T>,
     estimate: ArrayView2<'_, T>,

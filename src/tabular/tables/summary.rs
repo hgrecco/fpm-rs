@@ -2,6 +2,7 @@ use polars::prelude::*;
 
 use crate::{Result, reconstruction::ReconstructionResult};
 
+/// Stable identity/status columns shared by reconstruction and benchmark run tables.
 pub const COMMON_RUN_COLUMNS: &[&str] = &[
     "run_id",
     "case_id",
@@ -18,6 +19,7 @@ pub const COMMON_RUN_COLUMNS: &[&str] = &[
     "error",
 ];
 
+/// Builds the required one-row reconstruction result summary table.
 pub fn summary_dataframe(run_id: &str, result: &ReconstructionResult) -> Result<DataFrame> {
     let (reconstruction_height, reconstruction_width) = result.object.dim();
     let (image_height, image_width) = result.recovered_pupil.shape();

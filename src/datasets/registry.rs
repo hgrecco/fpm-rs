@@ -36,8 +36,11 @@ const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetArchive {
+    /// HTTPS or file URL for the immutable compressed tar archive.
     pub url: String,
+    /// Lowercase hexadecimal SHA-256 digest of the archive bytes.
     pub sha256: String,
+    /// Exact compressed archive size in bytes.
     pub size_bytes: u64,
 }
 
@@ -45,7 +48,9 @@ pub struct DatasetArchive {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetLicense {
+    /// SPDX license identifier for the distributed dataset.
     pub spdx: String,
+    /// Authoritative license text or record URL.
     pub url: String,
 }
 
@@ -53,7 +58,9 @@ pub struct DatasetLicense {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetCitation {
+    /// Publication DOI identifier recorded by the registry contract.
     pub doi: String,
+    /// Complete human-readable bibliographic citation.
     pub text: String,
 }
 
@@ -61,7 +68,9 @@ pub struct DatasetCitation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetSource {
+    /// Authoritative original dataset or project URL.
     pub url: String,
+    /// Description of source acquisition and external conversion provenance.
     pub description: String,
 }
 
@@ -69,15 +78,25 @@ pub struct DatasetSource {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetRegistryEntry {
+    /// Stable path-safe dataset identifier.
     pub id: String,
+    /// Immutable path-safe dataset version.
     pub version: String,
+    /// Short human-readable dataset title.
     pub title: String,
+    /// Human-readable scientific and acquisition summary.
     pub description: String,
+    /// Dataset bundle format version expected after extraction.
     pub format_version: u32,
+    /// Immutable download location, digest, and byte size.
     pub archive: DatasetArchive,
+    /// License identifier and authoritative URL.
     pub license: DatasetLicense,
+    /// Preferred publication citation metadata.
     pub citation: DatasetCitation,
+    /// Original-source provenance.
     pub source: DatasetSource,
+    /// Search and filtering tags.
     pub tags: Vec<String>,
 }
 
@@ -159,7 +178,9 @@ impl DatasetRegistryEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetRegistryDocument {
+    /// Registry schema version; must equal [`DATASET_REGISTRY_VERSION`].
     pub registry_version: u32,
+    /// Current immutable dataset versions, with unique [`DatasetRegistryEntry::id`] values.
     pub datasets: Vec<DatasetRegistryEntry>,
 }
 
@@ -203,8 +224,11 @@ impl DatasetRegistryDocument {
 /// A registry entry annotated with its current managed-cache status.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatasetListing {
+    /// Validated registry metadata.
     pub entry: DatasetRegistryEntry,
+    /// Whether the current version is present and valid in the managed cache.
     pub cached: bool,
+    /// Installed version directory when `cached` is true.
     pub cache_path: Option<PathBuf>,
 }
 

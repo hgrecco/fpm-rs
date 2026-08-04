@@ -21,6 +21,7 @@ use crate::{
     },
 };
 
+/// Current benchmark-bundle manifest format version.
 pub const BENCHMARK_BUNDLE_FORMAT_VERSION: u32 = 1;
 
 const RUNS: &str = "tables.runs";
@@ -28,26 +29,40 @@ const FRAMES: &str = "tables.frames";
 const ARTIFACTS: &str = "tables.artifacts";
 const METADATA: &str = "tables.metadata";
 
+/// Manifest-described Parquet tables in a benchmark bundle.
 #[derive(Clone, Debug)]
 pub struct BenchmarkBundleTables {
+    /// One-row-per-run summary table artifact.
     pub runs: BundleArtifact,
+    /// Per-acquisition-frame metrics table artifact.
     pub frames: BundleArtifact,
+    /// Generated artifact-path table artifact.
     pub artifacts: BundleArtifact,
+    /// Extensible benchmark metadata table artifact.
     pub metadata: BundleArtifact,
 }
 
+/// Reopened benchmark suite with table metadata and lazily loaded result bundles.
 #[derive(Clone)]
 pub struct BenchmarkBundle {
+    /// Root directory containing the benchmark bundle.
     pub path: PathBuf,
+    /// Path to the benchmark manifest JSON file.
     pub manifest_path: PathBuf,
+    /// Stable benchmark-suite name.
     pub name: String,
+    /// Optional human-readable benchmark label.
     pub label: Option<String>,
+    /// Parquet table artifact descriptors.
     pub tables: BenchmarkBundleTables,
+    /// Result bundles keyed by benchmark run ID.
     pub results: BTreeMap<String, ResultBundle>,
 }
 
+/// Options controlling benchmark-bundle metadata.
 #[derive(Clone, Debug, Default)]
 pub struct BenchmarkBundleExportOptions {
+    /// Optional human-readable bundle label.
     pub label: Option<String>,
 }
 
@@ -72,6 +87,10 @@ struct BenchmarkManifestArtifact {
     sha256: String,
 }
 
+/// Atomically writes benchmark tables plus referenced reconstruction result bundles.
+///
+/// Every record must have a unique run ID and every supplied result must correspond to a
+/// successful record. Existing complete destinations are rejected.
 pub fn write_benchmark_bundle(
     path: impl AsRef<Path>,
     name: impl Into<String>,
@@ -189,6 +208,7 @@ pub fn write_benchmark_bundle(
     read_benchmark_bundle(final_path)
 }
 
+/// Verifies and reopens a complete benchmark bundle and its nested result manifests.
 pub fn read_benchmark_bundle(path: impl AsRef<Path>) -> Result<BenchmarkBundle> {
     let path = path.as_ref();
     if path

@@ -30,9 +30,9 @@ use super::{
 ///
 /// # Reference
 ///
-/// G. Zheng, R. Horstmeyer, and C. Yang, “Wide-field, high-resolution Fourier
-/// ptychographic microscopy,” *Nature Photonics* **7**, 739–745 (2013),
-/// [doi:10.1038/nphoton.2013.187](https://doi.org/10.1038/nphoton.2013.187).
+/// [G. Zheng, R. Horstmeyer, and C. Yang, “Wide-field, high-resolution Fourier
+/// ptychographic microscopy” (2013)](https://doi.org/10.1038/nphoton.2013.187),
+/// *Nature Photonics* **7**, 739–745.
 #[derive(Clone, Debug)]
 pub struct AlternatingProjection {
     /// Number of complete passes through the acquisition schedule.
@@ -61,16 +61,19 @@ impl Default for AlternatingProjection {
 }
 
 impl AlternatingProjection {
+    /// Sets the number of complete acquisition-schedule passes; validation requires non-zero.
     pub fn iterations(mut self, iterations: usize) -> Self {
         self.iterations = iterations;
         self
     }
 
+    /// Sets the finite positive relaxation applied to object-spectrum corrections.
     pub fn object_step(mut self, object_step: f64) -> Self {
         self.object_step = object_step;
         self
     }
 
+    /// Sets the positive number of acquisition frames supplied per step.
     pub fn batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self

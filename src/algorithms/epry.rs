@@ -29,9 +29,9 @@ use super::{
 ///
 /// # Reference
 ///
-/// X. Ou, G. Zheng, and C. Yang, “Embedded pupil function recovery for Fourier
-/// ptychographic microscopy,” *Optics Express* **22**(5), 4960–4972 (2014),
-/// [doi:10.1364/OE.22.004960](https://doi.org/10.1364/OE.22.004960).
+/// [X. Ou, G. Zheng, and C. Yang, “Embedded pupil function recovery for Fourier
+/// ptychographic microscopy” (2014)](https://doi.org/10.1364/OE.22.004960),
+/// *Optics Express* **22**(5), 4960–4972.
 #[derive(Clone, Debug)]
 pub struct Epry {
     /// Number of complete passes through the acquisition schedule.
@@ -93,57 +93,68 @@ impl Default for Epry {
 }
 
 impl Epry {
+    /// Sets the number of complete acquisition-schedule passes; validation requires non-zero.
     pub fn iterations(mut self, iterations: usize) -> Self {
         self.iterations = iterations;
         self
     }
 
+    /// Sets the finite positive object-spectrum relaxation.
     pub fn object_step(mut self, step: f64) -> Self {
         self.object_step = step;
         self
     }
 
+    /// Sets the finite positive complex-pupil relaxation.
     pub fn pupil_step(mut self, step: f64) -> Self {
         self.pupil_step = step;
         self
     }
 
+    /// Enables or disables simultaneous complex-pupil recovery.
     pub fn recover_pupil(mut self, recover: bool) -> Self {
         self.recover_pupil = recover;
         self
     }
 
+    /// Selects whether pupil values outside the compiled binary support are forced to zero.
     pub fn constrain_pupil_support(mut self, constrain: bool) -> Self {
         self.constrain_pupil_support = constrain;
         self
     }
 
+    /// Enables or disables one positive multiplicative gain estimate per acquisition frame.
     pub fn recover_frame_gains(mut self, recover: bool) -> Self {
         self.recover_frame_gains = recover;
         self
     }
 
+    /// Sets the finite gain-estimate relaxation in `(0, 1]`.
     pub fn gain_step(mut self, step: f64) -> Self {
         self.gain_step = step;
         self
     }
 
+    /// Sets finite positive inclusive lower and upper bounds for recovered frame gains.
     pub fn gain_bounds(mut self, minimum: f64, maximum: f64) -> Self {
         self.minimum_gain = minimum;
         self.maximum_gain = maximum;
         self
     }
 
+    /// Enables or disables one spatially uniform additive intensity background per frame.
     pub fn recover_background(mut self, recover: bool) -> Self {
         self.recover_background = recover;
         self
     }
 
+    /// Sets finite background-estimate relaxation in `(0, 1]`.
     pub fn background_step(mut self, step: f64) -> Self {
         self.background_step = step;
         self
     }
 
+    /// Sets finite inclusive bounds for recovered additive intensity backgrounds.
     pub fn background_bounds(mut self, minimum: f64, maximum: f64) -> Self {
         self.minimum_background = minimum;
         self.maximum_background = maximum;

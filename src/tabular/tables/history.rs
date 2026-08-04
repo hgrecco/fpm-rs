@@ -2,6 +2,7 @@ use polars::prelude::*;
 
 use crate::{Result, reconstruction::ReconstructionTrace};
 
+/// Builds one run-ID/objective/elapsed-time row per completed iteration.
 pub fn history_dataframe(run_id: &str, trace: &ReconstructionTrace) -> Result<DataFrame> {
     let length = trace.iterations.len();
     let mut run_ids = Vec::with_capacity(length);

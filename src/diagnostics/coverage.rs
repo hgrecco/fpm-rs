@@ -2,35 +2,51 @@ use serde::{Deserialize, Serialize};
 
 use crate::{experiment::KVector, model::ImagePlaneModel};
 
+/// Pixel bounds and center of one source crop in the high-resolution Fourier grid.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CropIndexDiagnostics {
+    /// Zero-based individual illumination-source index.
     pub illumination_index: usize,
 
+    /// Inclusive first Fourier column (`x`).
     pub x_start: usize,
+    /// Exclusive last Fourier column (`x`).
     pub x_end: usize,
 
+    /// Inclusive first Fourier row (`y`).
     pub y_start: usize,
+    /// Exclusive last Fourier row (`y`).
     pub y_end: usize,
 
+    /// Crop center along the Fourier column axis, in grid pixels.
     pub center_x: f64,
+    /// Crop center along the Fourier row axis, in grid pixels.
     pub center_y: f64,
 }
 
+/// Summary of individual-source coverage on the high-resolution Fourier grid.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FourierCoverageDiagnostics {
+    /// Dimensionless synthetic numerical aperture, when wavelength metadata is available.
     pub synthetic_na: Option<f64>,
 
+    /// Approximate circular-pupil radius in low-resolution Fourier-grid pixels.
     pub pupil_radius_px: f64,
 
+    /// Source crop centers as `[x_column, y_row]` in high-resolution grid pixels.
     pub pupil_centers_px: Vec<[f64; 2]>,
 
+    /// Dimensionless illumination NA for each individual source.
     pub illumination_na: Vec<f64>,
 
+    /// Integer crop diagnostics in individual source order.
     pub crop_indices: Vec<CropIndexDiagnostics>,
 
+    /// High-resolution `[height, width]` of pixels covered by at least two pupils.
     pub overlap_shape: Option<[usize; 2]>,
 }
 
+/// Validates `model` and derives source centers, crop bounds, NA, and overlap coverage.
 pub fn compute_fourier_coverage(
     model: &ImagePlaneModel,
 ) -> crate::Result<FourierCoverageDiagnostics> {

@@ -12,6 +12,11 @@ use crate::{
 
 use super::Sampling;
 
+/// Owned sampled complex pupil and same-shaped binary aperture support.
+///
+/// Arrays are shaped `(height, width)` on the low-resolution Fourier grid and stored
+/// in standard row-major order. Values encode amplitude and phase transfer; support
+/// entries are exactly zero or one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pupil {
     pub(crate) values: StandardArray2<Complex64>,
@@ -117,6 +122,7 @@ impl Pupil {
         })
     }
 
+    /// Returns the pupil array shape as `(height, width)`.
     pub fn shape(&self) -> (usize, usize) {
         self.values.dim()
     }
@@ -136,6 +142,9 @@ impl Pupil {
         self.support.ndarray_view()
     }
 
+    /// Replaces owned complex values without changing support.
+    ///
+    /// `values` must be finite, standard row-major, and have [`Self::shape`].
     pub fn replace_values(&mut self, values: Array2<Complex64>) -> Result<()> {
         let values = StandardArray2::try_from(values)?;
         if values.dim() != self.shape() {
@@ -158,6 +167,7 @@ impl Pupil {
         Ok(())
     }
 
+    /// Sets every complex pupil value outside the binary aperture to zero in place.
     pub fn apply_support(&mut self) {
         for (value, &inside) in self
             .values

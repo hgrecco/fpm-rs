@@ -1,3 +1,12 @@
+//! Physical optics and illumination descriptions for an image-plane experiment.
+//!
+//! Configure [`crate::experiment::Optics`] and a source geometry such as
+//! [`crate::experiment::LEDArray`], [`crate::experiment::LEDSphere`], or
+//! [`crate::experiment::AngleList`]. Implementations of
+//! [`crate::experiment::IlluminationSource`] compile physical coordinates into transverse
+//! [`crate::experiment::KVector`] values consumed by
+//! [`crate::model::ImagePlaneModel`].
+
 mod illumination;
 mod led_array;
 mod optics;

@@ -3,12 +3,38 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 /// Physical microscope parameters in SI units.
+///
+/// # Example
+///
+/// ```
+/// use fpm_rs::experiment::Optics;
+///
+/// # fn main() -> fpm_rs::Result<()> {
+/// let optics = Optics {
+///     wavelength: 532e-9,
+///     objective_na: 0.1,
+///     magnification: 4.0,
+///     camera_pixel_size: 6.5e-6,
+///     medium_index: 1.0,
+///     defocus_distance: None,
+///     pupil_aberration: None,
+/// };
+/// optics.validate()?;
+/// assert_eq!(optics.object_pixel_size(), 6.5e-6 / 4.0);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Optics {
+    /// Illumination wavelength in vacuum, in metres.
     pub wavelength: f64,
+    /// Objective numerical aperture in the sample medium; must not exceed [`Self::medium_index`].
     pub objective_na: f64,
+    /// Lateral image magnification, as a positive dimensionless ratio.
     pub magnification: f64,
+    /// Physical detector-pixel pitch in metres.
     pub camera_pixel_size: f64,
+    /// Refractive index between the source, sample, and objective.
     pub medium_index: f64,
     /// Axial sample displacement from the focal plane in metres.
     pub defocus_distance: Option<f64>,
@@ -46,6 +72,7 @@ pub struct PupilAberration {
 }
 
 impl PupilAberration {
+    /// Checks finite phase coefficients and a finite, non-negative edge-apodization strength.
     pub fn validate(&self) -> Result<()> {
         if [
             self.astigmatism,
@@ -68,6 +95,8 @@ impl PupilAberration {
 }
 
 impl Optics {
+    /// Validates positive finite physical parameters, `objective_na <= medium_index`,
+    /// finite optional defocus, and the optional [`PupilAberration`].
     pub fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("wavelength", self.wavelength),
@@ -104,10 +133,12 @@ impl Optics {
         Ok(())
     }
 
+    /// Returns the sample-plane pixel pitch `camera_pixel_size / magnification`, in metres.
     pub fn object_pixel_size(&self) -> f64 {
         self.camera_pixel_size / self.magnification
     }
 
+    /// Returns the medium angular wavenumber `2π n / wavelength`, in radians per metre.
     pub fn medium_wavenumber(&self) -> f64 {
         std::f64::consts::TAU * self.medium_index / self.wavelength
     }

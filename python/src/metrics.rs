@@ -137,6 +137,13 @@ fn psnr_py(
 #[pyfunction]
 #[pyo3(signature = (reference, estimate, *, valid_mask=None, data_range))]
 /// Return canonical single-scale SSIM with an 11 by 11 Gaussian window.
+///
+/// Reference
+/// ---------
+/// [Z. Wang, A. C. Bovik, H. R. Sheikh, and E. P. Simoncelli, "Image quality
+/// assessment: From error visibility to structural similarity"
+/// (2004)](https://doi.org/10.1109/TIP.2003.819861), IEEE Transactions on Image
+/// Processing 13(4), 600-612.
 fn ssim_py(
     py: Python<'_>,
     reference: PyReadonlyArray2<'_, f64>,

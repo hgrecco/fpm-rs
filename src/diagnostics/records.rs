@@ -4,11 +4,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::metrics::intensity::{IntensityComparisonMetrics, IntensityStats};
 
+/// Comparison metrics for one predicted and reference acquisition frame.
 #[derive(Clone, Debug)]
 pub struct FrameDiagnosticRecord {
+    /// Optional one-based iteration at which the frame was evaluated.
     pub iteration: Option<usize>,
+    /// Zero-based acquisition-frame index.
     pub frame_index: usize,
+    /// Individual source index, or frame-associated illumination index for this record.
     pub illumination_index: usize,
+    /// Intensity-domain comparison metrics and summary statistics.
     pub metrics: IntensityComparisonMetrics,
 }
 
@@ -94,9 +99,12 @@ impl<'de> Deserialize<'de> for FrameDiagnosticRecord {
     }
 }
 
+/// Raw measured-intensity statistics for one acquisition frame.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RawFrameStatisticsRecord {
+    /// Zero-based acquisition-frame index.
     pub frame_index: usize,
     #[serde(flatten)]
+    /// Descriptive intensity statistics for unmasked pixels.
     pub metrics: IntensityStats,
 }

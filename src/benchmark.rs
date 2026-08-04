@@ -27,8 +27,11 @@ use crate::{
     reconstruction::{ReconstructionProblem, ReconstructionResult},
 };
 
+/// Current JSON/CSV benchmark record schema version.
 pub const BENCHMARK_RECORD_FORMAT_VERSION: u32 = 1;
+/// Name of the fast offline synthetic validation profile.
 pub const SMOKE_BENCHMARK_PROFILE: &str = "smoke";
+/// Name of the more representative CPU timing profile.
 pub const CPU_BENCHMARK_PROFILE: &str = "cpu";
 
 /// Stable metadata for a named benchmark profile.
@@ -38,19 +41,26 @@ pub const CPU_BENCHMARK_PROFILE: &str = "cpu";
 /// algorithm registry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BenchmarkProfile {
+    /// Stable profile identifier.
     pub name: &'static str,
+    /// Human-readable purpose and scope.
     pub description: &'static str,
+    /// Approximate runtime expectation for a typical development machine.
     pub expected_runtime: &'static str,
+    /// Default generated-artifact directory beneath the repository.
     pub output_directory: &'static str,
+    /// Stable names of algorithms expected in a complete profile run.
     pub algorithms: &'static [&'static str],
 }
 
 impl BenchmarkProfile {
+    /// Converts [`Self::output_directory`] to an owned path.
     pub fn output_path(&self) -> PathBuf {
         PathBuf::from(self.output_directory)
     }
 }
 
+/// Built-in benchmark profile metadata in display order.
 pub const BENCHMARK_PROFILES: &[BenchmarkProfile] = &[
     BenchmarkProfile {
         name: SMOKE_BENCHMARK_PROFILE,
@@ -80,6 +90,7 @@ pub const BENCHMARK_PROFILES: &[BenchmarkProfile] = &[
     },
 ];
 
+/// Looks up a built-in profile by its exact stable name.
 pub fn benchmark_profile(name: &str) -> Option<&'static BenchmarkProfile> {
     BENCHMARK_PROFILES
         .iter()
@@ -105,51 +116,85 @@ pub fn annotate_benchmark_profile(record: &mut BenchmarkRecord, profile: &Benchm
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BenchmarkRecord {
+    /// Record schema version; must equal [`BENCHMARK_RECORD_FORMAT_VERSION`].
     pub format_version: u32,
     /// Deterministic identity of the immutable case configuration.
     pub case_id: String,
     /// Unique identity of this execution.
     pub run_id: String,
+    /// Human-readable dataset or synthetic-case name.
     pub dataset_name: String,
+    /// Optional immutable dataset version.
     pub dataset_version: Option<String>,
+    /// Optional stable simulation preset name.
     pub preset_name: Option<String>,
+    /// fpm-rs crate version that produced the record.
     pub crate_version: String,
+    /// Optional deterministic simulation or schedule seed.
     pub random_seed: Option<u64>,
     /// Original-image crop as `[row, column, height, width]`, when applicable.
     pub spatial_crop: Option<[usize; 4]>,
+    /// Stable reconstruction algorithm name.
     pub algorithm: String,
+    /// Caller-supplied serialized or human-readable algorithm configuration.
     pub algorithm_configuration: String,
+    /// Whether reconstruction and requested metrics completed successfully.
     pub success: bool,
+    /// Captured failure message when `success` is false.
     pub error: Option<String>,
+    /// Acquisition-frame count.
     pub frame_count: usize,
+    /// Low-resolution shape as `[height, width]`.
     pub image_shape: [usize; 2],
+    /// High-resolution shape as `[height, width]`.
     pub reconstruction_shape: [usize; 2],
+    /// Complete iterations represented by the result.
     pub completed_iterations: usize,
+    /// Wall-clock runtime in seconds.
     pub elapsed_seconds: f64,
+    /// First recorded objective, when an iteration completed.
     pub initial_objective: Option<f64>,
+    /// Last recorded objective, when an iteration completed.
     pub final_objective: Option<f64>,
     /// Final objective divided by the initial objective.
     pub final_to_initial_objective_ratio: Option<f64>,
+    /// Root-mean-square reconstructed amplitude error against ground truth.
     pub amplitude_rmse: Option<f64>,
+    /// Root-mean-square wrapped phase error in radians against ground truth.
     pub phase_rmse: Option<f64>,
+    /// Globally aligned complex-field relative L2 error.
     pub complex_field_relative_error: Option<f64>,
+    /// Centered Fourier-spectrum relative L2 error.
     pub fourier_domain_relative_error: Option<f64>,
+    /// Support-aware pupil-amplitude RMSE.
     pub pupil_amplitude_rmse: Option<f64>,
+    /// Support-aware pupil-phase RMSE in radians.
     pub pupil_phase_rmse: Option<f64>,
+    /// Source-position RMS error in Fourier-grid pixels.
     pub illumination_position_rmse: Option<f64>,
+    /// Mean of per-frame normalized intensity L2 errors.
     pub per_frame_residual_mean: Option<f64>,
+    /// Maximum per-frame normalized intensity L2 error.
     pub per_frame_residual_max: Option<f64>,
+    /// Optional metrics in acquisition-frame order.
     pub frames: Vec<BenchmarkFrameRecord>,
+    /// Generated artifact paths associated with this run.
     pub output_paths: Vec<PathBuf>,
+    /// Extensible stable string metadata.
     pub metadata: BTreeMap<String, String>,
 }
 
+/// Per-acquisition-frame benchmark identity and residual metric.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BenchmarkFrameRecord {
+    /// Zero-based frame index in the benchmark's current measurement stack.
     pub frame_index: usize,
+    /// Zero-based frame index in the original acquisition before subsetting.
     pub original_frame_index: usize,
+    /// Optional original individual illumination-source index.
     pub original_illumination_index: Option<usize>,
+    /// Predicted-minus-measured intensity L2 norm divided by measured L2 norm.
     pub normalized_l2: Option<f64>,
 }
 
@@ -454,6 +499,7 @@ pub fn save_benchmark_outputs(
     ))
 }
 
+/// Writes a versioned pretty-printed JSON report containing `records`.
 pub fn write_benchmark_json(records: &[BenchmarkRecord], path: impl AsRef<Path>) -> Result<()> {
     #[derive(Serialize)]
     struct Report<'a> {
@@ -472,6 +518,7 @@ pub fn write_benchmark_json(records: &[BenchmarkRecord], path: impl AsRef<Path>)
     Ok(())
 }
 
+/// Writes one flattened CSV row per benchmark record.
 pub fn write_benchmark_csv(records: &[BenchmarkRecord], path: impl AsRef<Path>) -> Result<()> {
     let mut writer = csv::Writer::from_path(path)?;
     writer.write_record([

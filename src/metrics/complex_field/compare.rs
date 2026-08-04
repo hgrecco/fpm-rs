@@ -28,29 +28,55 @@ pub enum ComplexAlignment {
 /// Errors returned by explicit-alignment complex-image metrics.
 #[derive(Debug, Error, PartialEq)]
 pub enum ComplexMetricError {
+    /// Reference and estimate have different `(height, width)` shapes.
     #[error("reference and estimate shapes differ: {reference:?} and {estimate:?}")]
     ShapeMismatch {
+        /// Reference field shape.
         reference: (usize, usize),
+        /// Estimate field shape.
         estimate: (usize, usize),
     },
+    /// A selection mask does not match the field shape.
     #[error("mask shape {actual:?} does not match image shape {expected:?}")]
     MaskShapeMismatch {
+        /// Supplied mask shape.
         actual: (usize, usize),
+        /// Required field shape.
         expected: (usize, usize),
     },
+    /// No pixel was selected by the optional mask.
     #[error("at least one selected pixel is required")]
     EmptyMask,
+    /// A generic complex component could not be represented as `f64`.
     #[error("{input} contains a component that cannot be represented as f64")]
-    UnsupportedScalar { input: &'static str },
+    UnsupportedScalar {
+        /// Name of the input containing the unsupported component.
+        input: &'static str,
+    },
+    /// An input contains a non-finite real or imaginary component.
     #[error("{input} contains a non-finite real or imaginary component")]
-    NonFinite { input: &'static str },
+    NonFinite {
+        /// Name of the non-finite input.
+        input: &'static str,
+    },
+    /// A relative metric has zero reference norm.
     #[error("{metric} is undefined because the reference normalization is zero")]
-    ZeroReferenceNormalization { metric: &'static str },
+    ZeroReferenceNormalization {
+        /// Metric whose reference denominator was zero.
+        metric: &'static str,
+    },
+    /// A normalized correlation has zero aligned-estimate norm.
     #[error("{metric} is undefined because the aligned estimate normalization is zero")]
-    ZeroEstimateNormalization { metric: &'static str },
+    ZeroEstimateNormalization {
+        /// Metric whose estimate denominator was zero.
+        metric: &'static str,
+    },
+    /// The selected alignment cannot be fitted to the selected pixels.
     #[error("{alignment:?} alignment is undefined: {reason}")]
     DegenerateAlignment {
+        /// Requested alignment mode.
         alignment: ComplexAlignment,
+        /// Explanation of the degenerate fit.
         reason: &'static str,
     },
 }

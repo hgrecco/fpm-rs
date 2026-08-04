@@ -12,6 +12,26 @@ use crate::{
     image_io::{GrayscaleScaling, load_grayscale},
 };
 
+/// Owned high-resolution complex sample field used as simulation ground truth.
+///
+/// The array is shaped `(height, width)`, indexed `(row, column)`, and stored in
+/// standard row-major order. Magnitude is amplitude transmission and argument is phase
+/// delay in radians.
+///
+/// # Example
+///
+/// ```
+/// use fpm_rs::simulation::SyntheticObject;
+///
+/// # fn main() -> fpm_rs::Result<()> {
+/// let object = SyntheticObject::phase_disk((32, 48), 6.0, 0.4)?
+///     .with_label("phase target");
+/// assert_eq!(object.shape(), (32, 48));
+/// assert_eq!(object.label(), Some("phase target"));
+/// assert_eq!(object.field().dim(), object.shape());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug)]
 pub struct SyntheticObject {
     pub(crate) field: StandardArray2<Complex64>,
@@ -38,6 +58,9 @@ impl SyntheticObject {
         Ok(Self { field, label: None })
     }
 
+    /// Allocates a complex field from matching borrowed amplitude and phase arrays.
+    ///
+    /// Amplitude must be finite and non-negative; phase is in radians and must be finite.
     pub fn from_amplitude_phase(
         amplitude: ArrayView2<'_, f64>,
         phase: ArrayView2<'_, f64>,
@@ -45,6 +68,7 @@ impl SyntheticObject {
         Self::new(complex::from_amplitude_phase(amplitude, phase)?)
     }
 
+    /// Creates a zero-phase object from owned finite non-negative amplitude transmission.
     pub fn amplitude_only(amplitude: Array2<f64>) -> Result<Self> {
         let amplitude = StandardArray2::try_from(amplitude)?;
         if amplitude
@@ -67,6 +91,7 @@ impl SyntheticObject {
         )
     }
 
+    /// Creates a unit-amplitude object from owned finite phase values in radians.
     pub fn phase_only(phase: Array2<f64>) -> Result<Self> {
         let phase = StandardArray2::try_from(phase)?;
         if phase.as_slice().iter().any(|value| !value.is_finite()) {
@@ -85,6 +110,7 @@ impl SyntheticObject {
         )
     }
 
+    /// Loads a grayscale image normalized to `[0, 1]` as amplitude transmission.
     pub fn from_amplitude_image(path: impl AsRef<Path>) -> Result<Self> {
         let amplitude = load_grayscale(path, GrayscaleScaling::Unit)?;
         Self::amplitude_only(amplitude)
@@ -116,6 +142,7 @@ impl SyntheticObject {
         Self::from_amplitude_phase(amplitude.view(), phase.view())
     }
 
+    /// Creates a constant `(height, width)` field from non-negative amplitude and radian phase.
     pub fn constant(shape: (usize, usize), amplitude: f64, phase: f64) -> Result<Self> {
         validate_shape(shape)?;
         validate_amplitude(amplitude)?;
@@ -123,6 +150,9 @@ impl SyntheticObject {
         Self::from_values(shape, vec![Complex64::from_polar(amplitude, phase); length])
     }
 
+    /// Creates a unit-amplitude centered disk with phase `phase_shift` radians.
+    ///
+    /// Radius is measured from pixel centers in pixels; pixels outside the disk have zero phase.
     pub fn phase_disk(shape: (usize, usize), radius_pixels: f64, phase_shift: f64) -> Result<Self> {
         validate_shape(shape)?;
         if !radius_pixels.is_finite() || radius_pixels <= 0.0 || !phase_shift.is_finite() {
@@ -149,6 +179,7 @@ impl SyntheticObject {
         Self::from_values(shape, values)
     }
 
+    /// Creates a centered binary-amplitude Siemens-star test target with at least two spokes.
     pub fn siemens_star(shape: (usize, usize), spokes: usize) -> Result<Self> {
         validate_shape(shape)?;
         if spokes < 2 {
@@ -177,6 +208,7 @@ impl SyntheticObject {
         Self::from_values(shape, values)
     }
 
+    /// Creates deterministic horizontal and vertical binary-amplitude bar groups.
     pub fn resolution_target(shape: (usize, usize)) -> Result<Self> {
         validate_shape(shape)?;
         let mut values = vec![Complex64::new(1.0, 0.0); checked_len_2d(shape)?];
@@ -200,6 +232,7 @@ impl SyntheticObject {
         Self::from_values(shape, values)
     }
 
+    /// Creates unit amplitude with independent zero-mean Gaussian phase in radians.
     pub fn random_phase(shape: (usize, usize), standard_deviation: f64, seed: u64) -> Result<Self> {
         validate_shape(shape)?;
         if !standard_deviation.is_finite() || standard_deviation < 0.0 {
@@ -225,6 +258,7 @@ impl SyntheticObject {
         Self::from_values(shape, values)
     }
 
+    /// Creates a unit-amplitude field with seeded dark single-pixel particles.
     pub fn particle_field(shape: (usize, usize), particles: usize, seed: u64) -> Result<Self> {
         validate_shape(shape)?;
         let mut values = vec![Complex64::new(1.0, 0.0); checked_len_2d(shape)?];
@@ -311,22 +345,27 @@ impl SyntheticObject {
         Self::from_values(shape, values)
     }
 
+    /// Returns the high-resolution object shape as `(height, width)`.
     pub fn shape(&self) -> (usize, usize) {
         self.field.dim()
     }
 
+    /// Borrows the `(row, column)` complex field without copying.
     pub fn field(&self) -> ArrayView2<'_, Complex64> {
         self.field.ndarray_view()
     }
 
+    /// Mutably borrows field elements without permitting shape changes.
     pub fn field_mut(&mut self) -> ArrayViewMut2<'_, Complex64> {
         self.field.ndarray_view_mut()
     }
 
+    /// Borrows the optional human-readable object label.
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
     }
 
+    /// Assigns a human-readable label without changing field values.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self

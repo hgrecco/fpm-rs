@@ -1105,9 +1105,9 @@ where
 ///
 /// Reference
 /// ---------
-/// G. Zheng, R. Horstmeyer, and C. Yang, "Wide-field, high-resolution Fourier
-/// ptychographic microscopy," Nature Photonics 7, 739-745 (2013).
-/// doi:10.1038/nphoton.2013.187.
+/// [G. Zheng, R. Horstmeyer, and C. Yang, "Wide-field, high-resolution Fourier
+/// ptychographic microscopy" (2013)](https://doi.org/10.1038/nphoton.2013.187),
+/// Nature Photonics 7, 739-745.
 #[pyclass(module = "fpm_rs._core", name = "AlternatingProjection", frozen)]
 pub(crate) struct PyAlternatingProjection {
     inner: AlternatingProjection,
@@ -1180,9 +1180,9 @@ impl PyAlternatingProjection {
 ///
 /// Reference
 /// ---------
-/// A. Maiden, D. Johnson, and P. Li, "Further improvements to the
-/// ptychographical iterative engine," Optica 4(7), 736-745 (2017).
-/// doi:10.1364/OPTICA.4.000736.
+/// [A. Maiden, D. Johnson, and P. Li, "Further improvements to the
+/// ptychographical iterative engine" (2017)](https://doi.org/10.1364/OPTICA.4.000736),
+/// Optica 4(7), 736-745.
 #[pyclass(module = "fpm_rs._core", name = "Fpie", frozen)]
 pub(crate) struct PyFpie {
     inner: Fpie,
@@ -1272,9 +1272,9 @@ impl PyFpie {
 ///
 /// Reference
 /// ---------
-/// X. Ou, G. Zheng, and C. Yang, "Embedded pupil function recovery for Fourier
-/// ptychographic microscopy," Optics Express 22(5), 4960-4972 (2014).
-/// doi:10.1364/OE.22.004960.
+/// [X. Ou, G. Zheng, and C. Yang, "Embedded pupil function recovery for Fourier
+/// ptychographic microscopy" (2014)](https://doi.org/10.1364/OE.22.004960),
+/// Optics Express 22(5), 4960-4972.
 #[pyclass(module = "fpm_rs._core", name = "Epry", frozen)]
 pub(crate) struct PyEpry {
     inner: Epry,
@@ -1368,9 +1368,9 @@ impl PyEpry {
 ///
 /// Reference
 /// ---------
-/// A. Wang, Z. Zhang, S. Wang, A. Pan, C. Ma, and B. Yao, "Fourier
-/// Ptychographic Microscopy via Alternating Direction Method of Multipliers,"
-/// Cells 11(9), 1512 (2022). doi:10.3390/cells11091512.
+/// [A. Wang, Z. Zhang, S. Wang, A. Pan, C. Ma, and B. Yao, "Fourier
+/// Ptychographic Microscopy via Alternating Direction Method of Multipliers"
+/// (2022)](https://doi.org/10.3390/cells11091512), Cells 11(9), 1512.
 #[pyclass(module = "fpm_rs._core", name = "Admm", frozen)]
 pub(crate) struct PyAdmm {
     inner: Admm,
@@ -1466,9 +1466,10 @@ impl PyAdmm {
 ///
 /// Reference
 /// ---------
-/// L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, "Fourier
-/// ptychographic reconstruction using Wirtinger flow optimization," Optics
-/// Express 23(4), 4856-4866 (2015). doi:10.1364/OE.23.004856.
+/// [L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, "Fourier
+/// ptychographic reconstruction using Wirtinger flow optimization"
+/// (2015)](https://doi.org/10.1364/OE.23.004856), Optics Express 23(4),
+/// 4856-4866.
 #[pyclass(module = "fpm_rs._core", name = "GradientDescent", frozen)]
 pub(crate) struct PyGradientDescent {
     inner: GradientDescent,

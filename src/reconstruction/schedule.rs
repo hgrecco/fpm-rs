@@ -5,13 +5,19 @@ use crate::{Result, experiment::KVector, measurements::MeasurementRead, model::I
 
 use super::ReconstructionProblem;
 
+/// Rule for ordering acquisition frames within each reconstruction iteration.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub enum FrameSchedule {
+    /// Ascending acquisition-frame index.
     #[default]
     Sequential,
+    /// Increasing transverse illumination magnitude, approximating brightfield first.
     BrightfieldFirst,
+    /// Increasing polar radius then azimuth in transverse-wave-vector space.
     SpiralOut,
+    /// Deterministic per-iteration pseudorandom permutation.
     RandomShuffle {
+        /// Base random seed combined with the zero-based iteration number.
         seed: u64,
     },
     /// Highest empirical shot-noise SNR first. This requires measurements and

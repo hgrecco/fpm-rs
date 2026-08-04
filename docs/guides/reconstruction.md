@@ -153,7 +153,8 @@ treat them as outputs rather than mutable reconstruction state.
 
 Use callbacks to add progress, CSV history, checkpoints, image snapshots, or
 early stopping. See [Diagnostics and callbacks](../diagnostics.md) and the
-[generated reconstruction API](../reference/python/reconstruction.md).
+[generated algorithm API](../reference/python/algorithms.md) and
+[results API](../reference/python/results-and-bundles.md).
 
 ## Algorithm options and calibration
 

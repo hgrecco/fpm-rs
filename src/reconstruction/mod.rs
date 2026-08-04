@@ -1,3 +1,13 @@
+//! Reconstruction inputs, execution state, schedules, checkpoints, and results.
+//!
+//! Pair a compiled model and measurements in
+//! [`crate::reconstruction::ReconstructionProblem`], then run an
+//! [`crate::algorithms::ReconstructionAlgorithm`] directly or configure
+//! [`crate::reconstruction::Runner`] with [`crate::reconstruction::RunOptions`],
+//! callbacks, and a [`crate::reconstruction::FrameSchedule`]. The owned
+//! [`crate::reconstruction::ReconstructionResult`] contains the reconstructed field and
+//! trace.
+
 mod batch;
 mod checkpoint;
 mod options;

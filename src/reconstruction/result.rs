@@ -17,28 +17,49 @@ use crate::{
 
 use super::{ReconstructionState, ReconstructionTrace};
 
+/// Execution summary attached to a completed reconstruction.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeInfo {
+    /// Wall-clock seconds spent in this run, including elapsed time restored from a checkpoint.
     pub elapsed_seconds: f64,
+    /// Number of complete reconstruction iterations represented by the result.
     pub completed_iterations: usize,
+    /// Whether a callback requested termination before the configured iteration limit.
     pub stopped_early: bool,
+    /// Stable algorithm type name used for the run.
     pub algorithm: String,
 }
 
+/// Owned reconstructed fields, calibration values, trace, and runtime metadata.
+///
+/// Object-domain arrays and the centered object spectrum all have high-resolution
+/// `(height, width)` shape and standard row-major storage. `object` is complex field,
+/// `amplitude` is its magnitude, and `phase` is wrapped in radians in `[-π, π]`.
 #[derive(Clone, Debug)]
 pub struct ReconstructionResult {
+    /// Reconstructed high-resolution complex sample transmission field.
     pub object: Array2<Complex64>,
+    /// Non-negative magnitude of [`Self::object`].
     pub amplitude: Array2<f64>,
+    /// Wrapped argument of [`Self::object`], in radians in `[-π, π]`.
     pub phase: Array2<f64>,
+    /// Centered Fourier spectrum corresponding to [`Self::object`].
     pub object_spectrum: Array2<Complex64>,
+    /// Recovered low-resolution complex pupil and binary aperture support.
     pub recovered_pupil: Pupil,
     /// Per-source `(row, column)` corrections in Fourier-grid pixels.
     pub calibrated_illumination: Option<Vec<(f64, f64)>>,
+    /// Optional positive multiplicative gains in acquisition-frame order.
     pub recovered_frame_gains: Option<Vec<f64>>,
+    /// Optional additive intensity background in acquisition-frame order.
     pub recovered_background: Option<Vec<f64>>,
+    /// Universal and algorithm-specific iteration history.
     pub trace: ReconstructionTrace,
+    /// Final named scalar diagnostics not represented by the trace.
     pub scalar_diagnostics: BTreeMap<String, f64>,
+    /// Timing, iteration count, early-stop status, and algorithm name.
     pub runtime: RuntimeInfo,
+    /// User- and runner-supplied string metadata.
     pub metadata: BTreeMap<String, String>,
 }
 
@@ -71,26 +92,31 @@ impl ReconstructionResult {
         })
     }
 
+    /// Writes object amplitude as a linearly normalized 8-bit grayscale image.
     pub fn save_amplitude(&self, path: impl AsRef<Path>) -> Result<()> {
         save_grayscale(self.amplitude.view(), path, false)
     }
 
+    /// Writes wrapped object phase as an 8-bit grayscale image mapping `[-π, π]` to `[0, 255]`.
     pub fn save_phase(&self, path: impl AsRef<Path>) -> Result<()> {
         save_grayscale(self.phase.view(), path, true)
     }
 
+    /// Serializes the complex object and its `(height, width)` shape as JSON.
     pub fn save_complex_object(&self, path: impl AsRef<Path>) -> Result<()> {
         let writer = BufWriter::new(File::create(path)?);
         serde_json::to_writer(writer, &Array2Data::from_view(self.object.view()))?;
         Ok(())
     }
 
+    /// Serializes recovered complex pupil values and binary support as JSON.
     pub fn save_pupil(&self, path: impl AsRef<Path>) -> Result<()> {
         let writer = BufWriter::new(File::create(path)?);
         serde_json::to_writer(writer, &self.recovered_pupil)?;
         Ok(())
     }
 
+    /// Writes one CSV row per iteration with objective and elapsed seconds.
     pub fn save_trace_csv(&self, path: impl AsRef<Path>) -> Result<()> {
         let mut writer = csv::Writer::from_path(path)?;
         writer.write_record(["iteration", "objective", "elapsed_seconds"])?;
@@ -102,6 +128,33 @@ impl ReconstructionResult {
     }
 
     #[cfg(feature = "parquet")]
+    /// Writes a self-describing Parquet/NPY result bundle and reopens it lazily.
+    ///
+    /// The returned [`crate::reconstruction::ResultBundle`] reads its manifest
+    /// immediately but does not load scientific arrays until an accessor is called.
+    /// Repeated access returns the same cached [`std::sync::Arc`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use fpm_rs::{
+    ///     reconstruction::{BundleExportOptions, ReconstructionResult, read_bundle},
+    ///     Result,
+    /// };
+    /// use std::sync::Arc;
+    ///
+    /// # fn completed_reconstruction() -> Result<ReconstructionResult> { unimplemented!() }
+    /// # fn main() -> Result<()> {
+    /// let result = completed_reconstruction()?;
+    /// result.write_bundle("result-bundle", BundleExportOptions::default())?;
+    ///
+    /// let bundle = read_bundle("result-bundle")?;
+    /// let first = bundle.object()?;
+    /// let second = bundle.object()?;
+    /// assert!(Arc::ptr_eq(&first, &second));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn write_bundle(
         &self,
         path: impl AsRef<Path>,
@@ -129,6 +182,8 @@ impl ReconstructionResult {
         )
     }
 
+    /// Checks matching non-empty standard-layout arrays, pupil shape, finite values,
+    /// calibration lengths and ranges, and consistency with optional frame-count metadata.
     pub fn validate(&self) -> Result<()> {
         let shape = self.object.dim();
         if shape.0 == 0 || shape.1 == 0 {

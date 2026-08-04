@@ -4,12 +4,14 @@ use crate::{Result, reconstruction::ReconstructionCheckpoint};
 
 use super::{Callback, CallbackAction, StepContext};
 
+/// Writes resumable JSON checkpoints at a fixed iteration frequency.
 pub struct CheckpointEvery {
     frequency: usize,
     directory: PathBuf,
 }
 
 impl CheckpointEvery {
+    /// Creates a checkpoint callback; zero `frequency` is normalized to one.
     pub fn new(frequency: usize, directory: impl Into<PathBuf>) -> Self {
         Self {
             frequency: frequency.max(1),

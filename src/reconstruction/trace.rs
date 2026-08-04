@@ -25,6 +25,7 @@ pub struct AlgorithmMetricRecord {
     pub namespace: String,
     /// Stable metric name within `namespace`.
     pub metric: String,
+    /// Finite scalar metric value.
     pub value: f64,
 }
 
@@ -33,11 +34,14 @@ pub struct AlgorithmMetricRecord {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReconstructionTrace {
+    /// Universal objective and elapsed time, one record per completed iteration.
     pub iterations: Vec<IterationRecord>,
+    /// Optional algorithm-owned scalar metrics keyed by iteration and namespace.
     pub algorithm_metrics: Vec<AlgorithmMetricRecord>,
 }
 
 impl ReconstructionTrace {
+    /// Returns the last completed iteration's objective, or `None` for an empty trace.
     pub fn final_objective(&self) -> Option<f64> {
         self.iterations.last().map(|record| record.objective)
     }

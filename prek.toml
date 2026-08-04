@@ -58,6 +58,14 @@ entry = "pixi run ruff format"
 types = ["python"]
 
 [[repos.hooks]]
+id = "citation-check"
+name = "Validate scientific citation syntax"
+language = "system"
+entry = "pixi run citation-check"
+pass_filenames = false
+files = "\\.(md|py|pyi|rs|ipynb)$"
+
+[[repos.hooks]]
 id = "typos"
 name = "Check spelling with typos"
 language = "system"

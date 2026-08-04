@@ -14,11 +14,14 @@ pub struct StepSummary {
     pub objective_sum: f64,
     /// Number of frames visited, including zero-weight frames.
     pub frame_count: usize,
+    /// Sum of non-negative reconstruction weights for visited frames.
     pub weight_sum: f64,
+    /// Unweighted objective for each visited acquisition-frame index.
     pub per_frame_objective: BTreeMap<usize, f64>,
 }
 
 impl StepSummary {
+    /// Accumulates one frame's objective and reconstruction weight.
     pub fn push_frame(&mut self, frame: usize, objective: f64, weight: f64) {
         self.objective_sum += weight * objective;
         self.frame_count += 1;
@@ -26,10 +29,12 @@ impl StepSummary {
         self.per_frame_objective.insert(frame, objective);
     }
 
+    /// Returns the weight-normalized objective, or `None` when total weight is zero.
     pub fn mean_objective(&self) -> Option<f64> {
         (self.weight_sum > 0.0).then(|| self.objective_sum / self.weight_sum)
     }
 
+    /// Deterministically combines counts, sums, and per-frame values from another batch.
     pub fn merge(&mut self, other: Self) {
         self.objective_sum += other.objective_sum;
         self.frame_count += other.frame_count;
@@ -44,8 +49,10 @@ impl StepSummary {
 /// generic persisted records. This deliberately avoids a central algorithm or
 /// metric enum.
 pub trait AlgorithmIterationMetrics: Default {
+    /// Deterministically accumulates metrics from another batch in schedule order.
     fn merge(&mut self, other: Self);
 
+    /// Appends stable scalar records for a one-based completed `iteration`.
     fn append_records(&self, iteration: usize, output: &mut Vec<AlgorithmMetricRecord>);
 }
 
@@ -62,7 +69,9 @@ impl AlgorithmIterationMetrics for NoIterationMetrics {
 /// Typed output from one algorithm batch.
 #[derive(Clone, Debug)]
 pub struct StepOutput<M> {
+    /// Algorithm-neutral objective and visited-frame summary.
     pub summary: StepSummary,
+    /// Algorithm-specific metrics accumulated for the same batch.
     pub metrics: M,
 }
 
@@ -85,6 +94,7 @@ impl<M: AlgorithmIterationMetrics> Default for StepOutput<M> {
 }
 
 impl<M: AlgorithmIterationMetrics> StepOutput<M> {
+    /// Combines the neutral summary and algorithm-specific metrics from another batch.
     pub fn merge(&mut self, other: Self) {
         self.summary.merge(other.summary);
         self.metrics.merge(other.metrics);

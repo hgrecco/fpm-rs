@@ -4,12 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::reconstruction::RuntimeInfo;
 
+/// Current reconstruction result-bundle manifest format version.
 pub const BUNDLE_FORMAT_VERSION: u32 = 1;
 
+/// Options controlling result-bundle identity and preview generation.
 #[derive(Clone, Debug, Default)]
 pub struct BundleExportOptions {
+    /// Optional caller-defined unique run ID; a UUID is generated when absent.
     pub run_id: Option<String>,
+    /// Optional human-readable result label.
     pub label: Option<String>,
+    /// Whether to write derived PNG previews in addition to lossless arrays and tables.
     pub include_previews: bool,
 }
 

@@ -4,23 +4,34 @@ use crate::{Result, error::Error};
 
 use super::{LEDArray, LEDSphere, Optics, RotatingLEDArc, SphericalLEDArm};
 
+/// `(source_index, weight)` for one incoherently summed illumination component.
 pub type SourceWeight = (usize, f64);
+/// Acquisition-frame rows of unique, positive [`SourceWeight`] entries.
 pub type MultiplexingMatrix = Vec<Vec<SourceWeight>>;
 
 /// Transverse illumination wave vector in radians per metre.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct KVector {
+    /// Transverse angular spatial frequency along sample `x`, in radians per metre.
     pub kx: f64,
+    /// Transverse angular spatial frequency along sample `y`, in radians per metre.
     pub ky: f64,
 }
 
 impl KVector {
+    /// Creates a transverse wave vector `(kx, ky)` in radians per metre.
     pub fn new(kx: f64, ky: f64) -> Self {
         Self { kx, ky }
     }
 }
 
+/// Compiles physical illumination descriptions into algorithm-facing source data.
+///
+/// Implementors must return at least one finite, propagating transverse wave vector.
+/// The returned vector order defines individual source indices. Optional frame gains
+/// and multiplexing rows use acquisition-frame order and must agree with that source list.
 pub trait IlluminationSource {
+    /// Compiles source-order transverse vectors using the wavelength and medium in `optics`.
     fn k_vectors(&self, optics: &Optics) -> Result<Vec<KVector>>;
 
     /// Optional multiplicative intensity gain for each compiled frame.
@@ -34,6 +45,7 @@ pub trait IlluminationSource {
     }
 }
 
+/// Explicit illumination tilt angles compiled in their listed acquisition order.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AngleList {
     /// Illumination angles `(theta_x, theta_y)` in radians.
@@ -41,6 +53,7 @@ pub struct AngleList {
 }
 
 impl AngleList {
+    /// Stores `(theta_x, theta_y)` pairs in radians without validation until compilation.
     pub fn new(angles: Vec<(f64, f64)>) -> Self {
         Self { angles }
     }
@@ -75,31 +88,46 @@ impl IlluminationSource for AngleList {
 /// Reserved representation for known linear combinations of source frames.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CodedIllumination {
+    /// Individual source vectors in radians per metre; indices address this vector.
     pub source_k_vectors: Vec<KVector>,
+    /// Incoherent source combinations, with one row per measured acquisition frame.
     pub frame_weights: MultiplexingMatrix,
 }
 
 impl CodedIllumination {
+    /// Checks propagating vectors plus non-empty rows of unique in-range sources and
+    /// finite positive weights.
     pub fn validate(&self, optics: &Optics) -> Result<()> {
         validate_k_vectors(&self.source_k_vectors, optics)?;
         validate_multiplexing_matrix(&self.frame_weights, self.source_k_vectors.len())
     }
 }
 
+/// Supported illumination descriptions before compilation into an image-plane model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Illumination {
+    /// Already calibrated source-order transverse vectors in radians per metre.
     KVectors(Vec<KVector>),
+    /// Independent `x` and `y` tilt angles in radians.
     Angles(AngleList),
+    /// Regular planar LED grid.
     LEDArray(LEDArray),
+    /// LEDs placed at arbitrary polar/azimuthal positions on a sphere.
     LEDSphere(LEDSphere),
+    /// A single LED moved by a calibrated spherical arm.
     SphericalLEDArm(SphericalLEDArm),
+    /// An LED arc measured at each commanded axial rotation.
     RotatingLEDArc(RotatingLEDArc),
+    /// Known incoherent linear combinations of individual sources.
     Coded(CodedIllumination),
     /// Imported/calibrated source vectors with optional per-frame gains and
     /// optional incoherent multiplexing rows.
     Calibrated {
+        /// Individual source vectors in radians per metre.
         k_vectors: Vec<KVector>,
+        /// Optional positive intensity multiplier for each acquisition frame.
         frame_gains: Option<Vec<f64>>,
+        /// Optional acquisition-frame rows of `(source_index, positive_weight)` entries.
         frame_weights: Option<MultiplexingMatrix>,
     },
 }

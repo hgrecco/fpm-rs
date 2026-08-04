@@ -1,3 +1,5 @@
+"""Diagnostics JSON, output-directory, and Matplotlib file helpers."""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +9,11 @@ from typing import Any
 
 
 def load_diagnostics(path: str | Path) -> dict[str, Any]:
+    """Load a diagnostics JSON object from ``path``.
+
+    Raises ``FileNotFoundError`` for a missing path and ``ValueError`` when the
+    file is invalid JSON or its top level is not an object.
+    """
     diagnostics_path = Path(path)
     if not diagnostics_path.exists():
         raise FileNotFoundError(f"diagnostics file not found: {diagnostics_path}")
@@ -25,6 +32,7 @@ def load_diagnostics(path: str | Path) -> dict[str, Any]:
 
 
 def coerce_diagnostics(value: Mapping[str, Any] | str | Path) -> dict[str, Any]:
+    """Copy a diagnostics mapping or load one from a JSON filesystem path."""
     if isinstance(value, (str, Path)):
         return load_diagnostics(value)
     if isinstance(value, Mapping):
@@ -35,12 +43,18 @@ def coerce_diagnostics(value: Mapping[str, Any] | str | Path) -> dict[str, Any]:
 
 
 def ensure_output_dir(path: str | Path) -> Path:
+    """Create ``path`` and missing parents, then return it as a ``Path``."""
     output_dir = Path(path)
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
 
 def latest_frame_diagnostics(value: Any) -> list[Any]:
+    """Select entries from the greatest tagged iteration.
+
+    A non-list returns an empty list. If no numeric ``iteration`` tags exist,
+    the original list is returned unchanged.
+    """
     if not isinstance(value, list):
         return []
     tagged_iterations = [
@@ -61,6 +75,7 @@ def latest_frame_diagnostics(value: Any) -> list[Any]:
 
 
 def savefig(path: str | Path, dpi: int = 180) -> None:
+    """Save Matplotlib's current figure with tight bounds at ``dpi`` resolution."""
     import matplotlib.pyplot as plt
 
     figure = plt.gcf()

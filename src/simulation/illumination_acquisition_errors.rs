@@ -15,20 +15,24 @@ pub struct IlluminationAcquisitionErrors {
 }
 
 impl IlluminationAcquisitionErrors {
+    /// Creates an acquisition with no gain variation, missing frames, or source permutation.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets non-negative Gaussian one-sigma gain variation relative to each frame's gain.
     pub fn frame_gain_relative_std(mut self, relative_standard_deviation: f64) -> Self {
         self.frame_gain_relative_std = relative_standard_deviation;
         self
     }
 
+    /// Sets unique acquisition-frame indices whose simulated illumination is forced to zero.
     pub fn missing_frames(mut self, indices: Vec<usize>) -> Self {
         self.missing_frames = indices;
         self
     }
 
+    /// Sets a complete permutation assigning a true source to each compiled source slot.
     pub fn source_permutation(mut self, permutation: Vec<usize>) -> Self {
         self.source_permutation = Some(permutation);
         self
