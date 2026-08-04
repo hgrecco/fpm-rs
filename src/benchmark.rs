@@ -489,6 +489,16 @@ pub fn save_benchmark_outputs(
 }
 
 #[cfg(not(feature = "parquet"))]
+/// Reports that standard benchmark reconstruction artifacts cannot be saved
+/// when bundle support is disabled.
+///
+/// Enable the `parquet` feature to write the amplitude, phase, result bundle,
+/// and trace artifacts and add their paths to `record`.
+///
+/// # Errors
+///
+/// Always returns [`crate::Error::Unsupported`] in builds without the
+/// `parquet` feature.
 pub fn save_benchmark_outputs(
     _record: &mut BenchmarkRecord,
     _result: &ReconstructionResult,
