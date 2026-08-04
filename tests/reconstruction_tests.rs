@@ -9,7 +9,7 @@ use fpm_rs::{
     },
     callbacks::CheckpointEvery,
     evaluation::{evaluate_reconstruction, evaluate_reconstruction_with_problem},
-    experiment::{LEDArray, Optics, PupilAberration},
+    experiment::{ArrayPose, Illumination, Optics, PlanarLedArray, PupilAberration},
     measurements::{LazyMeasurementStack, MeasurementRead},
     model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape},
     reconstruction::{
@@ -1924,11 +1924,12 @@ fn invalid_algorithm_options_fail_before_iteration() {
 #[test]
 fn epry_reduces_known_pupil_phase_error() {
     let assumed_optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.10,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
@@ -1940,11 +1941,13 @@ fn epry_reduces_known_pupil_phase_error() {
         }),
         ..assumed_optics.clone()
     };
-    let leds = LEDArray::new()
-        .grid_shape((3, 3))
-        .pitch(4e-3)
-        .distance(90e-3)
-        .center((1.0, 1.0));
+    let leds = Illumination::from_geometry(PlanarLedArray::new(
+        (3, 3),
+        (4e-3, 4e-3),
+        (1.0, 1.0),
+        ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+    ))
+    .unwrap();
     let reconstruction_model = ImagePlaneModel::from_experiment(
         &assumed_optics,
         &leds,

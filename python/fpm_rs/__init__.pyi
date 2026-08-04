@@ -258,17 +258,19 @@ class Optics:
 
     Parameters
     ----------
-    wavelength
+    wavelength_vacuum_m
         Positive vacuum illumination wavelength in metres.
     objective_na
         Positive, dimensionless objective numerical aperture, no greater than
-        ``medium_index``.
+        ``objective_medium_refractive_index``.
     magnification
         Positive, dimensionless microscope magnification.
     camera_pixel_size
         Positive detector-plane pixel pitch in metres.
-    medium_index
-        Positive refractive index of the immersion medium.
+    illumination_refractive_index
+        Positive refractive index between the sources and sample.
+    objective_medium_refractive_index
+        Positive refractive index on the objective side of the sample.
     defocus_distance
         Optional signed propagation distance in metres.
     pupil_aberration
@@ -276,17 +278,18 @@ class Optics:
     """
     def __init__(
         self,
-        wavelength: float,
+        wavelength_vacuum_m: float,
         objective_na: float,
         magnification: float,
         camera_pixel_size: float,
         *,
-        medium_index: float = 1.0,
+        illumination_refractive_index: float = 1.0,
+        objective_medium_refractive_index: float = 1.0,
         defocus_distance: float | None = None,
         pupil_aberration: PupilAberration | None = None,
     ) -> None: ...
     @property
-    def wavelength(self) -> float:
+    def wavelength_vacuum_m(self) -> float:
         """Return the vacuum illumination wavelength in metres."""
     @property
     def objective_na(self) -> float:
@@ -298,8 +301,11 @@ class Optics:
     def camera_pixel_size(self) -> float:
         """Return the detector-plane pixel pitch in metres."""
     @property
-    def medium_index(self) -> float:
-        """Return the immersion-medium refractive index."""
+    def illumination_refractive_index(self) -> float:
+        """Return the source-to-sample refractive index."""
+    @property
+    def objective_medium_refractive_index(self) -> float:
+        """Return the objective-side medium refractive index."""
     @property
     def defocus_distance(self) -> float | None:
         """Return the optional signed propagation distance in metres."""
@@ -307,49 +313,88 @@ class Optics:
     def object_pixel_size(self) -> float:
         """Return ``camera_pixel_size / magnification`` in metres."""
 
-class LEDArray:
-    """Planar LED grid geometry.
+class ArrayPose:
+    """Rigid array-local to sample-coordinate transform.
+
+    Rotation is active, right-handed, and extrinsic about fixed sample x, y,
+    then z axes; the matrix acting on a column vector is ``Rz @ Ry @ Rx``.
+    """
+    @staticmethod
+    def identity() -> ArrayPose:
+        """Return the identity rigid transform."""
+    @staticmethod
+    def from_translation(translation_m: tuple[float, float, float]) -> ArrayPose:
+        """Create a pure translation in metres."""
+    @staticmethod
+    def from_translation_and_extrinsic_xyz_radians(
+        translation_m: tuple[float, float, float],
+        rotation_rad: tuple[float, float, float],
+    ) -> ArrayPose:
+        """Create a translation and active extrinsic XYZ rotation in radians."""
+    @staticmethod
+    def from_translation_and_extrinsic_xyz_degrees(
+        translation_m: tuple[float, float, float],
+        rotation_deg: tuple[float, float, float],
+    ) -> ArrayPose:
+        """Create a translation and active extrinsic XYZ rotation in degrees."""
+    @property
+    def translation_m(self) -> tuple[float, float, float]:
+        """Return sample-coordinate XYZ translation in metres."""
+    @property
+    def rotation_rad(self) -> tuple[float, float, float]:
+        """Return fixed-axis extrinsic XYZ rotation in radians."""
+
+class PlanarLEDArray:
+    """Planar LED geometry on the normally negative-z illumination side.
 
     Parameters
     ----------
-    grid_shape
+    shape
         Number of LEDs as ``(rows, columns)``.
-    pitch
-        Positive centre-to-centre LED spacing in metres.
-    distance
-        Positive perpendicular LED-plane-to-sample distance in metres.
-    center
-        Optical-axis grid coordinate as ``(column, row)``; fractional indices
-        are allowed.
-    wavelength_override
-        Optional positive vacuum wavelength in metres for this source.
-    illumination_order
-        Optional acquisition-to-natural row-major LED permutation.
-    intensity_weights
-        Optional positive gain per natural-order LED.
-    rotation_degrees
-        Counter-clockwise in-plane rotation about ``center`` in degrees.
+    pitch_m
+        Scalar equal pitch or canonical ``(pitch_x, pitch_y)`` metres.
+    reference_index
+        Fractional ``(column, row)`` lattice coordinate at the pose origin.
+    pose
+        Array-local to sample-coordinate rigid transform.
+    position_offsets_m
+        Optional float64 ``(sources, 3)`` array-local XYZ corrections in metres.
     """
     def __init__(
         self,
-        grid_shape: Shape2D,
-        pitch: float,
-        distance: float,
-        center: tuple[float, float],
+        shape: Shape2D,
+        pitch_m: float | tuple[float, float],
+        reference_index: tuple[float, float],
+        pose: ArrayPose,
         *,
-        wavelength_override: float | None = None,
-        illumination_order: Sequence[int] | None = None,
-        intensity_weights: Sequence[float] | None = None,
-        rotation_degrees: float = 0.0,
+        position_offsets_m: FloatArray | None = None,
     ) -> None: ...
     @property
-    def grid_shape(self) -> Shape2D:
+    def shape(self) -> Shape2D:
         """Return the LED-grid shape as ``(rows, columns)``."""
+    @property
+    def pitch_m(self) -> tuple[float, float]:
+        """Return canonical ``(pitch_x, pitch_y)`` in metres."""
+    @property
+    def reference_index(self) -> tuple[float, float]:
+        """Return fractional ``(column, row)`` reference coordinate."""
+    @property
+    def pose(self) -> ArrayPose:
+        """Return the array-local to sample-coordinate pose."""
+    @property
+    def position_offsets_m(self) -> FloatArray:
+        """Return a copy of canonical local XYZ corrections in metres."""
     @property
     def source_count(self) -> int:
         """Return the number of LEDs in the grid."""
+    def source_index(self, row: int, column: int) -> int:
+        """Convert a lattice location to its row-major source index."""
+    def source_row_column(self, index: int) -> tuple[int, int]:
+        """Convert a row-major source index to ``(row, column)``."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve physical positions, directions, and transverse vectors."""
 
-class LEDSphere:
+class SphericalLEDArray:
     """Fixed LEDs at arbitrary polar and azimuthal positions on a sphere.
 
     Parameters
@@ -368,12 +413,6 @@ class LEDSphere:
     angular_corrections
         Optional float64 ``(sources, 2)`` array of ``(delta_theta, delta_phi)``
         placement corrections in radians.
-    wavelength_override
-        Optional positive vacuum wavelength in metres for this source.
-    illumination_order
-        Optional acquisition-to-natural LED permutation.
-    intensity_weights
-        Optional positive gain per natural-order LED.
     """
 
     def __init__(
@@ -384,13 +423,12 @@ class LEDSphere:
         center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
         orientation_degrees: tuple[float, float, float] = (0.0, 0.0, 0.0),
         angular_corrections: FloatArray | None = None,
-        wavelength_override: float | None = None,
-        illumination_order: Sequence[int] | None = None,
-        intensity_weights: Sequence[float] | None = None,
     ) -> None: ...
     @property
     def source_count(self) -> int:
         """Return the number of fixed LEDs."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve physical positions, directions, and transverse vectors."""
 
 class SphericalLEDArm:
     """A single LED moved along a calibrated spherical-arm trajectory.
@@ -415,10 +453,6 @@ class SphericalLEDArm:
         Elevation-axis non-orthogonality in degrees.
     theta_backlash_degrees, phi_backlash_degrees
         Total separation of increasing and decreasing branches in degrees.
-    wavelength_override
-        Optional positive vacuum wavelength in metres.
-    intensity_weights
-        Optional positive gain per movement-order source position.
     """
 
     def __init__(
@@ -435,12 +469,12 @@ class SphericalLEDArm:
         elevation_axis_tilt_degrees: float = 0.0,
         theta_backlash_degrees: float = 0.0,
         phi_backlash_degrees: float = 0.0,
-        wavelength_override: float | None = None,
-        intensity_weights: Sequence[float] | None = None,
     ) -> None: ...
     @property
     def source_count(self) -> int:
         """Return the number of commanded source positions."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve movement-order positions, directions, and transverse vectors."""
 
 class RotatingLEDArc:
     """A quarter-circle LED arc sampled at commanded axial rotations.
@@ -470,10 +504,6 @@ class RotatingLEDArc:
         Positive dimensionless rotation-encoder scale.
     rotation_backlash_degrees
         Total separation of increasing and decreasing branches in degrees.
-    wavelength_override
-        Optional positive vacuum wavelength in metres.
-    led_intensity_weights
-        Optional positive intrinsic gain per LED, repeated at every rotation.
     """
 
     def __init__(
@@ -489,8 +519,6 @@ class RotatingLEDArc:
         rotation_zero_degrees: float = 0.0,
         rotation_scale: float = 1.0,
         rotation_backlash_degrees: float = 0.0,
-        wavelength_override: float | None = None,
-        led_intensity_weights: Sequence[float] | None = None,
     ) -> None: ...
     @property
     def led_count(self) -> int:
@@ -501,19 +529,72 @@ class RotatingLEDArc:
     @property
     def source_count(self) -> int:
         """Return ``led_count * rotation_count`` compiled source positions."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve rotation-major positions, directions, and transverse vectors."""
 
-class AngleList:
-    """Explicit independent illumination tilts in acquisition order.
+class SourcePositionList:
+    """Wavelength-independent physical source positions in sample coordinates.
 
-    ``angles`` is a nonempty float64 array shaped ``(sources, 2)`` containing
-    ``(theta_x, theta_y)`` radians. Each component is converted independently
-    to transverse wave-vector coordinates during model compilation.
+    The sample is at z=0, illumination sources are normally at z<0, and
+    propagation points from each source toward the sample origin.
     """
-
-    def __init__(self, angles: FloatArray) -> None: ...
+    def __init__(self, positions_m: FloatArray) -> None: ...
+    @property
+    def positions_m(self) -> FloatArray:
+        """Return a copy shaped ``(sources, 3)`` in metres."""
     @property
     def source_count(self) -> int:
-        """Return the number of angle pairs."""
+        """Return the number of positions."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve source-to-sample directions and transverse vectors."""
+
+class DirectionList:
+    """Canonical positive-z propagation unit vectors in sample coordinates."""
+    def __init__(self, unit_vectors: FloatArray) -> None: ...
+    @staticmethod
+    def from_unit_vectors(values: FloatArray) -> DirectionList:
+        """Validate and store float64 ``(sources, 3)`` unit vectors."""
+    @staticmethod
+    def from_vectors(values: FloatArray, *, normalize: bool = True) -> DirectionList:
+        """Store vectors, normalizing each row when requested."""
+    @staticmethod
+    def from_direction_cosines(values: FloatArray) -> DirectionList:
+        """Construct from ``(dx, dy)`` and the positive square-root ``dz``."""
+    @staticmethod
+    def from_component_angles_radians(values: FloatArray) -> DirectionList:
+        """Construct from independent ``(theta_x, theta_y)`` radians."""
+    @staticmethod
+    def from_component_angles_degrees(values: FloatArray) -> DirectionList:
+        """Construct from independent ``(theta_x, theta_y)`` degrees."""
+    @staticmethod
+    def from_polar_angles_radians(values: FloatArray) -> DirectionList:
+        """Construct from positive-z polar ``(theta, phi)`` radians."""
+    @staticmethod
+    def from_polar_angles_degrees(values: FloatArray) -> DirectionList:
+        """Construct from positive-z polar ``(theta, phi)`` degrees."""
+    @property
+    def source_count(self) -> int:
+        """Return the number of canonical directions."""
+    @property
+    def unit_vectors(self) -> FloatArray:
+        """Return a float64 copy shaped ``(sources, 3)``."""
+    @property
+    def direction_cosines(self) -> FloatArray:
+        """Return derived float64 ``(dx, dy)`` direction cosines."""
+    @property
+    def component_angles_rad(self) -> FloatArray:
+        """Return derived independent component angles in radians."""
+    @property
+    def component_angles_deg(self) -> FloatArray:
+        """Return derived independent component angles in degrees."""
+    @property
+    def polar_angles_rad(self) -> FloatArray:
+        """Return derived positive-z polar angles in radians."""
+    @property
+    def polar_angles_deg(self) -> FloatArray:
+        """Return derived positive-z polar angles in degrees."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve directions using the optics illumination wavenumber."""
 
 class KVectorList:
     """Calibrated transverse illumination vectors in acquisition order.
@@ -527,26 +608,185 @@ class KVectorList:
     @property
     def source_count(self) -> int:
         """Return the number of calibrated source vectors."""
+    @property
+    def k_vectors(self) -> FloatArray:
+        """Return a float64 ``(sources, 2)`` copy in radians per metre."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Validate propagation and derive positive-z directions."""
 
-class CodedIllumination:
-    """Known incoherent combinations of calibrated source vectors.
+Geometry: TypeAlias = (
+    PlanarLEDArray
+    | SphericalLEDArray
+    | SphericalLEDArm
+    | RotatingLEDArc
+    | SourcePositionList
+    | DirectionList
+    | KVectorList
+)
+"""Concrete source geometry accepted by ``SourceGeometry`` and ``Illumination``."""
 
-    Parameters
-    ----------
-    k_vectors
-        Float64 array shaped ``(sources, 2)`` in radians per metre.
-    frame_weights
-        Float64 array shaped ``(frames, sources)``. Nonzero entries select the
-        positive incoherent source contributions to each measured frame.
-    """
-
-    def __init__(self, k_vectors: FloatArray, frame_weights: FloatArray) -> None: ...
+class SourceGeometry:
+    """Inspectable enum wrapper around one concrete source geometry."""
+    def __init__(self, value: Geometry) -> None: ...
     @property
     def source_count(self) -> int:
-        """Return the number of individual calibrated sources."""
+        """Return the physical or direct source count."""
+    @property
+    def kind(self) -> str:
+        """Return the canonical serialized geometry-kind string."""
+    def resolve(self, optics: Optics) -> ResolvedSources:
+        """Resolve this geometry with the supplied optical configuration."""
+
+class SourceCalibration:
+    """Stable source power independent of geometry and frame ordering.
+
+    Relative power is dimensionless, non-negative, not normalized, and
+    multiplies predicted intensity rather than field amplitude.
+    """
+    def __init__(self, *, relative_power: Sequence[float] | None = None) -> None: ...
+    @staticmethod
+    def unity() -> SourceCalibration:
+        """Return calibration that resolves to unit power for every source."""
+    @property
+    def relative_power(self) -> list[float] | None:
+        """Return explicit powers, or ``None`` for default unit power."""
+
+class SourceContribution:
+    """One source index and non-negative intensity weight."""
+    def __init__(self, source: int, intensity_weight: float) -> None: ...
+    @property
+    def source(self) -> int:
+        """Return the zero-based physical source index."""
+    @property
+    def intensity_weight(self) -> float:
+        """Return the dimensionless source intensity multiplier."""
+
+class IlluminationFrame:
+    """Sparse mutually incoherent source contributions and a frame gain."""
+    def __init__(
+        self,
+        contributions: Sequence[tuple[int, float]],
+        *,
+        gain: float = 1.0,
+    ) -> None: ...
+    @property
+    def contributions(self) -> list[SourceContribution]:
+        """Return source contributions in stored order."""
+    @property
+    def gain(self) -> float:
+        """Return the dimensionless frame intensity gain."""
+
+class AcquisitionPlan:
+    """Canonical sparse source-to-frame acquisition structure.
+
+    Duplicate source entries are merged, zero weights removed, and every
+    weight and gain must be finite and non-negative. Weights are not normalized.
+    """
+    @staticmethod
+    def all_sources(source_count: int) -> AcquisitionPlan:
+        """Create one unit-gain frame per source in natural order."""
+    @staticmethod
+    def sequential(order: Sequence[int]) -> AcquisitionPlan:
+        """Create unit-gain frames for an arbitrary subset or repeated order."""
+    @staticmethod
+    def from_sparse(frames: Sequence[IlluminationFrame]) -> AcquisitionPlan:
+        """Validate and canonicalize sparse frame contributions."""
+    @staticmethod
+    def from_dense(weights: FloatArray) -> AcquisitionPlan:
+        """Convert a float64 ``(frames, sources)`` matrix to sparse storage."""
     @property
     def frame_count(self) -> int:
-        """Return the number of coded acquisition frames."""
+        """Return the number of acquisition frames."""
+    @property
+    def frames(self) -> list[IlluminationFrame]:
+        """Return copies of canonical sparse frames."""
+    def dense_weights(self, source_count: int) -> FloatArray:
+        """Allocate a float64 ``(frames, sources)`` weight matrix."""
+
+class Illumination:
+    """Complete geometry, stable calibration, and acquisition description.
+
+    Resolution is atomic. Predicted frame intensity is
+    ``gain[f] * sum_s(weight[f,s] * relative_power[s] * I_s)``.
+    """
+    def __init__(
+        self,
+        geometry: Geometry | SourceGeometry,
+        *,
+        calibration: SourceCalibration | None = None,
+        acquisition: AcquisitionPlan | None = None,
+    ) -> None: ...
+    @property
+    def geometry(self) -> SourceGeometry:
+        """Return an inspectable copy of the source geometry wrapper."""
+    @property
+    def calibration(self) -> SourceCalibration:
+        """Return a copy of stable source calibration."""
+    @property
+    def acquisition(self) -> AcquisitionPlan:
+        """Return a copy of canonical sparse acquisition structure."""
+    def resolve(self, optics: Optics) -> ResolvedIllumination:
+        """Atomically resolve geometry, powers, weights, and gains."""
+
+class ResolvedSources:
+    """Read-only source directions, vectors, and optional physical positions."""
+    @property
+    def source_count(self) -> int:
+        """Return the resolved source count."""
+    @property
+    def directions(self) -> FloatArray:
+        """Return float64 propagation unit vectors shaped ``(sources, 3)``."""
+    @property
+    def k_vectors(self) -> FloatArray:
+        """Return float64 transverse vectors shaped ``(sources, 2)`` in rad/m."""
+    @property
+    def positions_m(self) -> FloatArray | None:
+        """Return physical XYZ positions in metres, or ``None`` when undefined."""
+
+class ResolvedFrame:
+    """Validated sparse contributions for one resolved acquisition frame."""
+    @property
+    def contributions(self) -> list[SourceContribution]:
+        """Return canonical source-indexed intensity contributions."""
+    @property
+    def gain(self) -> float:
+        """Return the explicit non-negative frame gain."""
+
+class ResolvedIllumination:
+    """Inspectable illumination state resolved for a particular ``Optics``."""
+    @property
+    def sources(self) -> ResolvedSources:
+        """Return a copy of resolved source geometry."""
+    @property
+    def source_count(self) -> int:
+        """Return the number of individual sources."""
+    @property
+    def frame_count(self) -> int:
+        """Return the independently defined acquisition-frame count."""
+    @property
+    def is_multiplexed(self) -> bool:
+        """Return whether any frame combines multiple incoherent sources."""
+    @property
+    def frames(self) -> list[ResolvedFrame]:
+        """Return copies of resolved canonical sparse frames."""
+    @property
+    def source_power(self) -> FloatArray:
+        """Return explicit source powers, including resolved unit defaults."""
+    @property
+    def frame_gains(self) -> FloatArray:
+        """Return explicit frame gains, including resolved unit defaults."""
+    @property
+    def directions(self) -> FloatArray:
+        """Return float64 propagation directions shaped ``(sources, 3)``."""
+    @property
+    def positions_m(self) -> FloatArray | None:
+        """Return physical XYZ positions in metres when defined."""
+    @property
+    def k_vectors(self) -> FloatArray:
+        """Return transverse vectors shaped ``(sources, 2)`` in radians/metre."""
+    @property
+    def dense_weights(self) -> FloatArray:
+        """Allocate acquisition weights shaped ``(frames, sources)``."""
 
 class CameraModel:
     """Detector response and acquisition-noise model.
@@ -732,17 +972,6 @@ class ImagePlaneModel:
     def frame_gains(self) -> FloatArray | None:
         """Return optional positive acquisition-frame intensity multipliers."""
 
-Illumination: TypeAlias = (
-    LEDArray
-    | LEDSphere
-    | SphericalLEDArm
-    | RotatingLEDArc
-    | AngleList
-    | KVectorList
-    | CodedIllumination
-)
-"""Physical, angular, calibrated, or coded illumination accepted for compilation."""
-
 def compile_model(
     optics: Optics,
     illumination: Illumination,
@@ -756,7 +985,7 @@ def compile_model(
     optics
         Valid physical microscope parameters.
     illumination
-        Source geometry or calibrated transverse wave vectors.
+        Complete geometry, calibration, and acquisition description.
     image_shape
         Low-resolution frame shape as ``(height, width)``.
     reconstruction_shape

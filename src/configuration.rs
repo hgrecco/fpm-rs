@@ -17,13 +17,13 @@ use crate::{
     Result,
     array_layout::checked_len_2d,
     error::Error,
-    experiment::{Illumination, IlluminationSource, Optics},
+    experiment::{Illumination, Optics, ResolvedIllumination},
     model::{ImagePlaneModel, ReconstructionShape},
     simulation::{CameraModel, IlluminationAcquisitionErrors},
 };
 
 /// Current serialized experiment/simulation configuration format.
-pub const CONFIGURATION_FORMAT_VERSION: u32 = 1;
+pub const CONFIGURATION_FORMAT_VERSION: u32 = 2;
 
 /// Concrete optical experiment description used to compile an image-plane model.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,23 +62,18 @@ impl ExperimentDescription {
         image_shape: (usize, usize),
         reconstruction_shape: ReconstructionShape,
     ) -> Result<ImagePlaneModel> {
-        let k_vectors = self.illumination.k_vectors(&self.optics)?;
-        self.compile_with_k_vectors(image_shape, reconstruction_shape, k_vectors)
+        let resolved = self.illumination.resolve(&self.optics)?;
+        self.compile_resolved(image_shape, reconstruction_shape, &resolved)
     }
 
-    fn compile_with_k_vectors(
+    fn compile_resolved(
         &self,
         image_shape: (usize, usize),
         reconstruction_shape: ReconstructionShape,
-        k_vectors: Vec<crate::experiment::KVector>,
+        resolved: &ResolvedIllumination,
     ) -> Result<ImagePlaneModel> {
-        let mut model = ImagePlaneModel::from_experiment_with_k_vectors(
-            &self.optics,
-            &self.illumination,
-            k_vectors,
-            image_shape,
-            reconstruction_shape,
-        )?;
+        let mut model =
+            ImagePlaneModel::compile(&self.optics, resolved, image_shape, reconstruction_shape)?;
         model.background = self.optical_background.clone();
         model.validate()?;
         Ok(model)
@@ -88,9 +83,7 @@ impl ExperimentDescription {
     /// optical background values.
     pub fn validate(&self) -> Result<()> {
         self.optics.validate()?;
-        self.illumination.k_vectors(&self.optics)?;
-        self.illumination.frame_gains()?;
-        self.illumination.multiplexing_matrix()?;
+        self.illumination.resolve(&self.optics)?;
         if self.optical_background.as_ref().is_some_and(|values| {
             values
                 .iter()
@@ -167,21 +160,21 @@ impl SimulationConfiguration {
         image_shape: (usize, usize),
         reconstruction_shape: ReconstructionShape,
     ) -> Result<Self> {
-        let true_k_vectors = true_experiment
+        let true_resolved = true_experiment
             .illumination
-            .k_vectors(&true_experiment.optics)?;
-        let reconstruction_k_vectors = reconstruction_experiment
+            .resolve(&true_experiment.optics)?;
+        let reconstruction_resolved = reconstruction_experiment
             .illumination
-            .k_vectors(&reconstruction_experiment.optics)?;
+            .resolve(&reconstruction_experiment.optics)?;
         let true_bounds = ImagePlaneModel::crop_displacement_bounds(
             &true_experiment.optics,
             image_shape,
-            &true_k_vectors,
+            true_resolved.k_vectors(),
         )?;
         let reconstruction_bounds = ImagePlaneModel::crop_displacement_bounds(
             &reconstruction_experiment.optics,
             image_shape,
-            &reconstruction_k_vectors,
+            reconstruction_resolved.k_vectors(),
         )?;
         let reconstruction_shape = ImagePlaneModel::resolve_reconstruction_shape(
             image_shape,
@@ -189,15 +182,15 @@ impl SimulationConfiguration {
             &[true_bounds, reconstruction_bounds],
         )?;
         let compiled_models = CompiledModelPair {
-            true_model: true_experiment.compile_with_k_vectors(
+            true_model: true_experiment.compile_resolved(
                 image_shape,
                 ReconstructionShape::Exact(reconstruction_shape),
-                true_k_vectors,
+                &true_resolved,
             )?,
-            reconstruction_model: reconstruction_experiment.compile_with_k_vectors(
+            reconstruction_model: reconstruction_experiment.compile_resolved(
                 image_shape,
                 ReconstructionShape::Exact(reconstruction_shape),
-                reconstruction_k_vectors,
+                &reconstruction_resolved,
             )?,
         };
         let configuration = Self {

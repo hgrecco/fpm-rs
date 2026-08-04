@@ -4,7 +4,7 @@ use fpm_rs::reconstruction::ReconstructionProblem;
 use fpm_rs::simulation::{CameraModel, IlluminationAcquisitionErrors, Simulator, SyntheticObject};
 use fpm_rs::{
     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
-    experiment::{LEDArray, Optics, PupilAberration},
+    experiment::{ArrayPose, Illumination, Optics, PlanarLedArray, PupilAberration},
     model::{ForwardModel, ImagePlaneModel, ReconstructionShape},
 };
 use image::GrayImage;
@@ -252,25 +252,32 @@ fn camera_validates_pixel_maps_and_bad_pixel_indices_for_the_frame() {
 #[test]
 fn illumination_mismatch_keeps_true_and_reconstruction_models_distinct() {
     let optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
-    let assumed_array = LEDArray::new()
-        .grid_shape((1, 3))
-        .pitch(4.0e-3)
-        .distance(90.0e-3)
-        .center((1.0, 0.0));
-    let true_array = LEDArray::new()
-        .grid_shape((1, 3))
-        .pitch(4.05e-3)
-        .distance(89.5e-3)
-        .center((1.08, -0.04))
-        .rotation_deg(0.7);
+    let assumed_array = Illumination::from_geometry(PlanarLedArray::new(
+        (1, 3),
+        (4.0e-3, 4.0e-3),
+        (1.0, 0.0),
+        ArrayPose::from_translation([0.0, 0.0, -90.0e-3]),
+    ))
+    .unwrap();
+    let true_array = Illumination::from_geometry(PlanarLedArray::new(
+        (1, 3),
+        (4.05e-3, 4.05e-3),
+        (1.08, -0.04),
+        ArrayPose::from_translation_and_extrinsic_xyz_degrees(
+            [0.0, 0.0, -89.5e-3],
+            [0.0, 0.0, 0.7],
+        ),
+    ))
+    .unwrap();
     let true_model = ImagePlaneModel::from_experiment(
         &optics,
         &true_array,
@@ -303,11 +310,12 @@ fn illumination_mismatch_keeps_true_and_reconstruction_models_distinct() {
 #[test]
 fn pupil_mismatch_comes_from_the_provided_models() {
     let assumed_optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
@@ -321,7 +329,13 @@ fn pupil_mismatch_comes_from_the_provided_models() {
         }),
         ..assumed_optics.clone()
     };
-    let illumination = LEDArray::new();
+    let illumination = Illumination::from_geometry(PlanarLedArray::new(
+        (1, 1),
+        (4e-3, 4e-3),
+        (0.0, 0.0),
+        ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+    ))
+    .unwrap();
     let true_model = ImagePlaneModel::from_experiment(
         &true_optics,
         &illumination,

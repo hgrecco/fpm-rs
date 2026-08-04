@@ -31,8 +31,12 @@ import numpy as np
 import fpm_rs as fpm
 
 optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
-leds = fpm.LEDArray((3, 3), 4e-3, 90e-3, (1.0, 1.0))
-model = fpm.compile_model(optics, leds, (32, 32))
+geometry = fpm.PlanarLEDArray(
+    (3, 3), 4e-3, (1.0, 1.0),
+    fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+)
+illumination = fpm.Illumination(geometry)
+model = fpm.compile_model(optics, illumination, (32, 32))
 
 simulation = fpm.simulate(
     model,
@@ -53,8 +57,8 @@ straight to the [Python API](reference/python/index.md).
 
 ## Library components
 
-- `experiment` describes optics and planar, spherical, angular, and calibrated
-  illumination sources.
+- `experiment` separates source geometry, stable calibration, sparse acquisition,
+  and resolved illumination state.
 - `model` compiles sampling, pupil, Fourier crops, and the shared forward model.
 - `measurements` provides resident and lazy intensity stacks plus preprocessing.
 - `algorithms` implements AP, FPIE, EPRY, linearized ADMM, and gradient descent.

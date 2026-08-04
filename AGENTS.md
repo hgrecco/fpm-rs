@@ -61,6 +61,14 @@ GPU execution are not implemented today.
 - Preserve the architecture boundary: algorithms use compiled models and
   measurement traits, while experiment geometry stays in `experiment` and
   configuration/loading code.
+- Keep illumination geometry, stable `SourceCalibration`, and sparse canonical
+  `AcquisitionPlan` state separate. Resolve them atomically through `Illumination`;
+  algorithms consume only `ImagePlaneModel`.
+- Preserve Rust/Python illumination parity, explicit SI-unit field names, sources
+  normally at negative sample `z`, positive-`z` incident propagation, and the
+  separately documented propagation-vector/Fourier-crop sign convention.
+- Do not add geometry-level wavelength overrides, acquisition ordering, powers,
+  gains, angle-list or coded-geometry types, or pre-release compatibility layers.
 - When documenting a scientific method, state implementation location, public
   API, assumptions, approximations, and references. Do not invent citations.
 - If docs and code disagree, report the discrepancy and update the most suitable

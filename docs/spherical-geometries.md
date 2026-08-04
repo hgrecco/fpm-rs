@@ -1,14 +1,15 @@
 # Spherical illumination geometries
 
-`LEDSphere` describes fixed LEDs on a spherical cap. `SphericalLEDArm`
+`SphericalLedArray` describes fixed LEDs on a spherical cap. `SphericalLedArm`
 describes one LED moved through a sequence of commanded polar/azimuth angles.
 Both compile to the same transverse `KVector` representation used by the
 reconstruction algorithms.
 
-Angles are `(theta, phi)` in radians. `theta` is measured from the positive
-optical (`z`) axis and must satisfy `0 <= theta < pi/2`; `phi` is measured from
-positive `x` toward positive `y`. Distances are metres. Rigid orientations are
-stored as `(rx, ry, rz)` and applied in the order `Rz * Ry * Rx`.
+Angles are `(theta, phi)` propagation angles in radians. `theta` is measured
+from positive `z` and must satisfy `0 <= theta < pi/2`; `phi` is measured from
+positive `x` toward positive `y`. Physical source positions are on negative
+`z`, opposite the propagation direction. Distances are metres. Rigid
+orientations are stored as `(rx, ry, rz)` and applied as `Rz * Ry * Rx`.
 
 ## Fixed LED sphere
 
@@ -18,8 +19,9 @@ For LED `i`, the model is
 u_i = [sin(theta_i + dtheta_i) cos(phi_i + dphi_i),
        sin(theta_i + dtheta_i) sin(phi_i + dphi_i),
        cos(theta_i + dtheta_i)]
-p_i = c + R r u_i
-k_i = (2 pi n / lambda) [p_i.x, p_i.y] / |p_i|
+p_i = c - R r u_i
+d_i = normalize(-p_i)
+k_i = (2 pi n_illumination / lambda_vacuum) [d_i.x, d_i.y]
 ```
 
 where `r` is `radius`, `c` is `center_offset`, `R` is
@@ -41,9 +43,9 @@ a global azimuth shift and a mount rotation about `z` are partly redundant; a
 calibration should fix one of them.
 
 ```rust
-use fpm_rs::experiment::LEDSphere;
+use fpm_rs::experiment::SphericalLedArray;
 
-let sphere = LEDSphere::new(
+let sphere = SphericalLedArray::new(
     vec![(0.0, 0.0), (0.25, 0.0), (0.25, 1.57)],
     90e-3,
 )
@@ -60,7 +62,7 @@ errors at every acquisition point:
 ```text
 theta_i' = theta_scale theta_i + theta_zero + direction_i B_theta / 2
 phi_i'   = phi_scale phi_i     + phi_zero   + direction_i B_phi / 2
-p_i = c + R Rz(phi_i') Rot(a, theta_i') [0, 0, L]
+p_i = c + R Rz(phi_i') Rot(a, theta_i') [0, 0, -L]
 a = [0, cos(epsilon), sin(epsilon)]
 ```
 
@@ -90,7 +92,7 @@ identifiable.
 
 ## Rotating quarter-circle LED arc
 
-`RotatingLEDArc` represents several LEDs fixed to a meridional quarter-circle
+`RotatingLedArc` represents several LEDs fixed to a meridional quarter-circle
 arm. The complete arm rotates around an axis nominally collinear with the
 optical axis. Each LED is compiled at every commanded rotation; the source order
 is rotation-major and then LED-position order.
@@ -101,9 +103,10 @@ For LED `j` at rotation `m`, the model is
 theta_j' = theta_j + dtheta_j
 r_j      = radius + dr_j
 phi_m'   = rotation_scale phi_m + rotation_zero + direction_m B / 2
-q_mj = Rz(phi_m') r_j u(theta_j', dphi_j)
+q_mj = -Rz(phi_m') r_j u(theta_j', dphi_j)
 p_mj = c + Ry(beta_y) Rx(beta_x) q_mj
-k_mj = (2 pi n / lambda) [p_mj.x, p_mj.y] / |p_mj|
+d_mj = normalize(-p_mj)
+k_mj = (2 pi n_illumination / lambda_vacuum) [d_mj.x, d_mj.y]
 ```
 
 The proposed error model covers:
@@ -117,9 +120,9 @@ The proposed error model covers:
   twist (`delta_phi`), and radial/shape error (`led_radial_offsets`).
 
 ```rust
-use fpm_rs::experiment::RotatingLEDArc;
+use fpm_rs::experiment::RotatingLedArc;
 
-let arc = RotatingLEDArc::new(
+let arc = RotatingLedArc::new(
     vec![0.0, 0.10, 0.20, 0.30],
     vec![0.0, 0.5, 1.0, 0.5],
     90e-3,

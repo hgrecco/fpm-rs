@@ -11,11 +11,12 @@ use crate::error::{Error, Result};
 ///
 /// # fn main() -> fpm_rs::Result<()> {
 /// let optics = Optics {
-///     wavelength: 532e-9,
+///     wavelength_vacuum_m: 532e-9,
 ///     objective_na: 0.1,
 ///     magnification: 4.0,
 ///     camera_pixel_size: 6.5e-6,
-///     medium_index: 1.0,
+///     illumination_refractive_index: 1.0,
+///     objective_medium_refractive_index: 1.0,
 ///     defocus_distance: None,
 ///     pupil_aberration: None,
 /// };
@@ -25,17 +26,20 @@ use crate::error::{Error, Result};
 /// # }
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Optics {
     /// Illumination wavelength in vacuum, in metres.
-    pub wavelength: f64,
-    /// Objective numerical aperture in the sample medium; must not exceed [`Self::medium_index`].
+    pub wavelength_vacuum_m: f64,
+    /// Objective numerical aperture; must not exceed [`Self::objective_medium_refractive_index`].
     pub objective_na: f64,
     /// Lateral image magnification, as a positive dimensionless ratio.
     pub magnification: f64,
     /// Physical detector-pixel pitch in metres.
     pub camera_pixel_size: f64,
-    /// Refractive index between the source, sample, and objective.
-    pub medium_index: f64,
+    /// Refractive index between illumination sources and the sample.
+    pub illumination_refractive_index: f64,
+    /// Refractive index in the objective-side medium.
+    pub objective_medium_refractive_index: f64,
     /// Axial sample displacement from the focal plane in metres.
     pub defocus_distance: Option<f64>,
     /// Optional sampled-pupil aberration model.
@@ -59,6 +63,7 @@ pub struct Optics {
 /// not normalized Zernike coefficients. Defocus is stored separately on
 /// [`Optics`] as [`Optics::defocus_distance`].
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PupilAberration {
     /// Radian coefficient multiplying `rho^2 * cos(2 theta)`.
     pub astigmatism: f64,
@@ -95,15 +100,22 @@ impl PupilAberration {
 }
 
 impl Optics {
-    /// Validates positive finite physical parameters, `objective_na <= medium_index`,
+    /// Validates positive finite physical parameters, objective-medium compatibility,
     /// finite optional defocus, and the optional [`PupilAberration`].
     pub fn validate(&self) -> Result<()> {
         for (name, value) in [
-            ("wavelength", self.wavelength),
+            ("wavelength_vacuum_m", self.wavelength_vacuum_m),
             ("objective_na", self.objective_na),
             ("magnification", self.magnification),
             ("camera_pixel_size", self.camera_pixel_size),
-            ("medium_index", self.medium_index),
+            (
+                "illumination_refractive_index",
+                self.illumination_refractive_index,
+            ),
+            (
+                "objective_medium_refractive_index",
+                self.objective_medium_refractive_index,
+            ),
         ] {
             if !value.is_finite() || value <= 0.0 {
                 return Err(Error::InvalidParameter {
@@ -112,7 +124,7 @@ impl Optics {
                 });
             }
         }
-        if self.objective_na > self.medium_index {
+        if self.objective_na > self.objective_medium_refractive_index {
             return Err(Error::InvalidParameter {
                 name: "objective_na",
                 reason: "cannot exceed the medium refractive index".into(),
@@ -138,8 +150,13 @@ impl Optics {
         self.camera_pixel_size / self.magnification
     }
 
-    /// Returns the medium angular wavenumber `2π n / wavelength`, in radians per metre.
-    pub fn medium_wavenumber(&self) -> f64 {
-        std::f64::consts::TAU * self.medium_index / self.wavelength
+    /// Returns `2π n_illumination / wavelength_vacuum`, in radians per metre.
+    pub fn illumination_wavenumber(&self) -> f64 {
+        std::f64::consts::TAU * self.illumination_refractive_index / self.wavelength_vacuum_m
+    }
+
+    /// Returns the objective-medium angular wavenumber in radians per metre.
+    pub fn objective_medium_wavenumber(&self) -> f64 {
+        std::f64::consts::TAU * self.objective_medium_refractive_index / self.wavelength_vacuum_m
     }
 }

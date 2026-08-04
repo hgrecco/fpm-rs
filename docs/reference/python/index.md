@@ -39,7 +39,6 @@ I/O, and serialization failures have distinct subclasses.
         - ComplexArray
         - MaskArray
         - Path
-        - Illumination
         - Callback
         - FpmError
         - InvalidShapeError

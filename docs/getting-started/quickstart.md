@@ -9,17 +9,18 @@ import fpm_rs as fpm
 
 # All distances are metres. Array shapes are (height, width).
 optics = fpm.Optics(
-    wavelength=532e-9,
+    wavelength_vacuum_m=532e-9,
     objective_na=0.10,
     magnification=4.0,
     camera_pixel_size=6.5e-6,
 )
-illumination = fpm.LEDArray(
-    grid_shape=(3, 3),
-    pitch=4e-3,
-    distance=90e-3,
-    center=(1.0, 1.0),
+geometry = fpm.PlanarLEDArray(
+    shape=(3, 3),
+    pitch_m=4e-3,
+    reference_index=(1.0, 1.0),
+    pose=fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
 )
+illumination = fpm.Illumination(geometry)
 model = fpm.compile_model(optics, illumination, image_shape=(32, 32))
 
 row, column = np.indices(model.reconstruction_shape)

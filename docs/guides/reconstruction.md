@@ -68,7 +68,7 @@ use fpm_rs::model::{ImagePlaneModel, ReconstructionShape};
 
 # fn example(
 #     optics: &fpm_rs::experiment::Optics,
-#     illumination: &fpm_rs::experiment::LEDArray,
+#     illumination: &fpm_rs::experiment::Illumination,
 # ) -> fpm_rs::Result<()> {
 let image_shape = (32, 32);
 let suggested = ImagePlaneModel::suggest_reconstruction_shape(
@@ -112,9 +112,11 @@ the automatic modes are memory/performance choices, not FFT compatibility
 requirements. They also do not guarantee recoverable information or uniform
 Fourier coverage.
 
-Choose `LEDArray` for a planar grid, `AngleList` or `KVectorList` for calibrated
-directions, and `CodedIllumination` for multiplexed frames. Spherical source
-classes have additional identifiability constraints documented in
+Choose `PlanarLEDArray` for a planar grid, `DirectionList` for wavelength-independent
+directions, and `KVectorList` for wavelength-dependent calibrated vectors. Put
+subsets, repetitions, or multiplexing in `AcquisitionPlan`, then combine it with
+geometry and `SourceCalibration` in `Illumination`. Spherical source classes have
+additional identifiability constraints documented in
 [Spherical illumination geometries](../spherical-geometries.md).
 
 ## Build the problem

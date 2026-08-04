@@ -9,7 +9,7 @@ import fpm_rs as fpm
 @pytest.fixture
 def optics() -> fpm.Optics:
     return fpm.Optics(
-        wavelength=532e-9,
+        wavelength_vacuum_m=532e-9,
         objective_na=0.10,
         magnification=4.0,
         camera_pixel_size=6.5e-6,
@@ -18,12 +18,13 @@ def optics() -> fpm.Optics:
 
 @pytest.fixture
 def model(optics: fpm.Optics) -> fpm.ImagePlaneModel:
-    illumination = fpm.LEDArray(
-        grid_shape=(1, 1),
-        pitch=4e-3,
-        distance=90e-3,
-        center=(0.0, 0.0),
+    geometry = fpm.PlanarLEDArray(
+        shape=(1, 1),
+        pitch_m=4e-3,
+        reference_index=(0.0, 0.0),
+        pose=fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
     )
+    illumination = fpm.Illumination(geometry)
     return fpm.compile_model(optics, illumination, (8, 8), (16, 16))
 
 

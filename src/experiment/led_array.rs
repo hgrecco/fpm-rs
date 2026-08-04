@@ -2,219 +2,295 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-use super::{IlluminationSource, KVector, Optics};
+use super::{Optics, ResolvedSources};
 
-/// Regular planar LED grid centered above the sample.
+/// Rigid pose mapping array-local coordinates into sample coordinates.
 ///
-/// The grid shape is `(rows, columns)`, while [`Self::center`] is `(column, row)` in
-/// grid-index coordinates. Natural source order is row-major; an optional permutation
-/// changes the compiled source order to match acquisition-frame order.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LEDArray {
-    /// Number of LEDs as `(rows, columns)`; both dimensions must be non-zero.
-    pub grid_shape: (usize, usize),
-    /// Centre-to-centre spacing between adjacent LEDs, in metres.
-    pub pitch: f64,
-    /// Positive perpendicular distance from the LED plane to the sample, in metres.
-    pub distance: f64,
-    /// LED-grid coordinate that lies on the optical axis, `(column, row)`.
-    pub center: (f64, f64),
-    /// Optional vacuum wavelength in metres, replacing [`Optics::wavelength`] for this array.
-    pub wavelength_override: Option<f64>,
-    /// Optional permutation from acquisition order to natural row-major LED indices.
-    pub illumination_order: Option<Vec<usize>>,
-    /// Optional positive multiplicative intensity gain per natural-order LED.
-    pub intensity_weights: Option<Vec<f64>>,
-    /// Counter-clockwise in-plane grid rotation about its centre, in radians.
-    pub rotation_radians: f64,
+/// Rotations are active, right-handed, extrinsic rotations about the fixed
+/// sample `x`, `y`, then `z` axes. A column vector is transformed with
+/// `Rz(rz) * Ry(ry) * Rx(rx)` before translation is added.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArrayPose {
+    /// Translation `(x, y, z)` in metres.
+    pub translation_m: [f64; 3],
+    /// Extrinsic fixed-axis `(rx, ry, rz)` rotation in radians.
+    pub rotation_rad: [f64; 3],
+    rotation_convention: ArrayRotationConvention,
 }
 
-impl Default for LEDArray {
-    fn default() -> Self {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum ArrayRotationConvention {
+    #[serde(rename = "active_extrinsic_xyz")]
+    ActiveExtrinsicXyz,
+}
+
+impl ArrayPose {
+    /// Returns the identity rigid transform.
+    pub const fn identity() -> Self {
         Self {
-            grid_shape: (1, 1),
-            pitch: 4e-3,
-            distance: 90e-3,
-            center: (0.0, 0.0),
-            wavelength_override: None,
-            illumination_order: None,
-            intensity_weights: None,
-            rotation_radians: 0.0,
+            translation_m: [0.0; 3],
+            rotation_rad: [0.0; 3],
+            rotation_convention: ArrayRotationConvention::ActiveExtrinsicXyz,
         }
     }
-}
 
-impl LEDArray {
-    /// Creates the default one-LED grid with 4 mm pitch and 90 mm distance.
-    pub fn new() -> Self {
-        Self::default()
+    /// Creates a pure translation in metres.
+    pub const fn from_translation(translation_m: [f64; 3]) -> Self {
+        Self {
+            translation_m,
+            rotation_rad: [0.0; 3],
+            rotation_convention: ArrayRotationConvention::ActiveExtrinsicXyz,
+        }
     }
 
-    /// Sets `(rows, columns)`; validation later rejects zero dimensions or count overflow.
-    pub fn grid_shape(mut self, shape: (usize, usize)) -> Self {
-        self.grid_shape = shape;
-        self
+    /// Creates a translation and active extrinsic XYZ rotation in radians.
+    pub const fn from_translation_and_extrinsic_xyz_radians(
+        translation_m: [f64; 3],
+        rotation_rad: [f64; 3],
+    ) -> Self {
+        Self {
+            translation_m,
+            rotation_rad,
+            rotation_convention: ArrayRotationConvention::ActiveExtrinsicXyz,
+        }
     }
 
-    /// Sets the positive LED pitch in metres.
-    pub fn pitch(mut self, pitch: f64) -> Self {
-        self.pitch = pitch;
-        self
+    /// Creates a translation and active extrinsic XYZ rotation in degrees.
+    pub fn from_translation_and_extrinsic_xyz_degrees(
+        translation_m: [f64; 3],
+        rotation_deg: [f64; 3],
+    ) -> Self {
+        Self {
+            translation_m,
+            rotation_rad: rotation_deg.map(f64::to_radians),
+            rotation_convention: ArrayRotationConvention::ActiveExtrinsicXyz,
+        }
     }
 
-    /// Sets the positive LED-plane-to-sample distance in metres.
-    pub fn distance(mut self, distance: f64) -> Self {
-        self.distance = distance;
-        self
-    }
-
-    /// Sets the optical-axis grid coordinate as `(column, row)`, including fractional indices.
-    pub fn center(mut self, center: (f64, f64)) -> Self {
-        self.center = center;
-        self
-    }
-
-    /// Overrides the vacuum illumination wavelength with a positive value in metres.
-    pub fn wavelength_override(mut self, wavelength: f64) -> Self {
-        self.wavelength_override = Some(wavelength);
-        self
-    }
-
-    /// Sets the acquisition-to-natural source permutation.
-    pub fn illumination_order(mut self, order: Vec<usize>) -> Self {
-        self.illumination_order = Some(order);
-        self
-    }
-
-    /// Sets one finite positive intensity gain for each natural-order LED.
-    pub fn intensity_weights(mut self, weights: Vec<f64>) -> Self {
-        self.intensity_weights = Some(weights);
-        self
-    }
-
-    /// Sets the counter-clockwise in-plane rotation in degrees, stored internally in radians.
-    pub fn rotation_deg(mut self, degrees: f64) -> Self {
-        self.rotation_radians = degrees.to_radians();
-        self
-    }
-
-    /// Checks non-zero dimensions, positive finite geometry and wavelength, finite pose,
-    /// a complete source permutation, and one finite positive weight per LED.
+    /// Validates finite translation and rotation components.
     pub fn validate(&self) -> Result<()> {
-        let count = self
-            .grid_shape
-            .0
-            .checked_mul(self.grid_shape.1)
-            .ok_or_else(|| Error::InvalidParameter {
-                name: "grid_shape",
-                reason: "LED count overflows".into(),
-            })?;
-        if count == 0 {
-            return Err(Error::InvalidParameter {
-                name: "grid_shape",
-                reason: "dimensions must be non-zero".into(),
-            });
-        }
-        for (name, value) in [("pitch", self.pitch), ("distance", self.distance)] {
-            if !value.is_finite() || value <= 0.0 {
-                return Err(Error::InvalidParameter {
-                    name,
-                    reason: "must be finite and positive".into(),
-                });
-            }
-        }
-        if !self.center.0.is_finite()
-            || !self.center.1.is_finite()
-            || !self.rotation_radians.is_finite()
+        if self
+            .translation_m
+            .iter()
+            .chain(&self.rotation_rad)
+            .any(|value| !value.is_finite())
         {
             return Err(Error::InvalidParameter {
-                name: "LED geometry",
-                reason: "center and rotation must be finite".into(),
-            });
-        }
-        if let Some(order) = &self.illumination_order {
-            if order.len() != count || order.iter().any(|&index| index >= count) {
-                return Err(Error::InvalidParameter {
-                    name: "illumination_order",
-                    reason: format!("must contain {count} valid indices"),
-                });
-            }
-            let mut sorted = order.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
-            if sorted.len() != count {
-                return Err(Error::InvalidParameter {
-                    name: "illumination_order",
-                    reason: "indices must form a permutation".into(),
-                });
-            }
-        }
-        if self.intensity_weights.as_ref().is_some_and(|weights| {
-            weights.len() != count
-                || weights
-                    .iter()
-                    .any(|value| !value.is_finite() || *value <= 0.0)
-        }) {
-            return Err(Error::InvalidParameter {
-                name: "intensity_weights",
-                reason: format!("must contain {count} finite positive values"),
+                name: "pose",
+                reason: "translation and rotation components must be finite".into(),
             });
         }
         Ok(())
     }
+
+    pub(crate) fn transform_point(&self, point: [f64; 3]) -> [f64; 3] {
+        let [rx, ry, rz] = self.rotation_rad;
+        let (sin_x, cos_x) = rx.sin_cos();
+        let after_x = [
+            point[0],
+            cos_x * point[1] - sin_x * point[2],
+            sin_x * point[1] + cos_x * point[2],
+        ];
+        let (sin_y, cos_y) = ry.sin_cos();
+        let after_y = [
+            cos_y * after_x[0] + sin_y * after_x[2],
+            after_x[1],
+            -sin_y * after_x[0] + cos_y * after_x[2],
+        ];
+        let (sin_z, cos_z) = rz.sin_cos();
+        let rotated = [
+            cos_z * after_y[0] - sin_z * after_y[1],
+            sin_z * after_y[0] + cos_z * after_y[1],
+            after_y[2],
+        ];
+        [
+            rotated[0] + self.translation_m[0],
+            rotated[1] + self.translation_m[1],
+            rotated[2] + self.translation_m[2],
+        ]
+    }
 }
 
-impl IlluminationSource for LEDArray {
-    fn k_vectors(&self, optics: &Optics) -> Result<Vec<KVector>> {
-        self.validate()?;
-        optics.validate()?;
-        let wavelength = self.wavelength_override.unwrap_or(optics.wavelength);
-        if !wavelength.is_finite() || wavelength <= 0.0 {
-            return Err(Error::InvalidParameter {
-                name: "wavelength_override",
-                reason: "must be finite and positive".into(),
-            });
+impl Default for ArrayPose {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+/// Regular planar LED grid with row-major physical source indexing.
+///
+/// `shape` is `(rows, columns)`, `pitch_m` is `(pitch_x, pitch_y)`, and
+/// `reference_index` is the fractional `(column, row)` lattice coordinate at
+/// the pose origin. Source index is `row * columns + column`. Per-source local
+/// Cartesian corrections are applied before the global [`ArrayPose`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarLedArray {
+    shape: (usize, usize),
+    pitch_m: (f64, f64),
+    reference_index: (f64, f64),
+    pose: ArrayPose,
+    position_offsets_m: Vec<[f64; 3]>,
+}
+
+impl PlanarLedArray {
+    /// Creates a planar array from its canonical physical fields.
+    pub fn new(
+        shape: (usize, usize),
+        pitch_m: (f64, f64),
+        reference_index: (f64, f64),
+        pose: ArrayPose,
+    ) -> Self {
+        Self {
+            shape,
+            pitch_m,
+            reference_index,
+            pose,
+            position_offsets_m: Vec::new(),
         }
-        let wavenumber = std::f64::consts::TAU * optics.medium_index / wavelength;
-        let (sin_rotation, cos_rotation) = self.rotation_radians.sin_cos();
-        let count = self
-            .grid_shape
-            .0
-            .checked_mul(self.grid_shape.1)
-            .ok_or_else(|| Error::InvalidParameter {
-                name: "grid_shape",
-                reason: "LED count overflows".into(),
-            })?;
-        let mut natural = Vec::with_capacity(count);
-        for row in 0..self.grid_shape.0 {
-            for column in 0..self.grid_shape.1 {
-                let x = (column as f64 - self.center.0) * self.pitch;
-                let y = (row as f64 - self.center.1) * self.pitch;
-                let rotated_x = cos_rotation * x - sin_rotation * y;
-                let rotated_y = sin_rotation * x + cos_rotation * y;
-                let distance =
-                    (rotated_x * rotated_x + rotated_y * rotated_y + self.distance * self.distance)
-                        .sqrt();
-                natural.push(KVector::new(
-                    wavenumber * rotated_x / distance,
-                    wavenumber * rotated_y / distance,
-                ));
-            }
-        }
-        Ok(if let Some(order) = &self.illumination_order {
-            order.iter().map(|&index| natural[index]).collect()
-        } else {
-            natural
-        })
     }
 
-    fn frame_gains(&self) -> Result<Option<Vec<f64>>> {
+    /// Sets array-local per-source Cartesian corrections in metres.
+    ///
+    /// An empty vector means all-zero corrections; otherwise its length must
+    /// equal [`Self::source_count`].
+    pub fn with_position_offsets_m(mut self, offsets: Vec<[f64; 3]>) -> Self {
+        self.position_offsets_m = offsets;
+        self
+    }
+
+    /// Returns array shape as `(rows, columns)`.
+    pub const fn shape(&self) -> (usize, usize) {
+        self.shape
+    }
+
+    /// Returns pitch as `(pitch_x, pitch_y)` in metres.
+    pub const fn pitch_m(&self) -> (f64, f64) {
+        self.pitch_m
+    }
+
+    /// Returns the fractional reference lattice coordinate `(column, row)`.
+    pub const fn reference_index(&self) -> (f64, f64) {
+        self.reference_index
+    }
+
+    /// Borrows the array-local to sample-coordinate rigid pose.
+    pub const fn pose(&self) -> &ArrayPose {
+        &self.pose
+    }
+
+    /// Borrows canonical local position offsets in metres.
+    pub fn position_offsets_m(&self) -> &[[f64; 3]] {
+        &self.position_offsets_m
+    }
+
+    /// Returns `rows * columns`, or zero if an impossible platform overflow occurs.
+    pub fn source_count(&self) -> usize {
+        self.shape.0.checked_mul(self.shape.1).unwrap_or(0)
+    }
+
+    /// Converts `(row, column)` to its row-major source index.
+    pub fn source_index(&self, row: usize, column: usize) -> Result<usize> {
+        if row >= self.shape.0 || column >= self.shape.1 {
+            return Err(Error::InvalidParameter {
+                name: "source_index",
+                reason: format!("({row}, {column}) lies outside shape {:?}", self.shape),
+            });
+        }
+        row.checked_mul(self.shape.1)
+            .and_then(|value| value.checked_add(column))
+            .ok_or_else(|| Error::InvalidParameter {
+                name: "shape",
+                reason: "source index overflows".into(),
+            })
+    }
+
+    /// Converts a row-major source index to `(row, column)`.
+    pub fn source_row_column(&self, index: usize) -> Result<(usize, usize)> {
+        let count = self.validated_source_count()?;
+        if index >= count {
+            return Err(Error::InvalidParameter {
+                name: "source_index",
+                reason: format!("index {index} must be less than {count}"),
+            });
+        }
+        Ok((index / self.shape.1, index % self.shape.1))
+    }
+
+    /// Validates dimensions, pitches, reference coordinate, pose, and offsets.
+    pub fn validate(&self) -> Result<()> {
+        let count = self.validated_source_count()?;
+        if [self.pitch_m.0, self.pitch_m.1]
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(Error::InvalidParameter {
+                name: "pitch_m",
+                reason: "pitch_x and pitch_y must be finite and positive".into(),
+            });
+        }
+        if !self.reference_index.0.is_finite() || !self.reference_index.1.is_finite() {
+            return Err(Error::InvalidParameter {
+                name: "reference_index",
+                reason: "column and row coordinates must be finite".into(),
+            });
+        }
+        self.pose.validate()?;
+        if (!self.position_offsets_m.is_empty() && self.position_offsets_m.len() != count)
+            || self
+                .position_offsets_m
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(Error::InvalidParameter {
+                name: "position_offsets_m",
+                reason: format!("must be empty or contain {count} finite XYZ offsets"),
+            });
+        }
+        Ok(())
+    }
+
+    fn validated_source_count(&self) -> Result<usize> {
+        let count =
+            self.shape
+                .0
+                .checked_mul(self.shape.1)
+                .ok_or_else(|| Error::InvalidParameter {
+                    name: "shape",
+                    reason: "source count overflows".into(),
+                })?;
+        if count == 0 {
+            return Err(Error::InvalidParameter {
+                name: "shape",
+                reason: "rows and columns must be non-zero".into(),
+            });
+        }
+        Ok(count)
+    }
+
+    /// Resolves physical positions, directions, and transverse propagation vectors.
+    pub fn resolve(&self, optics: &Optics) -> Result<ResolvedSources> {
         self.validate()?;
-        Ok(self.intensity_weights.as_ref().map(|weights| {
-            self.illumination_order.as_ref().map_or_else(
-                || weights.clone(),
-                |order| order.iter().map(|&index| weights[index]).collect(),
-            )
-        }))
+        let count = self.validated_source_count()?;
+        let mut positions = Vec::with_capacity(count);
+        for row in 0..self.shape.0 {
+            for column in 0..self.shape.1 {
+                let index = row * self.shape.1 + column;
+                let offset = self
+                    .position_offsets_m
+                    .get(index)
+                    .copied()
+                    .unwrap_or([0.0; 3]);
+                let local = [
+                    (column as f64 - self.reference_index.0) * self.pitch_m.0 + offset[0],
+                    (row as f64 - self.reference_index.1) * self.pitch_m.1 + offset[1],
+                    offset[2],
+                ];
+                positions.push(self.pose.transform_point(local));
+            }
+        }
+        ResolvedSources::from_positions(positions, optics)
     }
 }

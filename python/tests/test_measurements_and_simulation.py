@@ -11,13 +11,20 @@ def test_simulation_uses_distinct_true_and_reconstruction_models(
     model: fpm.ImagePlaneModel,
 ) -> None:
     assumed_optics = fpm.Optics(
-        optics.wavelength,
+        optics.wavelength_vacuum_m,
         optics.objective_na,
         optics.magnification,
         optics.camera_pixel_size,
         defocus_distance=2e-6,
     )
-    illumination = fpm.LEDArray((1, 1), 4e-3, 90e-3, (0.0, 0.0))
+    illumination = fpm.Illumination(
+        fpm.PlanarLEDArray(
+            (1, 1),
+            4e-3,
+            (0.0, 0.0),
+            fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+        )
+    )
     assumed = fpm.compile_model(assumed_optics, illumination, (8, 8), (16, 16))
     camera = fpm.CameraModel(
         photons_per_pixel=10.0,

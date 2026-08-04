@@ -6,7 +6,7 @@ use crate::{
     Result,
     array_layout::{StandardView2, checked_len_2d},
     error::Error,
-    experiment::{IlluminationSource, KVector, MultiplexingMatrix, Optics},
+    experiment::{Illumination, KVector, MultiplexingMatrix, Optics, ResolvedIllumination},
 };
 
 use super::{CropIndices, FourierCrop, FourierOffset, Pupil, Sampling};
@@ -143,45 +143,43 @@ impl ImagePlaneModel {
 
     /// Compiles an experiment using an explicit or automatically selected
     /// reconstruction shape.
-    pub fn from_experiment<I: IlluminationSource>(
+    pub fn from_experiment(
         optics: &Optics,
-        illumination: &I,
+        illumination: &Illumination,
         image_shape: (usize, usize),
         reconstruction_shape: ReconstructionShape,
     ) -> Result<Self> {
         optics.validate()?;
-        let k_vectors = illumination.k_vectors(optics)?;
-        Self::from_experiment_with_k_vectors(
-            optics,
-            illumination,
-            k_vectors,
-            image_shape,
-            reconstruction_shape,
-        )
+        let resolved = illumination.resolve(optics)?;
+        Self::compile(optics, &resolved, image_shape, reconstruction_shape)
     }
 
     /// Resolves an explicit shape or suggests an automatic reconstruction grid
     /// from the actual illumination wave vectors.
-    pub fn suggest_reconstruction_shape<I: IlluminationSource>(
+    pub fn suggest_reconstruction_shape(
         optics: &Optics,
-        illumination: &I,
+        illumination: &Illumination,
         image_shape: (usize, usize),
         reconstruction_shape: ReconstructionShape,
     ) -> Result<(usize, usize)> {
         optics.validate()?;
-        let k_vectors = illumination.k_vectors(optics)?;
-        let bounds = Self::crop_displacement_bounds(optics, image_shape, &k_vectors)?;
+        let resolved = illumination.resolve(optics)?;
+        let bounds = Self::crop_displacement_bounds(optics, image_shape, resolved.k_vectors())?;
         Self::resolve_reconstruction_shape(image_shape, reconstruction_shape, &[bounds])
     }
 
-    pub(crate) fn from_experiment_with_k_vectors<I: IlluminationSource>(
+    /// Compiles already resolved illumination into algorithm-facing numerical state.
+    ///
+    /// Geometry positions and poses are intentionally not retained. Sparse frame
+    /// weights are multiplied by stable source powers during compilation.
+    pub fn compile(
         optics: &Optics,
-        illumination: &I,
-        k_vectors: Vec<KVector>,
+        illumination: &ResolvedIllumination,
         image_shape: (usize, usize),
         reconstruction_shape: ReconstructionShape,
     ) -> Result<Self> {
         optics.validate()?;
+        let k_vectors = illumination.k_vectors().to_vec();
         let bounds = Self::crop_displacement_bounds(optics, image_shape, &k_vectors)?;
         let reconstruction_shape =
             Self::resolve_reconstruction_shape(image_shape, reconstruction_shape, &[bounds])?;
@@ -193,10 +191,12 @@ impl ImagePlaneModel {
             std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size),
             std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size),
         )?;
-        sampling.wavelength = Some(optics.wavelength);
+        sampling.wavelength = Some(optics.wavelength_vacuum_m);
         let maximum_illumination_na = k_vectors
             .iter()
-            .map(|vector| vector.kx.hypot(vector.ky) * optics.wavelength / std::f64::consts::TAU)
+            .map(|vector| {
+                vector.kx.hypot(vector.ky) * optics.wavelength_vacuum_m / std::f64::consts::TAU
+            })
             .fold(0.0, f64::max);
         sampling.synthetic_na = Some(optics.objective_na + maximum_illumination_na);
         let pupil = Pupil::circular(image_shape, &sampling, optics)?;
@@ -218,8 +218,14 @@ impl ImagePlaneModel {
             image_shape,
             reconstruction_shape,
         )?;
-        model.frame_gains = illumination.frame_gains()?;
-        model.multiplexing_matrix = illumination.multiplexing_matrix()?;
+        model.frame_gains = Some(illumination.frame_gains());
+        let matrix = illumination.compiled_multiplexing_matrix();
+        let identity = matrix.len() == model.source_count()
+            && matrix
+                .iter()
+                .enumerate()
+                .all(|(source, row)| row.as_slice() == [(source, 1.0)]);
+        model.multiplexing_matrix = (!identity).then_some(matrix);
         model.subpixel_offsets = Some(offsets);
         model.validate()?;
         Ok(model)
@@ -334,7 +340,9 @@ impl ImagePlaneModel {
 
     /// Returns whether acquisition frames contain incoherent combinations of sources.
     pub fn is_multiplexed(&self) -> bool {
-        self.multiplexing_matrix.is_some()
+        self.multiplexing_matrix
+            .as_ref()
+            .is_some_and(|matrix| matrix.iter().any(|row| row.len() > 1))
     }
 
     /// Borrows transverse wave vectors in source order, in radians per metre.
@@ -377,7 +385,7 @@ impl ImagePlaneModel {
         self.reconstruction_shape
     }
 
-    /// Borrows optional positive multiplicative gains in acquisition-frame order.
+    /// Borrows optional non-negative multiplicative gains in acquisition-frame order.
     pub fn frame_gains(&self) -> Option<&[f64]> {
         self.frame_gains.as_deref()
     }
@@ -390,12 +398,12 @@ impl ImagePlaneModel {
         self.background.as_deref()
     }
 
-    /// Borrows optional acquisition-frame rows of positive source weights.
+    /// Borrows optional acquisition-frame rows of non-negative source weights.
     pub fn multiplexing_matrix(&self) -> Option<&MultiplexingMatrix> {
         self.multiplexing_matrix.as_ref()
     }
 
-    /// Replaces gains, requiring one finite positive value per acquisition frame.
+    /// Replaces gains, requiring one finite non-negative value per acquisition frame.
     pub fn with_frame_gains(mut self, values: Option<Vec<f64>>) -> Result<Self> {
         self.frame_gains = values;
         self.validate()?;
@@ -423,7 +431,7 @@ impl ImagePlaneModel {
         Ok(self)
     }
 
-    /// Enables coded illumination with one non-empty positive source-weight row per frame.
+    /// Sets compiled sparse acquisition with one non-empty non-negative row per frame.
     pub fn with_multiplexing(mut self, matrix: MultiplexingMatrix) -> Result<Self> {
         self.multiplexing_matrix = Some(matrix);
         self.validate()?;
@@ -735,10 +743,10 @@ impl ImagePlaneModel {
             }
             if values
                 .iter()
-                .any(|value| !value.is_finite() || *value <= 0.0)
+                .any(|value| !value.is_finite() || *value < 0.0)
             {
                 return Err(Error::InvalidModel(
-                    "frame gains must be finite and positive".into(),
+                    "frame gains must be finite and non-negative".into(),
                 ));
             }
         }
@@ -783,7 +791,7 @@ impl ImagePlaneModel {
                         }
                         source >= self.source_count()
                             || !weight.is_finite()
-                            || weight <= 0.0
+                            || weight < 0.0
                             || duplicate
                     });
                 if invalid {

@@ -36,8 +36,9 @@ kinematic errors are detailed in [Spherical illumination geometries](../spherica
 noise, dark current, gain, offset, quantization, saturation, and deterministic
 bad pixels. Defocus, pupil aberration, and edge apodization compile through
 `Optics` into the model pupil; represent aberration mismatch with separate true
-and reconstruction models. Illumination-angle transmission belongs in source
-intensity weights, frame gains, or multiplex weights—not in the pupil.
+and reconstruction models. Stable illumination-angle transmission belongs in
+`SourceCalibration.relative_power`; acquisition-specific source weights and
+frame gains belong in `AcquisitionPlan`, not geometry or the pupil.
 
 `SimulationResult` retains both compiled models and acquisition configuration.
 Use `evaluation::evaluate_reconstruction_with_problem` in Rust, or

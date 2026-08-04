@@ -295,7 +295,12 @@ fn subset_experiment(
     let (k_vectors, frame_weights) = match &model.multiplexing_matrix {
         Some(matrix) => (
             model.k_vectors.clone(),
-            Some(indices.iter().map(|&index| matrix[index].clone()).collect()),
+            Some(
+                indices
+                    .iter()
+                    .map(|&index| matrix[index].clone())
+                    .collect::<Vec<_>>(),
+            ),
         ),
         None => (
             indices
@@ -305,15 +310,40 @@ fn subset_experiment(
             None,
         ),
     };
-    let frame_gains = model
-        .frame_gains
-        .as_ref()
-        .map(|gains| indices.iter().map(|&index| gains[index]).collect());
-    let illumination = Illumination::Calibrated {
-        k_vectors,
-        frame_gains,
-        frame_weights,
-    };
+    let frame_gains: Vec<f64> = model.frame_gains.as_ref().map_or_else(
+        || vec![1.0; indices.len()],
+        |gains| indices.iter().map(|&index| gains[index]).collect(),
+    );
+    let acquisition = crate::experiment::AcquisitionPlan::from_sparse(match frame_weights {
+        Some(rows) => rows
+            .into_iter()
+            .zip(frame_gains)
+            .map(|(row, gain)| {
+                crate::experiment::IlluminationFrame::new(
+                    row.into_iter()
+                        .map(|(source, intensity_weight)| {
+                            crate::experiment::SourceContribution::new(source, intensity_weight)
+                        })
+                        .collect(),
+                    gain,
+                )
+            })
+            .collect(),
+        None => (0..k_vectors.len())
+            .zip(frame_gains)
+            .map(|(source, gain)| {
+                crate::experiment::IlluminationFrame::new(
+                    vec![crate::experiment::SourceContribution::new(source, 1.0)],
+                    gain,
+                )
+            })
+            .collect(),
+    })?;
+    let illumination = Illumination::new(
+        crate::experiment::KVectorList::new(k_vectors).into(),
+        crate::experiment::SourceCalibration::unity(),
+        acquisition,
+    );
     let mut subset = ExperimentDescription::new(description.optics.clone(), illumination);
     subset.optical_background = crop_optional_frames(
         model.background.as_deref(),

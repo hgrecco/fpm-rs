@@ -1,66 +1,86 @@
 # Experiment and simulation configuration schema
 
-`SimulationConfiguration` is the versioned JSON schema for reproducible model
-compilation. Version 1 contains:
+`SimulationConfiguration` version 2 is the reproducible JSON boundary for
+experiment descriptions and their compiled models. It contains separate true
+and assumed experiment descriptions, shared image/reconstruction shapes, the
+two derived `ImagePlaneModel` values, optional camera and acquisition-error
+models, and a deterministic random seed. Version 1 illumination objects are not
+accepted.
 
-- `true_experiment`: concrete `Optics`, an `Illumination` variant, and optional
-  optical background;
-- `reconstruction_experiment`: the separately assumed experiment description;
-- `image_shape` and `reconstruction_shape`, always `(height, width)`;
-- `compiled_models`: both derived `ImagePlaneModel` values;
-- optional concrete `CameraModel` and `IlluminationAcquisitionErrors`;
-- deterministic `random_seed`.
-
-All physical distances are metres, wave vectors are radians/metre, array data is
-row-major, and source-weight values are intensity weights. `Illumination` uses
-Serde's externally tagged representation. For example:
+Each experiment contains `Optics`, one complete `Illumination`, and optional
+optical background. Illumination geometry, stable source calibration, and
+acquisition structure are distinct:
 
 ```json
 {
+  "optics": {
+    "wavelength_vacuum_m": 5.32e-7,
+    "objective_na": 0.1,
+    "magnification": 4.0,
+    "camera_pixel_size": 6.5e-6,
+    "illumination_refractive_index": 1.0,
+    "objective_medium_refractive_index": 1.0,
+    "defocus_distance": null,
+    "pupil_aberration": null
+  },
   "illumination": {
-    "LEDArray": {
-      "grid_shape": [3, 3],
-      "pitch": 0.004,
-      "distance": 0.09,
-      "center": [1.0, 1.0],
-      "wavelength_override": null,
-      "illumination_order": null,
-      "intensity_weights": null,
-      "rotation_radians": 0.0
+    "geometry": {
+      "kind": "planar_led_array",
+      "shape": [3, 3],
+      "pitch_m": [0.004, 0.004],
+      "reference_index": [1.0, 1.0],
+      "pose": {
+        "translation_m": [0.0, 0.0, -0.09],
+        "rotation_rad": [0.0, 0.0, 0.0],
+        "rotation_convention": "active_extrinsic_xyz"
+      },
+      "position_offsets_m": []
+    },
+    "calibration": {
+      "relative_power": null
+    },
+    "acquisition": {
+      "frames": [
+        {
+          "contributions": [
+            {"source": 0, "intensity_weight": 1.0}
+          ],
+          "gain": 1.0
+        }
+      ]
     }
-  }
+  },
+  "optical_background": null
 }
 ```
 
-The additional externally tagged variants are `LEDSphere`, `SphericalLEDArm`,
-and `RotatingLEDArc`. Their coordinate conventions, fields, equations, and
-identifiability constraints are documented in
-[Spherical illumination geometries](spherical-geometries.md).
+Geometry `kind` is one of `planar_led_array`, `spherical_led_array`,
+`spherical_led_arm`, `rotating_led_arc`, `source_position_list`,
+`direction_list`, or `k_vector_list`. Direction lists serialize canonical unit
+vectors. K-vector lists serialize source-order `{kx, ky}` values in
+radians/metre. Physical positions and all distance fields use explicit metre
+suffixes; angular serialization uses radian suffixes.
 
-Serialized `PupilAberration` values are direct coefficients used by
-`Pupil::circular`: astigmatism, coma, and spherical terms are radian weights for
-the sampled radial polynomials documented on `Optics`, and
-`edge_apodization` sets the radial amplitude decay. They are not normalized
-Zernike coefficients.
+Acquisition is always canonical sparse frame storage. Duplicate source entries
+are merged before serialization, zero weights are absent, and each frame is
+nonempty. Source weights, relative powers, and gains are finite non-negative
+intensity multipliers and are not normalized. Defaults are expanded only in
+`ResolvedIllumination`; optional unit source power remains `null` in the
+configuration.
+
+`wavelength_vacuum_m` is the vacuum wavelength. Source propagation uses
+`illumination_refractive_index`; pupil propagation uses
+`objective_medium_refractive_index`. No geometry carries wavelength state.
 
 Use `ExperimentDescription::compile` for one model or
 `SimulationConfiguration::new` for a validated true/reconstruction pair. Use
-`save` and `load` instead of calling `serde_json` directly: these methods enforce
-the format version and validate that serialized compiled geometry, pupil,
-sampling, gains, background, and multiplexing still agree with their concrete
-descriptions.
+`save` and `load` for persistence: they validate the format version and ensure
+the stored compiled pupil, crops, source vectors, weights, gains, background,
+and sampling still agree with the descriptions. Automatic reconstruction-shape
+selection covers the union of true and assumed source vectors; the selected
+concrete shape is serialized.
 
-Both constructors take `ReconstructionShape`. `Exact((height, width))` validates
-a prescribed grid, while `Minimum`, `Smooth`, and `PowerOfTwo` resolve a concrete
-aspect-preserving grid from the compiled illumination geometry. For paired
-simulation configurations, automatic sizing covers the union of the true and
-assumed geometries. Only the resolved tuple is serialized; the selection variant
-does not alter the versioned schema.
-
-Known uniform camera response is deliberately not baked into
-`compiled_models.reconstruction_model`. Call
-`reconstruction_model_for_counts()` when constructing a problem directly from
-detector counts loaded from a serialized configuration. In contrast,
-`Simulator::simulate` returns a `SimulationResult.reconstruction_model` that has
-already been adjusted for the known linear camera response, so simulated detector
-counts can be used directly.
+Known uniform camera response is not baked into the serialized reconstruction
+model. `reconstruction_model_for_counts()` applies it when constructing a
+problem from detector counts. `Simulator::simulate` returns an already adjusted
+reconstruction model for its simulated count data.

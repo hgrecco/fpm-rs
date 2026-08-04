@@ -1,779 +1,400 @@
 use approx::assert_abs_diff_eq;
 use fpm_rs::{
-    Complex64,
     experiment::{
-        AngleList, CodedIllumination, IlluminationSource, KVector, LEDArray, LEDSphere, Optics,
-        PupilAberration, RotatingLEDArc, SphericalLEDArm,
+        AcquisitionPlan, ArrayPose, DirectionList, Illumination, IlluminationFrame, KVector,
+        KVectorList, Optics, PlanarLedArray, SourceCalibration, SourceContribution,
+        SourcePositionList,
     },
-    model::{
-        CropIndices, FourierCrop, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape,
-        Sampling,
-    },
+    model::{ImagePlaneModel, ReconstructionShape},
 };
-use ndarray::{Array2, ShapeBuilder};
 
 fn optics() -> Optics {
     Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     }
 }
 
-#[test]
-fn led_geometry_is_centered_and_symmetric() {
-    let array = LEDArray::new()
-        .grid_shape((1, 3))
-        .pitch(4e-3)
-        .distance(90e-3)
-        .center((1.0, 0.0));
-    let vectors = array.k_vectors(&optics()).unwrap();
-    assert_abs_diff_eq!(vectors[1].kx, 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(vectors[0].kx, -vectors[2].kx, epsilon = 1e-9);
-    assert!(vectors.iter().all(|vector| vector.ky.abs() < 1e-12));
+fn position_after_pose(pose: ArrayPose, point: [f64; 3]) -> [f64; 3] {
+    let geometry = PlanarLedArray::new((1, 1), (1.0, 1.0), (0.0, 0.0), pose)
+        .with_position_offsets_m(vec![point]);
+    geometry.resolve(&optics()).unwrap().positions_m().unwrap()[0]
+}
+
+fn subtract(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn dot(left: [f64; 3], right: [f64; 3]) -> f64 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn cross(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
 }
 
 #[test]
-fn led_geometry_applies_pitch_distance_and_rotation_directly() {
-    let base = LEDArray::new()
-        .grid_shape((1, 2))
-        .pitch(4e-3)
-        .distance(90e-3)
-        .center((0.0, 0.0));
-    let wider = base.clone().pitch(5e-3);
-    let farther = base.clone().distance(120e-3);
-    let rotated = base.clone().rotation_deg(90.0);
-
-    let base_vector = base.k_vectors(&optics()).unwrap()[1];
-    let wider_vector = wider.k_vectors(&optics()).unwrap()[1];
-    let farther_vector = farther.k_vectors(&optics()).unwrap()[1];
-    let rotated_vector = rotated.k_vectors(&optics()).unwrap()[1];
-
-    assert!(wider_vector.kx > base_vector.kx);
-    assert!(farther_vector.kx < base_vector.kx);
-    assert_abs_diff_eq!(rotated_vector.kx, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(rotated_vector.ky, base_vector.kx, epsilon = 1e-9);
-}
-
-#[test]
-fn led_sphere_uses_polar_and_azimuth_angles() {
-    let theta = 0.3;
-    let sphere = LEDSphere::new(
-        vec![
-            (0.0, 0.0),
-            (theta, 0.0),
-            (theta, std::f64::consts::FRAC_PI_2),
-        ],
-        100e-3,
+fn array_pose_identity_translation_axes_and_degree_equivalence() {
+    let point = [1.0, 2.0, 3.0];
+    assert_eq!(position_after_pose(ArrayPose::identity(), point), point);
+    assert_eq!(
+        position_after_pose(ArrayPose::from_translation([4.0, -1.0, 0.5]), point),
+        [5.0, 1.0, 3.5]
     );
-    let vectors = sphere.k_vectors(&optics()).unwrap();
-    let k = optics().medium_wavenumber();
 
-    assert_abs_diff_eq!(vectors[0].kx, 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(vectors[0].ky, 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(vectors[1].kx, k * theta.sin(), epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[1].ky, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[2].kx, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[2].ky, k * theta.sin(), epsilon = 1e-9);
+    let x = ArrayPose::from_translation_and_extrinsic_xyz_degrees([0.0; 3], [90.0, 0.0, 0.0]);
+    let y = ArrayPose::from_translation_and_extrinsic_xyz_degrees([0.0; 3], [0.0, 90.0, 0.0]);
+    let z = ArrayPose::from_translation_and_extrinsic_xyz_degrees([0.0; 3], [0.0, 0.0, 90.0]);
+    let px = position_after_pose(x, [0.0, 1.0, 0.0]);
+    let py = position_after_pose(y, [0.0, 0.0, 1.0]);
+    let pz = position_after_pose(z, [1.0, 0.0, 0.0]);
+    assert_abs_diff_eq!(px[2], 1.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(py[0], 1.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(pz[1], 1.0, epsilon = 1e-12);
 
-    let different_radius = LEDSphere::new(vec![(theta, 0.0)], 250e-3)
-        .k_vectors(&optics())
-        .unwrap();
-    assert_abs_diff_eq!(different_radius[0].kx, vectors[1].kx, epsilon = 1e-9);
+    let degrees = ArrayPose::from_translation_and_extrinsic_xyz_degrees(
+        [0.1, -0.2, -0.3],
+        [10.0, 20.0, 30.0],
+    );
+    let radians = ArrayPose::from_translation_and_extrinsic_xyz_radians(
+        [0.1, -0.2, -0.3],
+        [
+            10_f64.to_radians(),
+            20_f64.to_radians(),
+            30_f64.to_radians(),
+        ],
+    );
+    assert_eq!(degrees, radians);
 }
 
 #[test]
-fn led_sphere_models_pose_and_individual_placement_errors() {
-    let nominal = LEDSphere::new(vec![(0.2, 0.0)], 100e-3);
-    let corrected = nominal.clone().angular_corrections(vec![(0.01, 0.02)]);
-    let decentered = nominal.clone().center_offset((1e-3, -2e-3, 0.5e-3));
-    let rotated = nominal.clone().orientation_deg((0.0, 0.0, 90.0));
-
-    let nominal_vector = nominal.k_vectors(&optics()).unwrap()[0];
-    let corrected_vector = corrected.k_vectors(&optics()).unwrap()[0];
-    let decentered_vector = decentered.k_vectors(&optics()).unwrap()[0];
-    let rotated_vector = rotated.k_vectors(&optics()).unwrap()[0];
-
-    assert_ne!(corrected_vector, nominal_vector);
-    assert_ne!(decentered_vector, nominal_vector);
-    assert_abs_diff_eq!(rotated_vector.kx, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(rotated_vector.ky, nominal_vector.kx, epsilon = 1e-9);
-}
-
-#[test]
-fn ideal_spherical_arm_matches_fixed_sphere() {
-    let angles = vec![(0.0, 0.0), (0.15, -0.2), (0.3, 0.7)];
-    let sphere = LEDSphere::new(angles.clone(), 90e-3);
-    let arm = SphericalLEDArm::new(angles, 90e-3);
-    let sphere_vectors = sphere.k_vectors(&optics()).unwrap();
-    let arm_vectors = arm.k_vectors(&optics()).unwrap();
-
-    for (sphere, arm) in sphere_vectors.iter().zip(arm_vectors) {
-        assert_abs_diff_eq!(sphere.kx, arm.kx, epsilon = 1e-9);
-        assert_abs_diff_eq!(sphere.ky, arm.ky, epsilon = 1e-9);
+fn array_pose_is_active_extrinsic_xyz_and_proper_orthogonal() {
+    let pose = ArrayPose::from_translation_and_extrinsic_xyz_radians(
+        [0.2, -0.1, 0.3],
+        [0.31, -0.27, 0.44],
+    );
+    let origin = position_after_pose(pose.clone(), [0.0; 3]);
+    let ex = subtract(position_after_pose(pose.clone(), [1.0, 0.0, 0.0]), origin);
+    let ey = subtract(position_after_pose(pose.clone(), [0.0, 1.0, 0.0]), origin);
+    let ez = subtract(position_after_pose(pose, [0.0, 0.0, 1.0]), origin);
+    for axis in [ex, ey, ez] {
+        assert_abs_diff_eq!(dot(axis, axis), 1.0, epsilon = 1e-12);
     }
+    assert_abs_diff_eq!(dot(ex, ey), 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(dot(ex, ez), 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(dot(ey, ez), 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(dot(cross(ex, ey), ez), 1.0, epsilon = 1e-12);
+
+    let combined =
+        ArrayPose::from_translation_and_extrinsic_xyz_degrees([0.0; 3], [90.0, 90.0, 0.0]);
+    let transformed = position_after_pose(combined, [0.0, 1.0, 0.0]);
+    assert_abs_diff_eq!(transformed[0], 1.0, epsilon = 1e-12);
 }
 
 #[test]
-fn spherical_arm_models_encoder_axis_pose_and_backlash_errors() {
-    let commands = vec![(0.2, 0.0), (0.3, 0.0), (0.2, 0.0)];
-    let nominal = SphericalLEDArm::new(commands.clone(), 100e-3);
-    let backlash = SphericalLEDArm::new(commands, 100e-3).backlash_deg(2.0, 0.0);
-    let misaligned = nominal
-        .clone()
-        .encoder_zero_deg(0.5, -0.25)
-        .encoder_scale(1.01, 0.99)
-        .elevation_axis_tilt_deg(1.0)
-        .pivot_offset((0.5e-3, -0.25e-3, 0.0))
-        .orientation_deg((0.1, -0.2, 0.3));
+fn planar_array_indexing_pitch_reference_pose_and_offsets_are_explicit() {
+    let geometry = PlanarLedArray::new(
+        (2, 3),
+        (2e-3, 5e-3),
+        (0.5, 0.25),
+        ArrayPose::from_translation([1e-3, -2e-3, -0.1]),
+    )
+    .with_position_offsets_m(vec![
+        [0.1e-3, 0.2e-3, 0.3e-3],
+        [0.0; 3],
+        [0.0; 3],
+        [0.0; 3],
+        [0.0; 3],
+        [0.0; 3],
+    ]);
+    geometry.validate().unwrap();
+    assert_eq!(geometry.source_count(), 6);
+    assert_eq!(geometry.source_index(1, 2).unwrap(), 5);
+    assert_eq!(geometry.source_row_column(4).unwrap(), (1, 1));
+    let resolved = geometry.resolve(&optics()).unwrap();
+    let positions = resolved.positions_m().unwrap();
+    assert_eq!(positions.len(), 6);
+    assert_abs_diff_eq!(positions[0][0], 0.1e-3, epsilon = 1e-15);
+    assert_abs_diff_eq!(positions[0][1], -3.05e-3, epsilon = 1e-15);
+    assert_abs_diff_eq!(positions[0][2], -99.7e-3, epsilon = 1e-15);
+    assert_abs_diff_eq!(positions[5][0], 4e-3, epsilon = 1e-15);
+    assert_abs_diff_eq!(positions[5][1], 1.75e-3, epsilon = 1e-15);
+}
 
-    let nominal_vectors = nominal.k_vectors(&optics()).unwrap();
-    let backlash_vectors = backlash.k_vectors(&optics()).unwrap();
-    let misaligned_vectors = misaligned.k_vectors(&optics()).unwrap();
+#[test]
+fn planar_array_reference_led_tilt_rotation_and_validation() {
+    let pose = ArrayPose::from_translation_and_extrinsic_xyz_degrees(
+        [0.01, -0.02, -0.1],
+        [5.0, -3.0, 90.0],
+    );
+    let geometry = PlanarLedArray::new((1, 2), (4e-3, 6e-3), (0.0, 0.0), pose);
+    let positions = geometry
+        .resolve(&optics())
+        .unwrap()
+        .positions_m()
+        .unwrap()
+        .to_vec();
+    assert_abs_diff_eq!(positions[0][0], 0.01, epsilon = 1e-15);
+    assert_abs_diff_eq!(positions[0][1], -0.02, epsilon = 1e-15);
+    assert_abs_diff_eq!(positions[0][2], -0.1, epsilon = 1e-15);
+    assert!(positions[1][1] > positions[0][1]);
+    assert_ne!(positions[1][2], positions[0][2]);
 
-    // The first point has no known approach direction; increasing/decreasing
-    // moves occupy opposite sides of the backlash dead band.
+    assert!(
+        PlanarLedArray::new((0, 1), (1.0, 1.0), (0.0, 0.0), ArrayPose::identity())
+            .validate()
+            .is_err()
+    );
+    assert!(
+        PlanarLedArray::new((1, 1), (0.0, 1.0), (0.0, 0.0), ArrayPose::identity())
+            .validate()
+            .is_err()
+    );
+    assert!(
+        PlanarLedArray::new((1, 2), (1.0, 1.0), (0.0, 0.0), ArrayPose::identity())
+            .with_position_offsets_m(vec![[0.0; 3]])
+            .validate()
+            .is_err()
+    );
+}
+
+#[test]
+fn positions_resolve_toward_sample_with_positive_z_propagation() {
+    let resolved = SourcePositionList::new(vec![[0.01, -0.02, -0.1]])
+        .resolve(&optics())
+        .unwrap();
+    let direction = resolved.directions()[0];
+    assert!(direction[0] < 0.0);
+    assert!(direction[1] > 0.0);
+    assert!(direction[2] > 0.0);
+    let norm = dot(direction, direction);
+    assert_abs_diff_eq!(norm, 1.0, epsilon = 1e-12);
+    assert!(
+        SourcePositionList::new(vec![[0.0; 3]])
+            .resolve(&optics())
+            .is_err()
+    );
+}
+
+#[test]
+fn direction_constructors_and_accessors_round_trip() {
+    let cosines = vec![[0.1, -0.2], [0.0, 0.0]];
+    let directions = DirectionList::from_direction_cosines(cosines.clone()).unwrap();
+    for (actual, expected) in directions.direction_cosines().iter().zip(cosines) {
+        assert_abs_diff_eq!(actual[0], expected[0], epsilon = 1e-12);
+        assert_abs_diff_eq!(actual[1], expected[1], epsilon = 1e-12);
+    }
+    let component = DirectionList::from_component_angles_degrees(vec![[10.0, -5.0]]).unwrap();
+    let component_round_trip = component.component_angles_deg()[0];
+    assert_abs_diff_eq!(component_round_trip[0], 10.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(component_round_trip[1], -5.0, epsilon = 1e-12);
+
+    let polar = DirectionList::from_polar_angles_degrees(vec![[30.0, 120.0]]).unwrap();
+    let polar_round_trip = polar.polar_angles_deg()[0];
+    assert_abs_diff_eq!(polar_round_trip[0], 30.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(polar_round_trip[1], 120.0, epsilon = 1e-12);
+
+    let normalized = DirectionList::from_vectors(vec![[0.0, 0.0, 2.0]], true).unwrap();
+    assert_eq!(normalized.unit_vectors(), &[[0.0, 0.0, 1.0]]);
+    assert!(DirectionList::from_unit_vectors(vec![[0.0, 0.0, 2.0]]).is_err());
+    assert!(DirectionList::from_direction_cosines(vec![[0.8, 0.8]]).is_err());
+    assert!(DirectionList::from_unit_vectors(vec![[0.0, 0.0, -1.0]]).is_err());
+}
+
+#[test]
+fn direction_and_kvector_resolution_use_vacuum_wavelength_and_illumination_index() {
+    let direction = DirectionList::from_direction_cosines(vec![[0.25, -0.5]]).unwrap();
+    let air = direction.resolve(&optics()).unwrap();
+    let mut glass_optics = optics();
+    glass_optics.illumination_refractive_index = 1.5;
+    let glass = direction.resolve(&glass_optics).unwrap();
     assert_abs_diff_eq!(
-        backlash_vectors[0].kx,
-        nominal_vectors[0].kx,
+        glass.k_vectors()[0].kx,
+        1.5 * air.k_vectors()[0].kx,
         epsilon = 1e-9
     );
-    assert!(backlash_vectors[1].kx > nominal_vectors[1].kx);
-    assert!(backlash_vectors[2].kx < nominal_vectors[2].kx);
-    assert_ne!(misaligned_vectors, nominal_vectors);
-}
-
-#[test]
-fn spherical_geometries_validate_angles_and_error_parameters() {
-    assert!(LEDSphere::new(Vec::new(), 0.1).validate().is_err());
+    let direct = KVectorList::new(air.k_vectors().to_vec())
+        .resolve(&glass_optics)
+        .unwrap();
+    assert_eq!(direct.k_vectors(), air.k_vectors());
     assert!(
-        LEDSphere::new(vec![(0.1, 0.0)], 0.1)
-            .angular_corrections(vec![])
-            .validate()
-            .is_err()
-    );
-    assert!(
-        SphericalLEDArm::new(vec![(0.1, 0.0)], 0.1)
-            .encoder_scale(0.0, 1.0)
-            .validate()
-            .is_err()
-    );
-    assert!(
-        SphericalLEDArm::new(vec![(0.1, 0.0)], 0.1)
-            .backlash_deg(-1.0, 0.0)
-            .validate()
-            .is_err()
+        KVectorList::new(vec![KVector::new(
+            glass_optics.illumination_wavenumber() * 1.01,
+            0.0,
+        )])
+        .resolve(&glass_optics)
+        .is_err()
     );
 }
 
-#[test]
-fn rotating_led_arc_compiles_rotation_major_sources_and_led_gains() {
-    let theta = 0.2;
-    let arc = RotatingLEDArc::new(
-        vec![0.0, theta],
-        vec![0.0, std::f64::consts::FRAC_PI_2],
-        100e-3,
+fn frame(entries: &[(usize, f64)], gain: f64) -> IlluminationFrame {
+    IlluminationFrame::new(
+        entries
+            .iter()
+            .map(|&(source, weight)| SourceContribution::new(source, weight))
+            .collect(),
+        gain,
     )
-    .led_intensity_weights(vec![0.5, 2.0]);
-    let vectors = arc.k_vectors(&optics()).unwrap();
-    let k_transverse = optics().medium_wavenumber() * theta.sin();
-
-    assert_eq!(vectors.len(), 4);
-    assert_abs_diff_eq!(vectors[0].kx, 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(vectors[0].ky, 0.0, epsilon = 1e-12);
-    assert_abs_diff_eq!(vectors[1].kx, k_transverse, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[1].ky, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[2].kx, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[2].ky, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[3].kx, 0.0, epsilon = 1e-9);
-    assert_abs_diff_eq!(vectors[3].ky, k_transverse, epsilon = 1e-9);
-    assert_eq!(arc.frame_gains().unwrap(), Some(vec![0.5, 2.0, 0.5, 2.0]));
 }
 
 #[test]
-fn rotating_led_arc_models_axis_encoder_backlash_and_led_placement_errors() {
-    let nominal = RotatingLEDArc::new(vec![0.2], vec![0.0, 0.3, 0.0], 100e-3);
-    let backlash = nominal.clone().rotation_backlash_deg(2.0);
-    let perturbed = nominal
-        .clone()
-        .axis_origin_offset((0.5e-3, -0.2e-3, 0.1e-3))
-        .axis_tilt_deg(0.2, -0.3)
-        .rotation_encoder_zero_deg(0.4)
-        .rotation_encoder_scale(1.01)
-        .led_angular_corrections(vec![(0.002, -0.001)])
-        .led_radial_offsets(vec![0.3e-3]);
+fn acquisition_plan_supports_subsets_repetition_and_canonical_sparse_frames() {
+    let all = AcquisitionPlan::all_sources(3).unwrap();
+    assert_eq!(
+        all.dense_weights(3).unwrap(),
+        vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ]
+    );
+    let sequential = AcquisitionPlan::sequential(vec![2, 0, 2]).unwrap();
+    assert_eq!(sequential.frame_count(), 3);
+    assert_eq!(sequential.frames()[0].contributions[0].source, 2);
 
-    let nominal_vectors = nominal.k_vectors(&optics()).unwrap();
-    let backlash_vectors = backlash.k_vectors(&optics()).unwrap();
-    let perturbed_vectors = perturbed.k_vectors(&optics()).unwrap();
-
-    assert_eq!(backlash_vectors[0], nominal_vectors[0]);
-    assert!(backlash_vectors[1].ky > nominal_vectors[1].ky);
-    assert!(backlash_vectors[2].ky < nominal_vectors[2].ky);
-    assert_ne!(perturbed_vectors, nominal_vectors);
+    let sparse = AcquisitionPlan::from_sparse(vec![frame(
+        &[(2, 0.0), (1, 0.25), (0, 0.5), (1, 0.75)],
+        2.0,
+    )])
+    .unwrap();
+    assert_eq!(
+        sparse.frames()[0].contributions,
+        vec![
+            SourceContribution::new(0, 0.5),
+            SourceContribution::new(1, 1.0),
+        ]
+    );
+    assert_eq!(sparse.dense_weights(3).unwrap(), vec![vec![0.5, 1.0, 0.0]]);
+    assert!(sparse.dense_weights(1).is_err());
 }
 
 #[test]
-fn rotating_led_arc_rejects_invalid_shape_and_calibration_parameters() {
-    assert!(
-        RotatingLEDArc::new(vec![], vec![0.0], 0.1)
-            .validate()
-            .is_err()
-    );
-    assert!(
-        RotatingLEDArc::new(vec![0.1], vec![], 0.1)
-            .validate()
-            .is_err()
-    );
-    assert!(
-        RotatingLEDArc::new(vec![0.1], vec![0.0], 0.1)
-            .led_radial_offsets(vec![-0.1])
-            .validate()
-            .is_err()
-    );
-    assert!(
-        RotatingLEDArc::new(vec![0.1], vec![0.0], 0.1)
-            .rotation_encoder_scale(0.0)
-            .validate()
-            .is_err()
-    );
+fn acquisition_dense_and_sparse_validation_are_equivalent() {
+    let dense = AcquisitionPlan::from_dense(vec![vec![0.5, 0.5], vec![1.0, 0.0]]).unwrap();
+    let sparse = AcquisitionPlan::from_sparse(vec![
+        frame(&[(0, 0.5), (1, 0.5)], 1.0),
+        frame(&[(0, 1.0)], 1.0),
+    ])
+    .unwrap();
+    assert_eq!(dense, sparse);
+    assert!(AcquisitionPlan::sequential(Vec::new()).is_err());
+    assert!(AcquisitionPlan::from_sparse(vec![frame(&[(0, 0.0)], 1.0)]).is_err());
+    assert!(AcquisitionPlan::from_sparse(vec![frame(&[(0, -1.0)], 1.0)]).is_err());
+    assert!(AcquisitionPlan::from_sparse(vec![frame(&[(0, 1.0)], f64::NAN)]).is_err());
+    assert!(AcquisitionPlan::from_dense(vec![vec![1.0], vec![1.0, 2.0]]).is_err());
 }
 
 #[test]
-fn experiment_compiles_to_valid_model() {
-    let array = LEDArray::new()
-        .grid_shape((3, 3))
-        .pitch(4e-3)
-        .distance(90e-3)
-        .center((1.0, 1.0));
-    let model = ImagePlaneModel::from_experiment(
+fn complete_resolution_exposes_counts_weights_powers_and_gains() {
+    let geometry = KVectorList::new(vec![KVector::new(0.0, 0.0), KVector::new(1e4, -2e4)]);
+    let illumination = Illumination::new(
+        geometry.into(),
+        SourceCalibration::new(Some(vec![0.5, 2.0])),
+        AcquisitionPlan::from_sparse(vec![
+            frame(&[(1, 1.0)], 0.8),
+            frame(&[(0, 0.25), (1, 0.75)], 1.2),
+        ])
+        .unwrap(),
+    );
+    let resolved = illumination.resolve(&optics()).unwrap();
+    assert_eq!(resolved.source_count(), 2);
+    assert_eq!(resolved.frame_count(), 2);
+    assert!(resolved.is_multiplexed());
+    assert_eq!(resolved.source_power(), &[0.5, 2.0]);
+    assert_eq!(resolved.frame_gains(), vec![0.8, 1.2]);
+    assert_eq!(
+        resolved.dense_weights(),
+        vec![vec![0.0, 1.0], vec![0.25, 0.75]]
+    );
+    assert!(resolved.positions_m().is_none());
+
+    let model = ImagePlaneModel::compile(
         &optics(),
-        &array,
-        (16, 16),
-        ReconstructionShape::Exact((32, 32)),
+        &resolved,
+        (8, 8),
+        ReconstructionShape::Exact((16, 16)),
     )
     .unwrap();
-    assert_eq!(model.frame_count(), 9);
-    assert_eq!(model.pupil().shape(), (16, 16));
-    assert!(model.pupil().support().iter().any(|&inside| inside != 0));
-    assert!(
-        model
-            .crop_indices()
-            .as_slice()
-            .iter()
-            .all(|crop| crop.validate_inside((32, 32)).is_ok())
+    assert_eq!(model.frame_count(), 2);
+    assert_eq!(model.frame_gains(), Some(&[0.8, 1.2][..]));
+    assert_eq!(
+        model.multiplexing_matrix().unwrap(),
+        &vec![vec![(1, 2.0)], vec![(0, 0.125), (1, 1.5)]]
     );
 }
 
 #[test]
-fn reconstruction_shape_suggestion_resolves_all_policies() {
+fn complete_resolution_rejects_invalid_indices_and_power() {
+    let geometry = KVectorList::new(vec![KVector::new(0.0, 0.0)]);
+    let bad_index = Illumination::new(
+        geometry.clone().into(),
+        SourceCalibration::unity(),
+        AcquisitionPlan::sequential(vec![1]).unwrap(),
+    );
+    assert!(bad_index.resolve(&optics()).is_err());
+    let bad_power = Illumination::new(
+        geometry.into(),
+        SourceCalibration::new(Some(vec![-1.0])),
+        AcquisitionPlan::all_sources(1).unwrap(),
+    );
+    assert!(bad_power.resolve(&optics()).is_err());
+}
+
+#[test]
+fn model_compilation_preserves_fourier_shift_sign_and_fractional_offsets() {
     let optics = optics();
     let image_shape = (8, 8);
-    let low_res_pixel_size = optics.object_pixel_size();
-    let dk = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
-    let illumination = vec![KVector::new(2.25 * dk, -1.4 * dk)];
-
-    let minimum = ImagePlaneModel::suggest_reconstruction_shape(
-        &optics,
-        &illumination,
-        image_shape,
-        ReconstructionShape::Minimum,
-    )
-    .unwrap();
-    let smooth = ImagePlaneModel::suggest_reconstruction_shape(
-        &optics,
-        &illumination,
-        image_shape,
-        ReconstructionShape::Smooth,
-    )
-    .unwrap();
-    let power_of_two = ImagePlaneModel::suggest_reconstruction_shape(
-        &optics,
-        &illumination,
-        image_shape,
-        ReconstructionShape::PowerOfTwo,
-    )
-    .unwrap();
-
-    assert_eq!(minimum, (13, 13));
-    assert_eq!(smooth, (14, 14));
-    assert_eq!(power_of_two, (16, 16));
-    assert!(
-        ImagePlaneModel::from_experiment(
-            &optics,
-            &illumination,
-            image_shape,
-            ReconstructionShape::Exact((12, 12)),
-        )
-        .is_err()
-    );
-    for shape in [minimum, smooth, power_of_two] {
-        assert_eq!(
-            ImagePlaneModel::from_experiment(
-                &optics,
-                &illumination,
-                image_shape,
-                ReconstructionShape::Exact(shape),
-            )
-            .unwrap()
-            .reconstruction_shape(),
-            shape
-        );
-    }
-}
-
-#[test]
-fn automatic_shapes_preserve_rectangular_aspect_ratio() {
-    let optics = optics();
-    let image_shape = (8, 12);
-    let low_res_pixel_size = optics.object_pixel_size();
-    let dkx = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
-    let dky = std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size);
-    let illumination = vec![KVector::new(2.25 * dkx, -1.4 * dky)];
-
-    let minimum = ImagePlaneModel::suggest_reconstruction_shape(
-        &optics,
-        &illumination,
-        image_shape,
-        ReconstructionShape::Minimum,
-    )
-    .unwrap();
-    let smooth = ImagePlaneModel::suggest_reconstruction_shape(
-        &optics,
-        &illumination,
-        image_shape,
-        ReconstructionShape::Smooth,
-    )
-    .unwrap();
-    let power_of_two = ImagePlaneModel::suggest_reconstruction_shape(
-        &optics,
-        &illumination,
-        image_shape,
-        ReconstructionShape::PowerOfTwo,
-    )
-    .unwrap();
-
-    assert_eq!(minimum, (12, 18));
-    assert_eq!(smooth, (12, 18));
-    assert_eq!(power_of_two, (16, 24));
-    assert_eq!(minimum.0 * image_shape.1, minimum.1 * image_shape.0);
-    assert_eq!(
-        power_of_two.0 * image_shape.1,
-        power_of_two.1 * image_shape.0
-    );
-}
-
-#[test]
-fn exact_reconstruction_shape_is_validated_by_the_suggestion_api() {
-    let optics = optics();
-    let illumination = vec![KVector::default()];
-    assert_eq!(
-        ImagePlaneModel::suggest_reconstruction_shape(
-            &optics,
-            &illumination,
-            (8, 12),
-            ReconstructionShape::Exact((16, 24)),
-        )
-        .unwrap(),
-        (16, 24)
-    );
-    assert!(
-        ImagePlaneModel::suggest_reconstruction_shape(
-            &optics,
-            &illumination,
-            (8, 12),
-            ReconstructionShape::Exact((16, 23)),
-        )
-        .is_err()
-    );
-    assert!(
-        ImagePlaneModel::suggest_reconstruction_shape(
-            &optics,
-            &illumination,
-            (0, 12),
-            ReconstructionShape::Minimum,
-        )
-        .is_err()
-    );
-    assert!(
-        ImagePlaneModel::suggest_reconstruction_shape(
-            &optics,
-            &Vec::<KVector>::new(),
-            (8, 8),
-            ReconstructionShape::Minimum,
-        )
-        .is_err()
-    );
-    assert!(
-        ImagePlaneModel::suggest_reconstruction_shape(
-            &optics,
-            &illumination,
-            (8, 8),
-            ReconstructionShape::Exact((usize::MAX, usize::MAX)),
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn minimum_suggestion_matches_compilation_across_grid_parities() {
-    for image_shape in [(7, 7), (8, 8), (8, 12), (9, 15)] {
-        let optics = optics();
-        let low_res_pixel_size = optics.object_pixel_size();
-        let dkx = std::f64::consts::TAU / (image_shape.1 as f64 * low_res_pixel_size);
-        let dky = std::f64::consts::TAU / (image_shape.0 as f64 * low_res_pixel_size);
-        let illumination = vec![
-            KVector::new(-2.5 * dkx, 1.0 * dky),
-            KVector::new(1.2 * dkx, -1.75 * dky),
-            KVector::new(0.0, 0.0),
-        ];
-        let suggested = ImagePlaneModel::suggest_reconstruction_shape(
-            &optics,
-            &illumination,
-            image_shape,
-            ReconstructionShape::Minimum,
-        )
-        .unwrap();
-        ImagePlaneModel::from_experiment(
-            &optics,
-            &illumination,
-            image_shape,
-            ReconstructionShape::Exact(suggested),
-        )
-        .unwrap();
-
-        let divisor = greatest_common_divisor(image_shape.0, image_shape.1);
-        let aspect = (image_shape.0 / divisor, image_shape.1 / divisor);
-        let multiplier = suggested.0 / aspect.0;
-        if multiplier > divisor {
-            let previous = (aspect.0 * (multiplier - 1), aspect.1 * (multiplier - 1));
-            assert!(
-                ImagePlaneModel::from_experiment(
-                    &optics,
-                    &illumination,
-                    image_shape,
-                    ReconstructionShape::Exact(previous),
-                )
-                .is_err()
-            );
-        }
-    }
-}
-
-fn greatest_common_divisor(mut left: usize, mut right: usize) -> usize {
-    while right != 0 {
-        (left, right) = (right, left % right);
-    }
-    left
-}
-
-#[test]
-fn pupil_aberration_and_apodization_compile_into_the_pupil() {
-    let ideal_optics = optics();
-    let mut aberrated_optics = ideal_optics.clone();
-    aberrated_optics.defocus_distance = Some(-12e-6);
-    aberrated_optics.pupil_aberration = Some(PupilAberration {
-        astigmatism: 0.2,
-        coma: 0.1,
-        spherical: 0.05,
-        edge_apodization: 0.4,
-    });
-    let illumination = LEDArray::new();
-    let ideal = ImagePlaneModel::from_experiment(
-        &ideal_optics,
-        &illumination,
-        (16, 16),
-        ReconstructionShape::Exact((32, 32)),
-    )
-    .unwrap();
-    let aberrated = ImagePlaneModel::from_experiment(
-        &aberrated_optics,
-        &illumination,
-        (16, 16),
-        ReconstructionShape::Exact((32, 32)),
-    )
-    .unwrap();
-
-    assert_eq!(ideal.pupil().support(), aberrated.pupil().support());
-    assert_ne!(ideal.pupil().values(), aberrated.pupil().values());
-    assert!(
-        ideal
-            .pupil()
-            .values()
-            .iter()
-            .zip(aberrated.pupil().values().iter())
-            .zip(ideal.pupil().support().iter())
-            .all(|((&ideal, &aberrated), &inside)| inside == 0 || aberrated.norm() <= ideal.norm())
-    );
-    assert!(
-        aberrated
-            .pupil()
-            .values()
-            .iter()
-            .zip(aberrated.pupil().support().iter())
-            .any(|(&value, &inside)| inside != 0 && value.norm() < 0.99)
-    );
-}
-
-#[test]
-fn experiment_compilation_preserves_fractional_fourier_shifts() {
-    let optics = optics();
-    let low_res_pixel_size = optics.object_pixel_size();
-    let dk = std::f64::consts::TAU / (16.0 * low_res_pixel_size);
+    let dk = std::f64::consts::TAU / (image_shape.1 as f64 * optics.object_pixel_size());
+    let illumination =
+        Illumination::from_geometry(KVectorList::new(vec![KVector::new(1.25 * dk, -0.5 * dk)]))
+            .unwrap();
     let model = ImagePlaneModel::from_experiment(
         &optics,
-        &vec![KVector::new(0.25 * dk, -0.4 * dk)],
-        (16, 16),
-        ReconstructionShape::Exact((32, 32)),
+        &illumination,
+        image_shape,
+        ReconstructionShape::Exact((16, 16)),
     )
     .unwrap();
-    let offset = model.source_offset(0).unwrap();
-    assert_abs_diff_eq!(offset.row, -0.4, epsilon = 1e-12);
+    let crop = model.crop_indices().as_slice()[0];
+    let central_start = (16 - 8) / 2;
+    assert!(crop.start_col > central_start);
+    assert!(crop.start_row < central_start);
+    let offset = model.subpixel_offsets().unwrap()[0];
     assert_abs_diff_eq!(offset.column, 0.25, epsilon = 1e-12);
+    assert_abs_diff_eq!(offset.row, 0.5, epsilon = 1e-12);
 }
 
 #[test]
-fn invalid_crop_is_rejected() {
-    let sampling = Sampling::new(1.0, 0.5, 1.0, 1.0).unwrap();
-    let pupil = Pupil::new(
-        Array2::from_elem((4, 4), Complex64::new(1.0, 0.0)),
-        Array2::from_elem((4, 4), 1_u8),
-    )
-    .unwrap();
-    let result = ImagePlaneModel::new(
-        vec![KVector::default()],
-        pupil,
-        CropIndices::new(vec![FourierCrop::new(6, 6, 4, 4)]),
-        sampling,
-        (4, 4),
-        (8, 8),
-    );
-    assert!(result.is_err());
-}
-
-#[test]
-fn pupil_construction_is_zero_copy_and_validates_layout_shape_and_values() {
-    let values = Array2::from_elem((2, 3), Complex64::new(1.0, 0.0));
-    let values_pointer = values.as_ptr();
-    let pupil = Pupil::new(values, Array2::from_elem((2, 3), 1_u8)).unwrap();
-    assert_eq!(pupil.values().as_ptr(), values_pointer);
-
-    let fortran_values =
-        Array2::from_shape_vec((2, 3).f(), vec![Complex64::new(1.0, 0.0); 6]).unwrap();
-    assert!(Pupil::new(fortran_values, Array2::from_elem((2, 3), 1_u8)).is_err());
-    assert!(
-        Pupil::new(
-            Array2::from_elem((2, 3), Complex64::new(1.0, 0.0)),
-            Array2::from_elem((3, 2), 1_u8),
+fn new_illumination_schema_round_trips_without_old_variants() {
+    let illumination = Illumination::new(
+        PlanarLedArray::new(
+            (1, 2),
+            (4e-3, 5e-3),
+            (0.5, 0.0),
+            ArrayPose::from_translation([0.0, 0.0, -0.09]),
         )
-        .is_err()
+        .into(),
+        SourceCalibration::new(Some(vec![0.8, 1.2])),
+        AcquisitionPlan::sequential(vec![1, 0, 1]).unwrap(),
     );
-    assert!(
-        Pupil::new(
-            Array2::from_elem((2, 3), Complex64::new(f64::NAN, 0.0)),
-            Array2::from_elem((2, 3), 1_u8),
-        )
-        .is_err()
-    );
-    assert!(
-        Pupil::new(
-            Array2::from_elem((2, 3), Complex64::new(1.0, 0.0)),
-            Array2::from_elem((2, 3), 2_u8),
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn non_finite_model_parameters_are_rejected() {
-    let mut model = ImagePlaneModel::from_experiment(
-        &optics(),
-        &LEDArray::new(),
-        (8, 8),
-        ReconstructionShape::Exact((16, 16)),
-    )
-    .unwrap();
-    assert!(
-        model
-            .clone()
-            .with_frame_gains(Some(vec![f64::NAN]))
-            .is_err()
-    );
-
-    model.pupil_mut().values_mut()[(0, 0)] = Complex64::new(f64::INFINITY, 0.0);
-    assert!(model.validate().is_err());
-
-    let model = ImagePlaneModel::from_experiment(
-        &optics(),
-        &vec![KVector::default()],
-        (8, 8),
-        ReconstructionShape::Exact((16, 16)),
-    )
-    .unwrap();
-    assert!(
-        model
-            .clone()
-            .with_subpixel_offsets(vec![FourierOffset::new(f64::NAN, 0.0)])
-            .is_err()
-    );
-    assert!(model.with_subpixel_offsets(Vec::new()).is_err());
-
-    assert!(
-        ImagePlaneModel::from_experiment(
-            &optics(),
-            &vec![KVector::new(f64::MAX, 0.0)],
-            (8, 8),
-            ReconstructionShape::Exact((16, 16)),
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn image_plane_model_deserialization_validates_schema_and_relationships() {
-    let model = ImagePlaneModel::from_experiment(
-        &optics(),
-        &LEDArray::new(),
-        (8, 8),
-        ReconstructionShape::Exact((16, 16)),
-    )
-    .unwrap();
-    let serialized = serde_json::to_value(&model).unwrap();
-
-    let round_trip: ImagePlaneModel = serde_json::from_value(serialized.clone()).unwrap();
-    assert_eq!(serde_json::to_value(round_trip).unwrap(), serialized);
-
-    let mut unknown_field = serialized.clone();
-    unknown_field["unexpected"] = serde_json::json!(true);
-    assert!(serde_json::from_value::<ImagePlaneModel>(unknown_field).is_err());
-
-    let mut source_crop_mismatch = serialized.clone();
-    source_crop_mismatch["crop_indices"]["crops"] = serde_json::json!([]);
-    assert!(serde_json::from_value::<ImagePlaneModel>(source_crop_mismatch).is_err());
-
-    let mut offset_mismatch = serialized.clone();
-    offset_mismatch["subpixel_offsets"] = serde_json::json!([]);
-    assert!(serde_json::from_value::<ImagePlaneModel>(offset_mismatch).is_err());
-
-    let mut frame_gain_mismatch = serialized.clone();
-    frame_gain_mismatch["frame_gains"] = serde_json::json!([1.0, 1.0]);
-    assert!(serde_json::from_value::<ImagePlaneModel>(frame_gain_mismatch).is_err());
-
-    let mut background_mismatch = serialized.clone();
-    background_mismatch["background"] = serde_json::json!([0.0]);
-    assert!(serde_json::from_value::<ImagePlaneModel>(background_mismatch).is_err());
-
-    let mut invalid_multiplexing = serialized;
-    invalid_multiplexing["multiplexing_matrix"] = serde_json::json!([[[1, 1.0]]]);
-    assert!(serde_json::from_value::<ImagePlaneModel>(invalid_multiplexing).is_err());
-}
-
-#[test]
-fn led_intensity_weights_compile_in_acquisition_order() {
-    let array = LEDArray::new()
-        .grid_shape((1, 3))
-        .center((1.0, 0.0))
-        .illumination_order(vec![2, 0, 1])
-        .intensity_weights(vec![0.5, 1.0, 2.0]);
-    let model = ImagePlaneModel::from_experiment(
-        &optics(),
-        &array,
-        (16, 16),
-        ReconstructionShape::Exact((32, 32)),
-    )
-    .unwrap();
-    assert_eq!(model.frame_gains(), Some(&[2.0, 0.5, 1.0][..]));
-}
-
-#[test]
-fn coded_illumination_compiles_sources_and_measured_frames_separately() {
-    let coded = CodedIllumination {
-        source_k_vectors: vec![
-            KVector::new(0.0, 0.0),
-            KVector::new(1.0e5, 0.0),
-            KVector::new(0.0, 1.0e5),
-        ],
-        frame_weights: vec![vec![(0, 0.5), (1, 0.5)], vec![(2, 1.0)]],
-    };
-    let model = ImagePlaneModel::from_experiment(
-        &optics(),
-        &coded,
-        (16, 16),
-        ReconstructionShape::Exact((32, 32)),
-    )
-    .unwrap();
-    assert_eq!(model.source_count(), 3);
-    assert_eq!(model.frame_count(), 2);
-    assert_eq!(model.crop_indices().len(), 3);
-    assert!(model.is_multiplexed());
-}
-
-#[test]
-fn experiment_validation_rejects_non_finite_and_non_propagating_inputs() {
-    let mut invalid_optics = optics();
-    invalid_optics.pupil_aberration = Some(PupilAberration {
-        astigmatism: f64::NAN,
-        ..PupilAberration::default()
-    });
-    assert!(invalid_optics.validate().is_err());
-    assert!(
-        ImagePlaneModel::from_experiment(
-            &invalid_optics,
-            &LEDArray::new(),
-            (8, 8),
-            ReconstructionShape::Exact((16, 16)),
-        )
-        .is_err()
-    );
-
-    let mut invalid_optics = optics();
-    invalid_optics.pupil_aberration = Some(PupilAberration {
-        edge_apodization: -0.1,
-        ..PupilAberration::default()
-    });
-    assert!(invalid_optics.validate().is_err());
-
-    let mut invalid_optics = optics();
-    invalid_optics.defocus_distance = Some(f64::NAN);
-    assert!(invalid_optics.validate().is_err());
-
-    let optics = optics();
-    let non_propagating_angles = AngleList::new(vec![(
-        std::f64::consts::FRAC_PI_3,
-        std::f64::consts::FRAC_PI_3,
-    )]);
-    assert!(non_propagating_angles.k_vectors(&optics).is_err());
-    assert!(
-        vec![KVector::new(optics.medium_wavenumber() * 1.01, 0.0)]
-            .k_vectors(&optics)
-            .is_err()
-    );
-    assert!(Vec::<KVector>::new().k_vectors(&optics).is_err());
-}
-
-#[test]
-fn coded_illumination_rejects_invalid_and_duplicate_sources() {
-    let coded = CodedIllumination {
-        source_k_vectors: vec![KVector::default()],
-        frame_weights: vec![vec![(0, 0.5), (0, 0.5)]],
-    };
-    assert!(coded.validate(&optics()).is_err());
-    assert!(coded.multiplexing_matrix().is_err());
-
-    let model = ImagePlaneModel::from_experiment(
-        &optics(),
-        &vec![KVector::default()],
-        (8, 8),
-        ReconstructionShape::Exact((16, 16)),
-    )
-    .unwrap();
-    assert!(
-        model
-            .with_multiplexing(vec![vec![(0, 0.5), (0, 0.5)]])
-            .is_err()
-    );
+    let json = serde_json::to_string_pretty(&illumination).unwrap();
+    assert!(json.contains("planar_led_array"));
+    assert!(json.contains("pitch_m"));
+    assert!(json.contains("active_extrinsic_xyz"));
+    assert!(json.contains("relative_power"));
+    assert!(json.contains("contributions"));
+    assert!(!json.contains("wavelength_override"));
+    assert!(!json.contains("illumination_order"));
+    let restored: Illumination = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, illumination);
 }

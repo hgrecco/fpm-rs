@@ -59,7 +59,7 @@ depend on symbolic links.
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "measurement_manifest": "measurements.json",
   "configuration": "configuration.json",
   "ground_truth_object": "ground-truth.json",
@@ -236,7 +236,7 @@ Every top-level field is required, including fields whose value is `null`:
 
 | Field | Type and rules |
 | --- | --- |
-| `format_version` | Unsigned integer, exactly `1`. |
+| `format_version` | Unsigned integer, exactly `2`. |
 | `true_experiment` | An experiment object. For measured data, this often equals `reconstruction_experiment`. |
 | `reconstruction_experiment` | An experiment object used to derive `reconstruction_model`. |
 | `image_shape` | `[height, width]`; positive and equal to every measurement image shape. |
@@ -251,29 +251,38 @@ Every top-level field is required, including fields whose value is `null`:
 ```json
 {
   "optics": {
-    "wavelength": 5.32e-7,
+    "wavelength_vacuum_m": 5.32e-7,
     "objective_na": 0.1,
     "magnification": 4.0,
     "camera_pixel_size": 6.5e-6,
-    "medium_index": 1.0,
+    "illumination_refractive_index": 1.0,
+    "objective_medium_refractive_index": 1.0,
     "defocus_distance": null,
     "pupil_aberration": null
   },
   "illumination": {
-    "KVectors": [
-      {"kx": 0.0, "ky": 0.0}
-    ]
+    "geometry": {
+      "kind": "k_vector_list",
+      "k_vectors": [{"kx": 0.0, "ky": 0.0}]
+    },
+    "calibration": {"relative_power": null},
+    "acquisition": {
+      "frames": [{
+        "contributions": [{"source": 0, "intensity_weight": 1.0}],
+        "gain": 1.0
+      }]
+    }
   },
   "optical_background": null
 }
 ```
 
-All three fields are required. The `KVectors` object is a tagged union whose
-single key identifies the illumination form. The direct-vector profile uses
-only `KVectors`, whose value is a non-empty ordered array of `{ "kx": number,
-"ky": number }` objects.
+All three fields are required. The direct-vector profile uses `k_vector_list`
+geometry, unit source calibration, and one canonical sparse unit-weight frame
+per source.
 
-The vector magnitude must not exceed `tau * medium_index / wavelength`. The
+The vector magnitude must not exceed
+`tau * illumination_refractive_index / wavelength_vacuum_m`. The
 vector order is the model source order and, for this profile, the measurement
 frame order.
 
@@ -281,11 +290,12 @@ frame order.
 
 | Field | Type and rules |
 | --- | --- |
-| `wavelength` | Finite positive number in metres. |
-| `objective_na` | Finite positive number no greater than `medium_index`. |
+| `wavelength_vacuum_m` | Finite positive vacuum wavelength in metres. |
+| `objective_na` | Finite positive number no greater than `objective_medium_refractive_index`. |
 | `magnification` | Finite positive number. |
 | `camera_pixel_size` | Finite positive number in metres. |
-| `medium_index` | Finite positive refractive index. |
+| `illumination_refractive_index` | Finite positive source-to-sample refractive index. |
+| `objective_medium_refractive_index` | Finite positive objective-side refractive index. |
 | `defocus_distance` | `null` or finite axial displacement in metres. |
 | `pupil_aberration` | `null` or the object below. |
 
@@ -362,7 +372,7 @@ values.
 
 | Field | Rules |
 | --- | --- |
-| `k_vectors` | Exact ordered vectors derived from the experiment. For `KVectors`, copy the experiment values. |
+| `k_vectors` | Exact ordered vectors copied from the direct-vector geometry. |
 | `pupil.values` | Complex array with shape `image_shape`, calculated below. |
 | `pupil.support` | Boolean array of length `height * width`, calculated below. |
 | `crop_indices.crops` | One crop per source, in source order. Each crop has unsigned `start_row`, `start_col`, `height`, and `width`. |
@@ -370,7 +380,7 @@ values.
 | `sampling` | Numerical sampling record, calculated below. `coordinate_convention` is exactly `"CenteredPositiveK"`. |
 | `image_shape` | Exact copy of top-level `image_shape`. |
 | `reconstruction_shape` | Exact copy of top-level `reconstruction_shape`. |
-| `frame_gains` | `null` in the basic direct-vector profile. |
+| `frame_gains` | One explicit `1.0` value per frame in the basic direct-vector profile. |
 | `background` | Exact copy of the experiment's `optical_background`. |
 | `multiplexing_matrix` | `null` in the basic direct-vector profile. |
 
@@ -397,12 +407,12 @@ optics be the selected experiment's optics. Require `hr >= h`, `wr >= w`, and
    high_res_pixel_size = low_res_pixel_size / scale
    dkx                 = tau / (w * low_res_pixel_size)
    dky                 = tau / (h * low_res_pixel_size)
-   medium_wavenumber   = tau * medium_index / wavelength
-   synthetic_na        = objective_na + max(norm(k) * wavelength / tau)
+   objective_wavenumber = tau * objective_medium_refractive_index / wavelength_vacuum_m
+   synthetic_na         = objective_na + max(norm(k) * wavelength_vacuum_m / tau)
    ```
 
    `max(...)` ranges over every source vector. Store these values in
-   `sampling`, with `wavelength` equal to the optics wavelength and
+   `sampling`, with `wavelength` equal to `wavelength_vacuum_m` and
    `coordinate_convention` equal to `"CenteredPositiveK"`.
 
 2. Build the pupil with shape `[h, w]`. For every zero-based `(row, column)`,
@@ -412,7 +422,7 @@ optics be the selected experiment's optics. Require `hr >= h`, `wr >= w`, and
    ky       = (row    - floor(h / 2)) * dky
    kx       = (column - floor(w / 2)) * dkx
    radius   = sqrt(kx*kx + ky*ky)
-   cutoff   = tau * objective_na / wavelength
+   cutoff   = tau * objective_na / wavelength_vacuum_m
    support  = radius <= cutoff
    ```
 
@@ -421,7 +431,7 @@ optics be the selected experiment's optics. Require `hr >= h`, `wr >= w`, and
    If `defocus_distance` is non-null, add:
 
    ```text
-   phase -= defocus_distance * (kx*kx + ky*ky) / (2 * medium_wavenumber)
+   phase -= defocus_distance * (kx*kx + ky*ky) / (2 * objective_wavenumber)
    ```
 
    If `pupil_aberration` is non-null, set `rho = radius / cutoff` and

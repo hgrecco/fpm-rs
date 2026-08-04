@@ -5,7 +5,7 @@
 //! workflow is:
 //!
 //! 1. describe the microscope with [`experiment::Optics`] and an illumination source
-//!    such as [`experiment::LEDArray`];
+//!    such as [`experiment::PlanarLedArray`], plus calibration and acquisition;
 //! 2. compile that description into an algorithm-facing [`model::ImagePlaneModel`];
 //! 3. pair the model with resident or lazy [`measurements`] in a
 //!    [`reconstruction::ReconstructionProblem`];
@@ -26,7 +26,7 @@
 //! ```
 //! use fpm_rs::{
 //!     algorithms::{AlternatingProjection, ReconstructionAlgorithm},
-//!     experiment::{LEDArray, Optics},
+//!     experiment::{ArrayPose, Illumination, Optics, PlanarLedArray},
 //!     measurements::{FrameMetadata, MeasurementStack},
 //!     model::{ImagePlaneModel, ReconstructionShape},
 //!     reconstruction::ReconstructionProblem,
@@ -35,18 +35,21 @@
 //!
 //! # fn main() -> fpm_rs::Result<()> {
 //! let optics = Optics {
-//!     wavelength: 532e-9,
+//!     wavelength_vacuum_m: 532e-9,
 //!     objective_na: 0.1,
 //!     magnification: 4.0,
 //!     camera_pixel_size: 6.5e-6,
-//!     medium_index: 1.0,
+//!     illumination_refractive_index: 1.0,
+//!     objective_medium_refractive_index: 1.0,
 //!     defocus_distance: None,
 //!     pupil_aberration: None,
 //! };
-//! let illumination = LEDArray::new()
-//!     .grid_shape((1, 1))
-//!     .pitch(4e-3)
-//!     .distance(90e-3);
+//! let illumination = Illumination::from_geometry(PlanarLedArray::new(
+//!     (1, 1),
+//!     (4e-3, 4e-3),
+//!     (0.0, 0.0),
+//!     ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+//! ))?;
 //! let model = ImagePlaneModel::from_experiment(
 //!     &optics,
 //!     &illumination,

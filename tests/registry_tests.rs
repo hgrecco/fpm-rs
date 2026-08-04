@@ -7,7 +7,7 @@ use fpm_rs::{
         DatasetArchive, DatasetCitation, DatasetLicense, DatasetRegistry, DatasetRegistryDocument,
         DatasetRegistryEntry, DatasetSource,
     },
-    experiment::{Illumination, KVector, Optics},
+    experiment::{Illumination, KVector, KVectorList, Optics},
     measurements::{FrameSpec, MeasurementSpec},
     model::ReconstructionShape,
 };
@@ -22,16 +22,19 @@ fn write_bundle(root: &Path) -> Result<()> {
     MeasurementSpec::new(vec![FrameSpec::new("frames/frame.png")])
         .save(root.join("measurements.json"))?;
     let optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
-    let experiment =
-        ExperimentDescription::new(optics, Illumination::KVectors(vec![KVector::new(0.0, 0.0)]));
+    let experiment = ExperimentDescription::new(
+        optics,
+        Illumination::from_geometry(KVectorList::new(vec![KVector::new(0.0, 0.0)]))?,
+    );
     SimulationConfiguration::new(
         experiment.clone(),
         experiment,

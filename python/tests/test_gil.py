@@ -9,6 +9,17 @@ import numpy as np
 import fpm_rs as fpm
 
 
+def _planar(shape: tuple[int, int], reference: tuple[float, float]) -> fpm.Illumination:
+    return fpm.Illumination(
+        fpm.PlanarLEDArray(
+            shape,
+            4e-3,
+            reference,
+            fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+        )
+    )
+
+
 def _assert_python_runs_while_operation_is_active(
     operation: Callable[[], object],
 ) -> None:
@@ -59,7 +70,7 @@ def _assert_python_runs_while_operation_is_active(
 
 
 def test_simulation_releases_the_gil(optics: fpm.Optics) -> None:
-    leds = fpm.LEDArray((7, 7), 4e-3, 90e-3, (3.0, 3.0))
+    leds = _planar((7, 7), (3.0, 3.0))
     model = fpm.compile_model(optics, leds, (64, 64), (128, 128))
     _assert_python_runs_while_operation_is_active(
         lambda: fpm.simulate(model, np.ones((128, 128), dtype=np.complex128))
@@ -67,7 +78,7 @@ def test_simulation_releases_the_gil(optics: fpm.Optics) -> None:
 
 
 def test_reconstruction_releases_the_gil(optics: fpm.Optics) -> None:
-    leds = fpm.LEDArray((5, 5), 4e-3, 90e-3, (2.0, 2.0))
+    leds = _planar((5, 5), (2.0, 2.0))
     model = fpm.compile_model(optics, leds, (32, 32), (64, 64))
     simulation = fpm.simulate(model, np.ones((64, 64), dtype=np.complex128))
     problem = fpm.ReconstructionProblem(simulation.measurements, model)
@@ -79,21 +90,23 @@ def test_reconstruction_releases_the_gil(optics: fpm.Optics) -> None:
 def test_model_compilation_releases_the_gil(optics: fpm.Optics) -> None:
     # A large pupil keeps the bounded native operation observable even in an
     # optimized wheel.
-    leds = fpm.LEDArray((1, 1), 4e-3, 90e-3, (0.0, 0.0))
+    leds = _planar((1, 1), (0.0, 0.0))
     _assert_python_runs_while_operation_is_active(
         lambda: fpm.compile_model(optics, leds, (1024, 1024), (2048, 2048))
     )
 
 
 def test_reconstruction_shape_suggestion_releases_the_gil(optics: fpm.Optics) -> None:
-    illumination = fpm.KVectorList(np.zeros((250_000, 2), dtype=np.float64))
+    illumination = fpm.Illumination(
+        fpm.KVectorList(np.zeros((250_000, 2), dtype=np.float64))
+    )
     _assert_python_runs_while_operation_is_active(
         lambda: fpm.suggest_reconstruction_shape(optics, illumination, (64, 64))
     )
 
 
 def test_camera_model_compilation_releases_the_gil(optics: fpm.Optics) -> None:
-    leds = fpm.LEDArray((1, 1), 4e-3, 90e-3, (0.0, 0.0))
+    leds = _planar((1, 1), (0.0, 0.0))
     model = fpm.compile_model(optics, leds, (1024, 1024), (2048, 2048))
     camera = fpm.CameraModel(offset_counts=1.0)
     _assert_python_runs_while_operation_is_active(

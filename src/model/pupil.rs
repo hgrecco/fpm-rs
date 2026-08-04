@@ -78,8 +78,8 @@ impl Pupil {
     pub fn circular(shape: (usize, usize), sampling: &Sampling, optics: &Optics) -> Result<Self> {
         sampling.validate()?;
         optics.validate()?;
-        let cutoff = std::f64::consts::TAU * optics.objective_na / optics.wavelength;
-        let medium_k = optics.medium_wavenumber();
+        let cutoff = std::f64::consts::TAU * optics.objective_na / optics.wavelength_vacuum_m;
+        let medium_k = optics.objective_medium_wavenumber();
         let length = checked_len_2d(shape)?;
         if length == 0 {
             return Err(Error::InvalidShape(format!(

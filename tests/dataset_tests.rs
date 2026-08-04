@@ -4,12 +4,43 @@ use fpm_rs::{
     Complex64, Result,
     configuration::{ExperimentDescription, SimulationConfiguration},
     datasets::{Dataset, DatasetLoader, DatasetManifest, FrameSelector},
-    experiment::{Illumination, KVector, Optics},
+    experiment::{
+        AcquisitionPlan, Illumination, IlluminationFrame, KVector, KVectorList, Optics,
+        SourceCalibration, SourceContribution,
+    },
     measurements::{FrameSpec, MeasurementSpec, MeasurementStack},
     model::ReconstructionShape,
 };
 use ndarray::Array2;
 use tempfile::TempDir;
+
+fn direct_illumination(vectors: Vec<KVector>) -> Illumination {
+    Illumination::from_geometry(KVectorList::new(vectors)).unwrap()
+}
+
+fn calibrated_illumination(
+    vectors: Vec<KVector>,
+    gains: Vec<f64>,
+    weights: Vec<Vec<(usize, f64)>>,
+) -> Illumination {
+    let frames = weights
+        .into_iter()
+        .zip(gains)
+        .map(|(row, gain)| {
+            IlluminationFrame::new(
+                row.into_iter()
+                    .map(|(source, weight)| SourceContribution::new(source, weight))
+                    .collect(),
+                gain,
+            )
+        })
+        .collect();
+    Illumination::new(
+        KVectorList::new(vectors).into(),
+        SourceCalibration::unity(),
+        AcquisitionPlan::from_sparse(frames).unwrap(),
+    )
+}
 
 #[test]
 fn dataset_manifest_rejects_unknown_versions_fields_and_escaping_paths() -> Result<()> {
@@ -76,16 +107,16 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
     ])
     .save(derived.join("measurements.json"))?;
     let optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
-    let illumination =
-        Illumination::KVectors(vec![KVector::new(0.0, 0.0), KVector::new(1000.0, 0.0)]);
+    let illumination = direct_illumination(vec![KVector::new(0.0, 0.0), KVector::new(1000.0, 0.0)]);
     let experiment = ExperimentDescription::new(optics, illumination);
     SimulationConfiguration::new(
         experiment.clone(),
@@ -214,15 +245,16 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
 #[test]
 fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
     let optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
-    let illumination = Illumination::KVectors(vec![
+    let illumination = direct_illumination(vec![
         KVector::new(0.0, 0.0),
         KVector::new(1000.0, 0.0),
         KVector::new(0.0, 1000.0),
@@ -275,11 +307,12 @@ fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
 #[test]
 fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
     let optics = Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     };
@@ -291,11 +324,11 @@ fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
     let background: Vec<f64> = (0..3)
         .flat_map(|frame| vec![10.0 + frame as f64; 16])
         .collect();
-    let ordinary_illumination = Illumination::Calibrated {
-        k_vectors: vectors.clone(),
-        frame_gains: Some(vec![1.0, 2.0, 3.0]),
-        frame_weights: None,
-    };
+    let ordinary_illumination = calibrated_illumination(
+        vectors.clone(),
+        vec![1.0, 2.0, 3.0],
+        vec![vec![(0, 1.0)], vec![(1, 1.0)], vec![(2, 1.0)]],
+    );
     let ordinary_experiment = ExperimentDescription::new(optics.clone(), ordinary_illumination)
         .with_optical_background(vec![9.0; 16]);
     let ordinary_configuration = SimulationConfiguration::new(
@@ -322,11 +355,8 @@ fn subsets_preserve_frame_gains_backgrounds_and_multiplexing() -> Result<()> {
         vec![(0, 0.25), (1, 0.75)],
         vec![(1, 0.4), (2, 0.6)],
     ];
-    let multiplexed_illumination = Illumination::Calibrated {
-        k_vectors: vectors,
-        frame_gains: Some(vec![1.1, 1.2, 1.3]),
-        frame_weights: Some(multiplexing.clone()),
-    };
+    let multiplexed_illumination =
+        calibrated_illumination(vectors, vec![1.1, 1.2, 1.3], multiplexing.clone());
     let multiplexed_experiment = ExperimentDescription::new(optics, multiplexed_illumination)
         .with_optical_background(background);
     let multiplexed_configuration = SimulationConfiguration::new(

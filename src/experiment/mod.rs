@@ -1,11 +1,11 @@
 //! Physical optics and illumination descriptions for an image-plane experiment.
 //!
-//! Configure [`crate::experiment::Optics`] and a source geometry such as
-//! [`crate::experiment::LEDArray`], [`crate::experiment::LEDSphere`], or
-//! [`crate::experiment::AngleList`]. Implementations of
-//! [`crate::experiment::IlluminationSource`] compile physical coordinates into transverse
-//! [`crate::experiment::KVector`] values consumed by
-//! [`crate::model::ImagePlaneModel`].
+//! [`crate::experiment::SourceGeometry`] describes physical sources,
+//! [`crate::experiment::SourceCalibration`] stores stable source power, and
+//! [`crate::experiment::AcquisitionPlan`] describes sparse source-to-frame
+//! acquisition. A complete [`crate::experiment::Illumination`] resolves atomically with
+//! [`crate::experiment::Optics`]
+//! before compilation into the algorithm-facing [`crate::model::ImagePlaneModel`].
 
 mod illumination;
 mod led_array;
@@ -13,9 +13,10 @@ mod optics;
 mod spherical;
 
 pub use illumination::{
-    AngleList, CodedIllumination, Illumination, IlluminationSource, KVector, MultiplexingMatrix,
-    SourceWeight,
+    AcquisitionPlan, DirectionList, Illumination, IlluminationFrame, KVector, KVectorList,
+    MultiplexingMatrix, ResolvedFrame, ResolvedIllumination, ResolvedSources, SourceCalibration,
+    SourceContribution, SourceGeometry, SourcePositionList, SourceWeight,
 };
-pub use led_array::LEDArray;
+pub use led_array::{ArrayPose, PlanarLedArray};
 pub use optics::{Optics, PupilAberration};
-pub use spherical::{LEDSphere, RotatingLEDArc, SphericalLEDArm};
+pub use spherical::{RotatingLedArc, SphericalLedArm, SphericalLedArray};

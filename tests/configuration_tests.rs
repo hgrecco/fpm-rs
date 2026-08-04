@@ -1,8 +1,9 @@
 use fpm_rs::{
     configuration::{CONFIGURATION_FORMAT_VERSION, ExperimentDescription, SimulationConfiguration},
     experiment::{
-        AngleList, CodedIllumination, Illumination, KVector, LEDArray, LEDSphere, Optics,
-        RotatingLEDArc, SphericalLEDArm,
+        AcquisitionPlan, ArrayPose, DirectionList, Illumination, KVector, KVectorList, Optics,
+        PlanarLedArray, RotatingLedArc, SourceCalibration, SourcePositionList, SphericalLedArm,
+        SphericalLedArray,
     },
     model::ReconstructionShape,
     simulation::{CameraModel, IlluminationAcquisitionErrors},
@@ -11,11 +12,12 @@ use tempfile::tempdir;
 
 fn optics() -> Optics {
     Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.10,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     }
@@ -24,40 +26,52 @@ fn optics() -> Optics {
 fn illumination_variants() -> Vec<Illumination> {
     let vectors = vec![KVector::new(0.0, 0.0), KVector::new(1.0e4, -2.0e4)];
     vec![
-        Illumination::LEDArray(
-            LEDArray::new()
-                .grid_shape((1, 2))
-                .pitch(4e-3)
-                .distance(90e-3)
-                .center((0.5, 0.0)),
-        ),
-        Illumination::Angles(AngleList::new(vec![(0.0, 0.0), (0.01, -0.02)])),
-        Illumination::LEDSphere(
-            LEDSphere::new(vec![(0.0, 0.0), (0.1, 0.3)], 90e-3)
+        Illumination::from_geometry(PlanarLedArray::new(
+            (1, 2),
+            (4e-3, 4e-3),
+            (0.5, 0.0),
+            ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+        ))
+        .unwrap(),
+        Illumination::from_geometry(
+            DirectionList::from_component_angles_radians(vec![[0.0, 0.0], [0.01, -0.02]]).unwrap(),
+        )
+        .unwrap(),
+        Illumination::from_geometry(
+            SphericalLedArray::new(vec![(0.0, 0.0), (0.1, 0.3)], 90e-3)
                 .center_offset((0.5e-3, 0.0, 0.0))
                 .angular_corrections(vec![(0.0, 0.0), (0.001, -0.002)]),
-        ),
-        Illumination::SphericalLEDArm(
-            SphericalLEDArm::new(vec![(0.0, 0.0), (0.1, 0.3)], 90e-3)
+        )
+        .unwrap(),
+        Illumination::from_geometry(
+            SphericalLedArm::new(vec![(0.0, 0.0), (0.1, 0.3)], 90e-3)
                 .encoder_zero_deg(0.1, -0.2)
                 .backlash_deg(0.05, 0.1),
-        ),
-        Illumination::RotatingLEDArc(
-            RotatingLEDArc::new(vec![0.0, 0.1], vec![0.0, 0.3], 90e-3)
+        )
+        .unwrap(),
+        Illumination::from_geometry(
+            RotatingLedArc::new(vec![0.0, 0.1], vec![0.0, 0.3], 90e-3)
                 .axis_origin_offset((0.2e-3, 0.0, 0.0))
                 .rotation_backlash_deg(0.05)
                 .led_angular_corrections(vec![(0.0, 0.0), (0.001, -0.001)]),
+        )
+        .unwrap(),
+        Illumination::from_geometry(SourcePositionList::new(vec![
+            [0.0, 0.0, -0.09],
+            [0.001, 0.0, -0.09],
+        ]))
+        .unwrap(),
+        Illumination::from_geometry(KVectorList::new(vectors.clone())).unwrap(),
+        Illumination::new(
+            KVectorList::new(vectors.clone()).into(),
+            SourceCalibration::unity(),
+            AcquisitionPlan::from_dense(vec![vec![1.0, 0.0], vec![0.5, 0.5]]).unwrap(),
         ),
-        Illumination::KVectors(vectors.clone()),
-        Illumination::Coded(CodedIllumination {
-            source_k_vectors: vectors.clone(),
-            frame_weights: vec![vec![(0, 1.0)], vec![(0, 0.5), (1, 0.5)]],
-        }),
-        Illumination::Calibrated {
-            k_vectors: vectors,
-            frame_gains: Some(vec![0.8, 1.2]),
-            frame_weights: None,
-        },
+        Illumination::new(
+            KVectorList::new(vectors).into(),
+            SourceCalibration::new(Some(vec![0.8, 1.2])),
+            AcquisitionPlan::all_sources(2).unwrap(),
+        ),
     ]
 }
 
@@ -90,13 +104,13 @@ fn every_concrete_illumination_source_round_trips() {
 fn versioned_configuration_round_trips_models_camera_and_acquisition() {
     let true_experiment = ExperimentDescription::new(
         optics(),
-        Illumination::LEDArray(
-            LEDArray::new()
-                .grid_shape((2, 2))
-                .pitch(4e-3)
-                .distance(90e-3)
-                .center((0.5, 0.5)),
-        ),
+        Illumination::from_geometry(PlanarLedArray::new(
+            (2, 2),
+            (4e-3, 4e-3),
+            (0.5, 0.5),
+            ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+        ))
+        .unwrap(),
     )
     .with_optical_background(vec![2.0; 8 * 8]);
     let mut assumed_optics = optics();
@@ -155,11 +169,11 @@ fn automatic_configuration_shape_covers_true_and_assumed_geometry() {
     let dk = std::f64::consts::TAU / (image_shape.1 as f64 * optics.object_pixel_size());
     let true_experiment = ExperimentDescription::new(
         optics.clone(),
-        Illumination::KVectors(vec![KVector::new(2.25 * dk, 0.0)]),
+        Illumination::from_geometry(KVectorList::new(vec![KVector::new(2.25 * dk, 0.0)])).unwrap(),
     );
     let reconstruction_experiment = ExperimentDescription::new(
         optics,
-        Illumination::KVectors(vec![KVector::new(-2.25 * dk, 0.0)]),
+        Illumination::from_geometry(KVectorList::new(vec![KVector::new(-2.25 * dk, 0.0)])).unwrap(),
     );
     let configuration = SimulationConfiguration::new(
         true_experiment,
@@ -177,7 +191,7 @@ fn automatic_configuration_shape_covers_true_and_assumed_geometry() {
 fn configuration_rejects_unknown_versions_fields_and_model_drift() {
     let description = ExperimentDescription::new(
         optics(),
-        Illumination::KVectors(vec![KVector::new(0.0, 0.0)]),
+        Illumination::from_geometry(KVectorList::new(vec![KVector::new(0.0, 0.0)])).unwrap(),
     );
     let configuration = SimulationConfiguration::new(
         description.clone(),
@@ -207,11 +221,11 @@ fn configuration_rejects_unknown_versions_fields_and_model_drift() {
 
     let invalid_calibrated = ExperimentDescription::new(
         optics(),
-        Illumination::Calibrated {
-            k_vectors: vec![KVector::new(0.0, 0.0), KVector::new(1.0e4, 0.0)],
-            frame_gains: Some(vec![1.0]),
-            frame_weights: None,
-        },
+        Illumination::new(
+            KVectorList::new(vec![KVector::new(0.0, 0.0), KVector::new(1.0e4, 0.0)]).into(),
+            SourceCalibration::new(Some(vec![1.0])),
+            AcquisitionPlan::all_sources(2).unwrap(),
+        ),
     );
     assert!(
         SimulationConfiguration::new(

@@ -11,7 +11,7 @@ use fpm_rs::{
 };
 
 fn main() -> Result<()> {
-    let (assumed_optics, illumination) = support::experimental_setup();
+    let (assumed_optics, illumination) = support::experimental_setup()?;
     let true_optics = fpm_rs::experiment::Optics {
         defocus_distance: Some(-24e-6),
         pupil_aberration: Some(PupilAberration {

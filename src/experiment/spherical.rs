@@ -2,34 +2,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-use super::{IlluminationSource, KVector, Optics};
+use super::{Optics, ResolvedSources};
 
-/// Fixed LEDs mounted on a spherical surface around the sample.
+/// Fixed LEDs mounted on a spherical surface on the negative-`z` source side.
 ///
 /// Each angle is `(theta, phi)` in radians. `theta` is the polar angle from
-/// the positive optical (`z`) axis and `phi` is the azimuth from positive `x`
-/// toward positive `y`. The sphere pose is applied as `Rz * Ry * Rx`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LEDSphere {
+/// the positive propagation (`z`) axis and `phi` is the propagation azimuth
+/// from positive `x` toward positive `y`. Physical source positions are the
+/// opposite of those nominal propagation directions. The sphere pose is
+/// applied as `Rz * Ry * Rx`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SphericalLedArray {
     /// Nominal `(theta, phi)` LED positions in radians and natural source order.
+    #[serde(rename = "polar_angles_rad")]
     pub angles: Vec<(f64, f64)>,
     /// Positive nominal sphere radius in metres.
+    #[serde(rename = "radius_m")]
     pub radius: f64,
     /// Sphere-centre displacement `(x, y, z)` from the sample, in metres.
+    #[serde(rename = "center_offset_m")]
     pub center_offset: (f64, f64, f64),
     /// Rigid mount rotation `(rx, ry, rz)` in radians.
+    #[serde(rename = "rotation_rad")]
     pub orientation_radians: (f64, f64, f64),
     /// Optional per-LED `(delta_theta, delta_phi)` placement corrections.
+    #[serde(rename = "angular_corrections_rad")]
     pub angular_corrections: Option<Vec<(f64, f64)>>,
-    /// Optional vacuum wavelength in metres replacing [`Optics::wavelength`].
-    pub wavelength_override: Option<f64>,
-    /// Optional acquisition-to-natural LED permutation.
-    pub illumination_order: Option<Vec<usize>>,
-    /// Optional finite positive intensity gain per natural-order LED.
-    pub intensity_weights: Option<Vec<f64>>,
 }
 
-impl LEDSphere {
+impl SphericalLedArray {
     /// Creates a sphere from natural-order `(theta, phi)` radians and a radius in metres.
     pub fn new(angles: Vec<(f64, f64)>, radius: f64) -> Self {
         Self {
@@ -38,9 +40,6 @@ impl LEDSphere {
             center_offset: (0.0, 0.0, 0.0),
             orientation_radians: (0.0, 0.0, 0.0),
             angular_corrections: None,
-            wavelength_override: None,
-            illumination_order: None,
-            intensity_weights: None,
         }
     }
 
@@ -66,26 +65,12 @@ impl LEDSphere {
         self
     }
 
-    /// Overrides the positive vacuum illumination wavelength in metres.
-    pub fn wavelength_override(mut self, wavelength: f64) -> Self {
-        self.wavelength_override = Some(wavelength);
-        self
+    /// Returns the number of fixed physical sources.
+    pub fn source_count(&self) -> usize {
+        self.angles.len()
     }
 
-    /// Sets the acquisition-to-natural source permutation.
-    pub fn illumination_order(mut self, order: Vec<usize>) -> Self {
-        self.illumination_order = Some(order);
-        self
-    }
-
-    /// Sets one finite positive gain per natural-order LED.
-    pub fn intensity_weights(mut self, weights: Vec<f64>) -> Self {
-        self.intensity_weights = Some(weights);
-        self
-    }
-
-    /// Validates angles, positive radius and wavelength, finite pose/corrections,
-    /// source permutation, and intensity-weight length and range.
+    /// Validates angles, positive radius, finite pose, and placement corrections.
     pub fn validate(&self) -> Result<()> {
         validate_angle_list(&self.angles, "LED sphere angles")?;
         validate_length(self.radius, "radius")?;
@@ -104,9 +89,7 @@ impl LEDSphere {
                 ),
             });
         }
-        validate_wavelength(self.wavelength_override)?;
-        validate_order(self.illumination_order.as_deref(), self.angles.len())?;
-        validate_weights(self.intensity_weights.as_deref(), self.angles.len())
+        Ok(())
     }
 
     fn natural_positions(&self) -> Result<Vec<[f64; 3]>> {
@@ -120,7 +103,7 @@ impl LEDSphere {
                     .map_or((0.0, 0.0), |values| values[index]);
                 let direction = spherical_direction(theta + delta_theta, phi + delta_phi);
                 source_position(
-                    scale(direction, self.radius),
+                    scale(direction, -self.radius),
                     self.center_offset,
                     self.orientation_radians,
                     "LED sphere",
@@ -128,27 +111,10 @@ impl LEDSphere {
             })
             .collect()
     }
-}
-
-impl IlluminationSource for LEDSphere {
-    fn k_vectors(&self, optics: &Optics) -> Result<Vec<KVector>> {
+    /// Resolves physical positions to source-to-sample directions and transverse vectors.
+    pub fn resolve(&self, optics: &Optics) -> Result<ResolvedSources> {
         self.validate()?;
-        optics.validate()?;
-        let k = wavenumber(self.wavelength_override, optics);
-        let natural = self
-            .natural_positions()?
-            .into_iter()
-            .map(|position| position_to_k_vector(position, k))
-            .collect::<Vec<_>>();
-        Ok(reorder(natural, self.illumination_order.as_deref()))
-    }
-
-    fn frame_gains(&self) -> Result<Option<Vec<f64>>> {
-        self.validate()?;
-        Ok(self
-            .intensity_weights
-            .as_ref()
-            .map(|weights| reorder(weights.clone(), self.illumination_order.as_deref())))
+        ResolvedSources::from_positions(self.natural_positions()?, optics)
     }
 }
 
@@ -159,37 +125,43 @@ impl IlluminationSource for LEDSphere {
 /// backlash, inner-axis non-orthogonality, arm-pivot displacement, and a rigid
 /// mount rotation. Azimuth commands should be unwrapped when crossing `+-pi` so
 /// that backlash direction is unambiguous.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SphericalLEDArm {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SphericalLedArm {
     /// Movement-order `(theta, phi)` encoder commands in radians.
+    #[serde(rename = "commanded_angles_rad")]
     pub commanded_angles: Vec<(f64, f64)>,
     /// Positive distance from pivot to LED, in metres.
+    #[serde(rename = "arm_length_m")]
     pub arm_length: f64,
     /// Arm-pivot displacement `(x, y, z)` from the sample, in metres.
+    #[serde(rename = "pivot_offset_m")]
     pub pivot_offset: (f64, f64, f64),
     /// Rigid mount rotation `(rx, ry, rz)` in radians.
+    #[serde(rename = "rotation_rad")]
     pub orientation_radians: (f64, f64, f64),
     /// Additive elevation-encoder zero offset, in radians.
+    #[serde(rename = "theta_zero_rad")]
     pub theta_zero_radians: f64,
     /// Additive azimuth-encoder zero offset, in radians.
+    #[serde(rename = "phi_zero_rad")]
     pub phi_zero_radians: f64,
     /// Positive dimensionless elevation-encoder scale.
     pub theta_scale: f64,
     /// Positive dimensionless azimuth-encoder scale.
     pub phi_scale: f64,
     /// Tilt of the elevation axis toward the azimuth axis, in radians.
+    #[serde(rename = "elevation_axis_tilt_rad")]
     pub elevation_axis_tilt_radians: f64,
     /// Total separation between increasing and decreasing encoder branches.
+    #[serde(rename = "theta_backlash_rad")]
     pub theta_backlash_radians: f64,
     /// Total separation between increasing and decreasing encoder branches.
+    #[serde(rename = "phi_backlash_rad")]
     pub phi_backlash_radians: f64,
-    /// Optional positive vacuum wavelength in metres replacing [`Optics::wavelength`].
-    pub wavelength_override: Option<f64>,
-    /// Optional finite positive gain per movement-order source.
-    pub intensity_weights: Option<Vec<f64>>,
 }
 
-impl SphericalLEDArm {
+impl SphericalLedArm {
     /// Creates an arm from movement-order commands in radians and length in metres.
     pub fn new(commanded_angles: Vec<(f64, f64)>, arm_length: f64) -> Self {
         Self {
@@ -204,8 +176,6 @@ impl SphericalLEDArm {
             elevation_axis_tilt_radians: 0.0,
             theta_backlash_radians: 0.0,
             phi_backlash_radians: 0.0,
-            wavelength_override: None,
-            intensity_weights: None,
         }
     }
 
@@ -252,20 +222,13 @@ impl SphericalLEDArm {
         self
     }
 
-    /// Overrides the positive vacuum illumination wavelength in metres.
-    pub fn wavelength_override(mut self, wavelength: f64) -> Self {
-        self.wavelength_override = Some(wavelength);
-        self
+    /// Returns the number of commanded physical source positions.
+    pub fn source_count(&self) -> usize {
+        self.commanded_angles.len()
     }
 
-    /// Sets one finite positive intensity gain per commanded source position.
-    pub fn intensity_weights(mut self, weights: Vec<f64>) -> Self {
-        self.intensity_weights = Some(weights);
-        self
-    }
-
-    /// Checks non-empty finite commands, positive geometry and encoder scales, finite
-    /// pose and calibration values, and optional wavelength and gain constraints.
+    /// Checks non-empty finite commands, positive geometry and encoder scales, and
+    /// finite pose and mechanical calibration values.
     pub fn validate(&self) -> Result<()> {
         validate_angle_list(&self.commanded_angles, "arm commanded_angles")?;
         validate_length(self.arm_length, "arm_length")?;
@@ -300,11 +263,7 @@ impl SphericalLEDArm {
                 reason: "backlash widths must be finite and non-negative".into(),
             });
         }
-        validate_wavelength(self.wavelength_override)?;
-        validate_weights(
-            self.intensity_weights.as_deref(),
-            self.commanded_angles.len(),
-        )
+        Ok(())
     }
 
     fn positions(&self) -> Result<Vec<[f64; 3]>> {
@@ -323,7 +282,7 @@ impl SphericalLEDArm {
                 let phi = self.phi_scale * phi_command
                     + self.phi_zero_radians
                     + 0.5 * self.phi_backlash_radians * phi_branches[index];
-                let home = [0.0, 0.0, self.arm_length];
+                let home = [0.0, 0.0, -self.arm_length];
                 let elevated = rotate_axis_angle(home, elevation_axis, theta);
                 let arm_position = rotate_z(elevated, phi);
                 source_position(
@@ -335,23 +294,10 @@ impl SphericalLEDArm {
             })
             .collect()
     }
-}
-
-impl IlluminationSource for SphericalLEDArm {
-    fn k_vectors(&self, optics: &Optics) -> Result<Vec<KVector>> {
+    /// Resolves physical positions to source-to-sample directions and transverse vectors.
+    pub fn resolve(&self, optics: &Optics) -> Result<ResolvedSources> {
         self.validate()?;
-        optics.validate()?;
-        let k = wavenumber(self.wavelength_override, optics);
-        Ok(self
-            .positions()?
-            .into_iter()
-            .map(|position| position_to_k_vector(position, k))
-            .collect())
-    }
-
-    fn frame_gains(&self) -> Result<Option<Vec<f64>>> {
-        self.validate()?;
-        Ok(self.intensity_weights.clone())
+        ResolvedSources::from_positions(self.positions()?, optics)
     }
 }
 
@@ -361,35 +307,41 @@ impl IlluminationSource for SphericalLEDArm {
 /// Every LED is compiled at every commanded rotation angle. Sources are
 /// ordered rotation-major and then by `led_thetas`. The nominal arm lies in the
 /// `x-z` plane, with LED polar positions measured from positive `z`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RotatingLEDArc {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RotatingLedArc {
     /// Nominal LED polar positions along the quarter-circle arm, in radians.
+    #[serde(rename = "led_polar_angles_rad")]
     pub led_thetas: Vec<f64>,
     /// Commanded arm azimuths in physical movement order, in radians.
+    #[serde(rename = "rotation_angles_rad")]
     pub rotation_angles: Vec<f64>,
     /// Positive nominal arc radius in metres.
+    #[serde(rename = "radius_m")]
     pub radius: f64,
     /// Point on the rotation axis relative to the sample, in metres.
+    #[serde(rename = "axis_origin_offset_m")]
     pub axis_origin_offset: (f64, f64, f64),
     /// Rotation-axis tilt `(rx, ry)` away from the optical axis, in radians.
+    #[serde(rename = "axis_tilt_rad")]
     pub axis_tilt_radians: (f64, f64),
     /// Per-LED `(delta_theta, delta_phi)` mounting corrections.
+    #[serde(rename = "led_angular_corrections_rad")]
     pub led_angular_corrections: Option<Vec<(f64, f64)>>,
     /// Per-LED radial corrections to the nominal arm radius, in metres.
+    #[serde(rename = "led_radial_offsets_m")]
     pub led_radial_offsets: Option<Vec<f64>>,
     /// Additive rotation-encoder zero offset in radians.
+    #[serde(rename = "rotation_zero_rad")]
     pub rotation_zero_radians: f64,
     /// Positive dimensionless rotation-encoder scale.
     pub rotation_scale: f64,
     /// Total separation between increasing and decreasing rotation branches.
+    #[serde(rename = "rotation_backlash_rad")]
     pub rotation_backlash_radians: f64,
-    /// Optional positive vacuum wavelength in metres replacing [`Optics::wavelength`].
-    pub wavelength_override: Option<f64>,
-    /// Intrinsic intensity weight for each LED, repeated at every rotation.
-    pub led_intensity_weights: Option<Vec<f64>>,
 }
 
-impl RotatingLEDArc {
+impl RotatingLedArc {
     /// Creates an arc from LED polar angles and movement-order rotations in radians,
     /// with a positive radius in metres.
     pub fn new(led_thetas: Vec<f64>, rotation_angles: Vec<f64>, radius: f64) -> Self {
@@ -404,8 +356,6 @@ impl RotatingLEDArc {
             rotation_zero_radians: 0.0,
             rotation_scale: 1.0,
             rotation_backlash_radians: 0.0,
-            wavelength_override: None,
-            led_intensity_weights: None,
         }
     }
 
@@ -451,27 +401,12 @@ impl RotatingLEDArc {
         self
     }
 
-    /// Overrides the positive vacuum illumination wavelength in metres.
-    pub fn wavelength_override(mut self, wavelength: f64) -> Self {
-        self.wavelength_override = Some(wavelength);
-        self
-    }
-
-    /// Sets one finite positive intrinsic gain per LED, repeated for every rotation.
-    pub fn led_intensity_weights(mut self, weights: Vec<f64>) -> Self {
-        self.led_intensity_weights = Some(weights);
-        self
-    }
-
-    /// Returns `led_thetas.len() * rotation_angles.len()`, failing on `usize` overflow.
-    pub fn source_count(&self) -> Result<usize> {
+    /// Returns the rotation-major physical source count.
+    pub fn source_count(&self) -> usize {
         self.led_thetas
             .len()
             .checked_mul(self.rotation_angles.len())
-            .ok_or_else(|| Error::InvalidParameter {
-                name: "rotating LED arc",
-                reason: "source count overflows".into(),
-            })
+            .unwrap_or(0)
     }
 
     /// Validates angular domains, positive radius and scale, finite pose and encoder
@@ -495,7 +430,13 @@ impl RotatingLEDArc {
                 reason: "must contain at least one finite commanded azimuth".into(),
             });
         }
-        self.source_count()?;
+        self.led_thetas
+            .len()
+            .checked_mul(self.rotation_angles.len())
+            .ok_or_else(|| Error::InvalidParameter {
+                name: "rotating LED arc",
+                reason: "source count overflows".into(),
+            })?;
         validate_length(self.radius, "radius")?;
         validate_pose(
             self.axis_origin_offset,
@@ -558,13 +499,12 @@ impl RotatingLEDArc {
                 reason: "must be finite and non-negative".into(),
             });
         }
-        validate_wavelength(self.wavelength_override)?;
-        validate_weights(self.led_intensity_weights.as_deref(), self.led_thetas.len())
+        Ok(())
     }
 
     fn positions(&self) -> Result<Vec<[f64; 3]>> {
         let branches = scalar_backlash_branches(&self.rotation_angles);
-        let mut positions = Vec::with_capacity(self.source_count()?);
+        let mut positions = Vec::with_capacity(self.source_count());
         for (rotation_index, &command) in self.rotation_angles.iter().enumerate() {
             let rotation = self.rotation_scale * command
                 + self.rotation_zero_radians
@@ -581,7 +521,7 @@ impl RotatingLEDArc {
                         .map_or(0.0, |values| values[led_index]);
                 let local = scale(
                     spherical_direction(nominal_theta + delta_theta, delta_phi),
-                    radius,
+                    -radius,
                 );
                 let rotated = rotate_z(local, rotation);
                 positions.push(source_position(
@@ -594,28 +534,10 @@ impl RotatingLEDArc {
         }
         Ok(positions)
     }
-}
-
-impl IlluminationSource for RotatingLEDArc {
-    fn k_vectors(&self, optics: &Optics) -> Result<Vec<KVector>> {
+    /// Resolves rotation-major physical positions and transverse vectors.
+    pub fn resolve(&self, optics: &Optics) -> Result<ResolvedSources> {
         self.validate()?;
-        optics.validate()?;
-        let k = wavenumber(self.wavelength_override, optics);
-        Ok(self
-            .positions()?
-            .into_iter()
-            .map(|position| position_to_k_vector(position, k))
-            .collect())
-    }
-
-    fn frame_gains(&self) -> Result<Option<Vec<f64>>> {
-        self.validate()?;
-        Ok(self.led_intensity_weights.as_ref().map(|weights| {
-            self.rotation_angles
-                .iter()
-                .flat_map(|_| weights.iter().copied())
-                .collect()
-        }))
+        ResolvedSources::from_positions(self.positions()?, optics)
     }
 }
 
@@ -666,49 +588,6 @@ fn validate_pose(offset: (f64, f64, f64), orientation: (f64, f64, f64)) -> Resul
     Ok(())
 }
 
-fn validate_wavelength(wavelength: Option<f64>) -> Result<()> {
-    if wavelength.is_some_and(|value| !value.is_finite() || value <= 0.0) {
-        return Err(Error::InvalidParameter {
-            name: "wavelength_override",
-            reason: "must be finite and positive".into(),
-        });
-    }
-    Ok(())
-}
-
-fn validate_order(order: Option<&[usize]>, count: usize) -> Result<()> {
-    if let Some(order) = order {
-        let mut sorted = order.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        if order.len() != count
-            || order.iter().any(|&index| index >= count)
-            || sorted.len() != count
-        {
-            return Err(Error::InvalidParameter {
-                name: "illumination_order",
-                reason: format!("must be a permutation of 0..{count}"),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_weights(weights: Option<&[f64]>, count: usize) -> Result<()> {
-    if weights.is_some_and(|values| {
-        values.len() != count
-            || values
-                .iter()
-                .any(|value| !value.is_finite() || *value <= 0.0)
-    }) {
-        return Err(Error::InvalidParameter {
-            name: "intensity_weights",
-            reason: format!("must contain {count} finite positive values"),
-        });
-    }
-    Ok(())
-}
-
 fn spherical_direction(theta: f64, phi: f64) -> [f64; 3] {
     let (sin_theta, cos_theta) = theta.sin_cos();
     let (sin_phi, cos_phi) = phi.sin_cos();
@@ -729,31 +608,14 @@ fn source_position(
     ];
     let norm =
         (position[0] * position[0] + position[1] * position[1] + position[2] * position[2]).sqrt();
-    if !norm.is_finite() || norm <= 0.0 || position[2] <= 0.0 {
+    if !norm.is_finite() || norm <= 0.0 || position[2] >= 0.0 {
         return Err(Error::InvalidParameter {
             name: geometry,
-            reason: "every transformed source must be finite, distinct from the sample, and on the positive-z illumination hemisphere"
+            reason: "every transformed source must be finite, distinct from the sample, and on the negative-z source hemisphere"
                 .into(),
         });
     }
     Ok(position)
-}
-
-fn position_to_k_vector(position: [f64; 3], k: f64) -> KVector {
-    let distance =
-        (position[0] * position[0] + position[1] * position[1] + position[2] * position[2]).sqrt();
-    KVector::new(k * position[0] / distance, k * position[1] / distance)
-}
-
-fn wavenumber(wavelength_override: Option<f64>, optics: &Optics) -> f64 {
-    std::f64::consts::TAU * optics.medium_index / wavelength_override.unwrap_or(optics.wavelength)
-}
-
-fn reorder<T: Copy>(values: Vec<T>, order: Option<&[usize]>) -> Vec<T> {
-    match order {
-        Some(indices) => indices.iter().map(|&index| values[index]).collect(),
-        None => values,
-    }
 }
 
 fn backlash_branches(commands: &[(f64, f64)], component: usize) -> Vec<f64> {

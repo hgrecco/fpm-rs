@@ -7,6 +7,12 @@ first.
 
 ### Breaking changes
 
+- Replaced the combined illumination variants with `SourceGeometry`,
+  `SourceCalibration`, `AcquisitionPlan`, and atomic `Illumination::resolve`.
+  Planar geometry is now `PlanarLedArray`/`PlanarLEDArray`; physical positions,
+  propagation directions, sparse frame contributions, explicit source powers,
+  and illumination/objective refractive indices have unambiguous ownership.
+  Configuration format version 2 contains only the decomposed schema.
 - Replaced the crate's custom `Array2` type with native `ndarray` arrays and
   views throughout the public Rust numerical API. FFT, model, measurement,
   reconstruction, and persistence boundaries now require standard row-major

@@ -6,7 +6,7 @@
 
 use crate::{
     Result,
-    experiment::{LEDArray, Optics, PupilAberration},
+    experiment::{ArrayPose, Illumination, Optics, PlanarLedArray, PupilAberration},
     model::{ImagePlaneModel, ReconstructionShape},
 };
 
@@ -70,22 +70,24 @@ pub fn poisson_gaussian_fpm(seed: u64) -> Result<SimulationResult> {
 
 fn base_optics() -> Optics {
     Optics {
-        wavelength: 532e-9,
+        wavelength_vacuum_m: 532e-9,
         objective_na: 0.10,
         magnification: 4.0,
         camera_pixel_size: 6.5e-6,
-        medium_index: 1.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
         defocus_distance: None,
         pupil_aberration: None,
     }
 }
 
 fn base_model(optics: Optics) -> Result<ImagePlaneModel> {
-    let illumination = LEDArray::new()
-        .grid_shape((3, 3))
-        .pitch(4e-3)
-        .distance(90e-3)
-        .center((1.0, 1.0));
+    let illumination = Illumination::from_geometry(PlanarLedArray::new(
+        (3, 3),
+        (4e-3, 4e-3),
+        (1.0, 1.0),
+        ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+    ))?;
     ImagePlaneModel::from_experiment(
         &optics,
         &illumination,

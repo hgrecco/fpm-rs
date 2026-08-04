@@ -10,8 +10,8 @@ ptychography, multislice propagation, and GPU execution are not implemented.
 
 ## What it can do for you
 
-- **Compile an optical model.** Describe planar, spherical, calibrated, or
-  coded illumination and turn it into Fourier-space sampling and a pupil.
+- **Compile an optical model.** Resolve source geometry, stable calibration,
+  and sparse acquisition structure into Fourier-space sampling and a pupil.
 - **Simulate an acquisition.** Generate ideal or camera-affected intensity
   frames from synthetic or supplied complex objects.
 - **Reconstruct the object.** Start with alternating projection, or use FPIE,
@@ -69,8 +69,14 @@ import numpy as np
 import fpm_rs as fpm
 
 optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
-leds = fpm.LEDArray((3, 3), 4e-3, 90e-3, (1.0, 1.0))
-model = fpm.compile_model(optics, leds, (32, 32))
+geometry = fpm.PlanarLEDArray(
+    (3, 3),
+    4e-3,
+    (1.0, 1.0),
+    fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+)
+illumination = fpm.Illumination(geometry)
+model = fpm.compile_model(optics, illumination, (32, 32))
 
 simulation = fpm.simulate(
     model,
