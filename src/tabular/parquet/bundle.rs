@@ -15,7 +15,8 @@ use crate::{
     Error, Result, complex,
     diagnostics::ReconstructionDiagnostics,
     evaluation::ReconstructionEvaluation,
-    model::Pupil,
+    illumination_calibration::IlluminationCalibrationState,
+    model::{ImagePlaneModel, Pupil},
     reconstruction::{
         AlgorithmMetricRecord, IterationRecord, ReconstructionResult, ReconstructionTrace,
     },
@@ -25,12 +26,13 @@ use super::{
     manifest::{
         ARRAY_BACKGROUND, ARRAY_FRAME_GAINS, ARRAY_ILLUMINATION_CALIBRATION, ARRAY_OBJECT,
         ARRAY_OBJECT_SPECTRUM, ARRAY_PUPIL, ARRAY_PUPIL_SUPPORT, BUNDLE_FORMAT_VERSION,
-        BundleManifest, DOMAIN_DIAGNOSTICS, DOMAIN_EVALUATION, KNOWN_ROLES, ManifestArtifact,
-        PREVIEW_FOURIER_COVERAGE, PREVIEW_OBJECT_AMPLITUDE, PREVIEW_OBJECT_PHASE,
-        PREVIEW_PUPIL_AMPLITUDE, PREVIEW_PUPIL_PHASE, TABLE_ALGORITHM_METRICS,
-        TABLE_FRAME_CALIBRATION, TABLE_FRAME_DIAGNOSTICS, TABLE_FRAME_EVALUATION, TABLE_HISTORY,
-        TABLE_ILLUMINATION_CALIBRATION, TABLE_ITERATION_DIAGNOSTICS, TABLE_METADATA,
-        TABLE_RAW_FRAME_STATISTICS, TABLE_SCALAR_DIAGNOSTICS, TABLE_SUMMARY,
+        BundleManifest, DOMAIN_DIAGNOSTICS, DOMAIN_EVALUATION, DOMAIN_PHYSICAL_ILLUMINATION,
+        KNOWN_ROLES, ManifestArtifact, PREVIEW_FOURIER_COVERAGE, PREVIEW_OBJECT_AMPLITUDE,
+        PREVIEW_OBJECT_PHASE, PREVIEW_PUPIL_AMPLITUDE, PREVIEW_PUPIL_PHASE,
+        TABLE_ALGORITHM_METRICS, TABLE_FRAME_CALIBRATION, TABLE_FRAME_DIAGNOSTICS,
+        TABLE_FRAME_EVALUATION, TABLE_HISTORY, TABLE_ILLUMINATION_CALIBRATION,
+        TABLE_ITERATION_DIAGNOSTICS, TABLE_METADATA, TABLE_RAW_FRAME_STATISTICS,
+        TABLE_SCALAR_DIAGNOSTICS, TABLE_SUMMARY,
     },
     npy,
     write::sha256,
@@ -140,6 +142,7 @@ struct BundleCache {
     result: Option<Arc<ReconstructionResult>>,
     diagnostics: Option<Arc<ReconstructionDiagnostics>>,
     evaluation: Option<Arc<ReconstructionEvaluation>>,
+    physical_illumination: Option<Arc<(IlluminationCalibrationState, ImagePlaneModel)>>,
 }
 
 struct ResultBundleInner {
@@ -402,6 +405,22 @@ impl ResultBundle {
             || self.load_optional_f64(ARRAY_BACKGROUND).map(Arc::new),
             Ok,
         )?;
+        let physical_illumination = cache.physical_illumination.clone().map_or_else(
+            || {
+                if self
+                    .inner
+                    .artifacts
+                    .contains_key(DOMAIN_PHYSICAL_ILLUMINATION)
+                {
+                    self.load_json_artifact(DOMAIN_PHYSICAL_ILLUMINATION)
+                        .map(Arc::new)
+                        .map(Some)
+                } else {
+                    Ok(None)
+                }
+            },
+            |value| Ok(Some(value)),
+        )?;
 
         let recovered_pupil = Pupil::new((*pupil_values).clone(), (*pupil_support).clone())?;
         let amplitude = complex::amplitude(object.view());
@@ -416,6 +435,10 @@ impl ResultBundle {
                 .then(|| (*illumination_calibration).clone()),
             recovered_frame_gains: (!frame_gains.is_empty()).then(|| (*frame_gains).clone()),
             recovered_background: (!background.is_empty()).then(|| (*background).clone()),
+            physical_illumination_calibration: physical_illumination
+                .as_ref()
+                .map(|value| value.0.clone()),
+            calibrated_model: physical_illumination.as_ref().map(|value| value.1.clone()),
             trace: (*trace).clone(),
             scalar_diagnostics: (*scalar_diagnostics).clone(),
             runtime: self.inner.manifest.runtime.clone(),
@@ -434,6 +457,7 @@ impl ResultBundle {
         cache.illumination_calibration = Some(illumination_calibration);
         cache.frame_gains = Some(frame_gains);
         cache.background = Some(background);
+        cache.physical_illumination = physical_illumination;
         cache.result = Some(result.clone());
         Ok(result)
     }
@@ -466,6 +490,50 @@ impl ResultBundle {
             Arc::new(self.load_json_artifact(DOMAIN_EVALUATION)?);
         cache.evaluation = Some(value.clone());
         Ok(Some(value))
+    }
+
+    /// Lazily loads and caches optional physical planar-array calibration state.
+    pub fn physical_illumination_calibration(
+        &self,
+    ) -> Result<Option<Arc<IlluminationCalibrationState>>> {
+        if !self
+            .inner
+            .artifacts
+            .contains_key(DOMAIN_PHYSICAL_ILLUMINATION)
+        {
+            return Ok(None);
+        }
+        let mut cache = self.cache();
+        let value = if let Some(value) = &cache.physical_illumination {
+            value.clone()
+        } else {
+            let value: Arc<(IlluminationCalibrationState, ImagePlaneModel)> =
+                Arc::new(self.load_json_artifact(DOMAIN_PHYSICAL_ILLUMINATION)?);
+            cache.physical_illumination = Some(value.clone());
+            value
+        };
+        Ok(Some(Arc::new(value.0.clone())))
+    }
+
+    /// Lazily loads and caches the optional final model compiled from physical calibration.
+    pub fn calibrated_model(&self) -> Result<Option<Arc<ImagePlaneModel>>> {
+        if !self
+            .inner
+            .artifacts
+            .contains_key(DOMAIN_PHYSICAL_ILLUMINATION)
+        {
+            return Ok(None);
+        }
+        let mut cache = self.cache();
+        let value = if let Some(value) = &cache.physical_illumination {
+            value.clone()
+        } else {
+            let value: Arc<(IlluminationCalibrationState, ImagePlaneModel)> =
+                Arc::new(self.load_json_artifact(DOMAIN_PHYSICAL_ILLUMINATION)?);
+            cache.physical_illumination = Some(value.clone());
+            value
+        };
+        Ok(Some(Arc::new(value.1.clone())))
     }
 
     /// Drops this bundle's shared in-memory array and domain-object cache.

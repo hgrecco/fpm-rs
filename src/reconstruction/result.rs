@@ -12,7 +12,8 @@ use crate::{
     backend::FftDirection,
     complex,
     error::Error,
-    model::{Pupil, ifftshift_copy},
+    illumination_calibration::IlluminationCalibrationState,
+    model::{ImagePlaneModel, Pupil, ifftshift_copy},
 };
 
 use super::{ReconstructionState, ReconstructionTrace};
@@ -53,6 +54,10 @@ pub struct ReconstructionResult {
     pub recovered_frame_gains: Option<Vec<f64>>,
     /// Optional additive intensity background in acquisition-frame order.
     pub recovered_background: Option<Vec<f64>>,
+    /// Complete physical planar-array calibration state for joint runs.
+    pub physical_illumination_calibration: Option<IlluminationCalibrationState>,
+    /// Reusable model compiled from the final physical illumination.
+    pub calibrated_model: Option<ImagePlaneModel>,
     /// Universal and algorithm-specific iteration history.
     pub trace: ReconstructionTrace,
     /// Final named scalar diagnostics not represented by the trace.
@@ -85,6 +90,8 @@ impl ReconstructionResult {
             calibrated_illumination: state.illumination_corrections.clone(),
             recovered_frame_gains: state.frame_gains.clone(),
             recovered_background: state.background.clone(),
+            physical_illumination_calibration: state.physical_illumination_calibration.clone(),
+            calibrated_model: state.calibrated_model.clone(),
             trace,
             scalar_diagnostics,
             runtime,
@@ -311,6 +318,24 @@ impl ReconstructionResult {
                 "result calibration values are invalid".into(),
             ));
         }
+        if self.physical_illumination_calibration.is_some() != self.calibrated_model.is_some() {
+            return Err(Error::InvalidModel(
+                "result physical calibration and calibrated model must be present together".into(),
+            ));
+        }
+        if let Some(model) = &self.calibrated_model {
+            model.validate()?;
+            if model.reconstruction_shape() != shape
+                || model.pupil().shape() != self.recovered_pupil.shape()
+            {
+                return Err(Error::InvalidModel(
+                    "result calibrated model shapes do not match reconstructed fields".into(),
+                ));
+            }
+        }
+        if let Some(calibration) = &self.physical_illumination_calibration {
+            calibration.validate()?;
+        }
         if self
             .scalar_diagnostics
             .values()
@@ -452,6 +477,8 @@ impl Serialize for ReconstructionResult {
             calibrated_illumination: &'a Option<Vec<(f64, f64)>>,
             recovered_frame_gains: &'a Option<Vec<f64>>,
             recovered_background: &'a Option<Vec<f64>>,
+            physical_illumination_calibration: &'a Option<IlluminationCalibrationState>,
+            calibrated_model: &'a Option<ImagePlaneModel>,
             trace: &'a ReconstructionTrace,
             scalar_diagnostics: &'a BTreeMap<String, f64>,
             runtime: &'a RuntimeInfo,
@@ -467,6 +494,8 @@ impl Serialize for ReconstructionResult {
             calibrated_illumination: &self.calibrated_illumination,
             recovered_frame_gains: &self.recovered_frame_gains,
             recovered_background: &self.recovered_background,
+            physical_illumination_calibration: &self.physical_illumination_calibration,
+            calibrated_model: &self.calibrated_model,
             trace: &self.trace,
             scalar_diagnostics: &self.scalar_diagnostics,
             runtime: &self.runtime,
@@ -494,6 +523,8 @@ impl<'de> Deserialize<'de> for ReconstructionResult {
             calibrated_illumination: Option<Vec<(f64, f64)>>,
             recovered_frame_gains: Option<Vec<f64>>,
             recovered_background: Option<Vec<f64>>,
+            physical_illumination_calibration: Option<IlluminationCalibrationState>,
+            calibrated_model: Option<ImagePlaneModel>,
             trace: ReconstructionTrace,
             scalar_diagnostics: BTreeMap<String, f64>,
             runtime: RuntimeInfo,
@@ -522,6 +553,8 @@ impl<'de> Deserialize<'de> for ReconstructionResult {
             calibrated_illumination: representation.calibrated_illumination,
             recovered_frame_gains: representation.recovered_frame_gains,
             recovered_background: representation.recovered_background,
+            physical_illumination_calibration: representation.physical_illumination_calibration,
+            calibrated_model: representation.calibrated_model,
             trace: representation.trace,
             scalar_diagnostics: representation.scalar_diagnostics,
             runtime: representation.runtime,

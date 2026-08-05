@@ -17,6 +17,10 @@ ptychography, multislice propagation, and GPU execution are not implemented.
 - **Reconstruct the object.** Start with alternating projection, or use FPIE,
   EPRY, ADMM, or gradient descent when their calibration and regularization
   options fit the experiment.
+- **Calibrate a planar LED array physically.** Alternate analytic object or
+  object/pupil updates with bounded pose, pitch, reference-index,
+  selected-offset, source-power, or frame-gain updates and reuse the returned
+  `Illumination`.
 - **Keep a run inspectable.** Record diagnostics, write checkpoints, and
   compare simulations with known ground truth. Optional Parquet support writes
   self-describing result and benchmark bundles for downstream analysis.
@@ -103,7 +107,7 @@ cargo run --example simulate_and_reconstruct
   guides, concepts, and API references.
 - [Quickstart](docs/getting-started/quickstart.md): a narrated Python workflow.
 - [Reconstruction guide](docs/guides/reconstruction.md): model sizing,
-  algorithms, callbacks, and checkpoints.
+  algorithms, physical illumination calibration, callbacks, and checkpoints.
 - [Measurements](docs/guides/measurements.md), [simulation](docs/guides/simulation.md),
   and [datasets](docs/datasets.md): prepare real data and create test cases.
 - [Contributor guide](docs/development/index.md): build, test, and document a

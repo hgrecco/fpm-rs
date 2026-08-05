@@ -84,3 +84,20 @@ Known uniform camera response is not baked into the serialized reconstruction
 model. `reconstruction_model_for_counts()` applies it when constructing a
 problem from detector counts. `Simulator::simulate` returns an already adjusted
 reconstruction model for its simulated count data.
+
+Physical planar-array calibration configuration is serialized separately from
+the experiment description. `PlanarArrayCalibrationParameters` stores one
+optional `CalibrationParameterSpec` per active pose, pitch, or reference
+component; explicit source-indexed XYZ specs; and optional common power or gain
+specs. Each spec stores finite lower/upper bounds, physical finite-difference
+step, optimizer scale, optional prior center, and regularization strength.
+`IlluminationCalibration` adds the bounded optimizer settings and loss type.
+
+Checkpoints use format version 2 and include `physical_illumination_calibration`
+and `calibrated_model` together. The physical state contains the initial and
+current normal `Illumination`, absolute and normalized parameters, applied
+gauge constraints, histories, convergence reason, conditioning indicators, and
+partial-update counters. Result bundles use format version 2 and persist the
+same pair as the verified `domain.physical_illumination` JSON artifact; generic
+per-source Fourier-grid corrections remain in the separate illumination
+calibration table/array artifacts.

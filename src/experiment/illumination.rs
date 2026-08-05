@@ -717,6 +717,24 @@ impl Illumination {
         &self.acquisition
     }
 
+    /// Replaces the source geometry while retaining calibration and acquisition state.
+    pub fn with_geometry(mut self, geometry: impl Into<SourceGeometry>) -> Self {
+        self.geometry = geometry.into();
+        self
+    }
+
+    /// Replaces stable source-power calibration while retaining geometry and acquisition.
+    pub fn with_calibration(mut self, calibration: SourceCalibration) -> Self {
+        self.calibration = calibration;
+        self
+    }
+
+    /// Replaces sparse acquisition weights and frame gains while retaining source state.
+    pub fn with_acquisition(mut self, acquisition: AcquisitionPlan) -> Self {
+        self.acquisition = acquisition;
+        self
+    }
+
     /// Atomically resolves geometry, calibration, acquisition weights, and gains.
     pub fn resolve(&self, optics: &Optics) -> Result<ResolvedIllumination> {
         let sources = self.geometry.resolve(optics)?;

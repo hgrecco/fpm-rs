@@ -141,7 +141,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
             diagnostics: &start_diagnostics,
             trace: &trace,
             current_algorithm_metrics: &[],
-            model: &problem.model,
+            model: state.calibrated_model.as_ref().unwrap_or(&problem.model),
             problem_name: problem.name.as_deref(),
         };
         let mut stopped_early = false;
@@ -197,7 +197,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                                 diagnostics: &diagnostics,
                                 trace: &trace,
                                 current_algorithm_metrics: &batch_metric_records,
-                                model: &problem.model,
+                                model: state.calibrated_model.as_ref().unwrap_or(&problem.model),
                                 problem_name: problem.name.as_deref(),
                             };
                             for callback in &mut self.callbacks {
@@ -246,7 +246,7 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     diagnostics: &diagnostics,
                     trace: &trace,
                     current_algorithm_metrics: &trace.algorithm_metrics[metric_start..],
-                    model: &problem.model,
+                    model: state.calibrated_model.as_ref().unwrap_or(&problem.model),
                     problem_name: problem.name.as_deref(),
                 };
                 for callback in &mut self.callbacks {
@@ -432,13 +432,16 @@ fn model_with_state_calibration<M: MeasurementRead>(
     problem: &ReconstructionProblem<M>,
     state: &ReconstructionState,
 ) -> Result<crate::model::ImagePlaneModel> {
-    let mut model = problem.model.clone();
+    let mut model = state
+        .calibrated_model
+        .clone()
+        .unwrap_or_else(|| problem.model.clone());
     model.frame_gains = state.frame_gains.clone();
     model.background = state.background.clone();
     if state.illumination_corrections.is_some() {
         model.subpixel_offsets = Some(
             (0..model.source_count())
-                .map(|source| state.effective_source_offset(&problem.model, source))
+                .map(|source| state.effective_source_offset(&model, source))
                 .collect::<Result<Vec<_>>>()?,
         );
     }

@@ -59,6 +59,15 @@ are `primal_residual_rms` for detector-field consensus `A x - z` and
 not appear in universal iteration rows or scalar diagnostics. Algorithms
 without stable algorithm-specific metrics return an empty list.
 
+Joint physical illumination runs emit `data_loss`, `regularization_loss`,
+`total_loss`, geometry-refresh count, intensity-only-update count, and rejected
+step count in the `physical_illumination` namespace. Callback contexts use the
+refreshed calibrated model. Rust callbacks can inspect absolute parameters and
+conditioning warnings through
+`context.state.physical_illumination_calibration()`; Python iteration callbacks
+receive the scalar phase records in `algorithm_metrics` and the complete typed
+state snapshot in `physical_illumination_calibration`.
+
 The report writer creates plots only for sections present in the diagnostics.
 It always writes `summary.txt`. No intermediate JSON file is required.
 

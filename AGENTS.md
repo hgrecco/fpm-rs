@@ -63,7 +63,21 @@ GPU execution are not implemented today.
   configuration/loading code.
 - Keep illumination geometry, stable `SourceCalibration`, and sparse canonical
   `AcquisitionPlan` state separate. Resolve them atomically through `Illumination`;
-  algorithms consume only `ImagePlaneModel`.
+  ordinary algorithms consume only `ImagePlaneModel`. The physical planar-array
+  calibrator may own the corresponding `Optics` and `Illumination`, but its object
+  phase must still call the canonical compiled forward model and measurement loss.
+- Keep physical `PlanarLedArray` calibration distinct from generic independent
+  k-vector/Fourier-grid correction. Physical parameters retain SI units and the
+  active, right-handed, extrinsic XYZ rotation convention; never label arbitrary
+  source shifts as realizable apparatus calibration.
+- Preserve physical-calibration identifiability checks: reject lateral translation
+  with its corresponding reference index, constrain selected offset means when
+  translation is active, normalize source powers and frame gains to mean one, and
+  do not silently enable source offsets or an unconstrained power/gain combination.
+- Update physical calibration results, callbacks, checkpoints, bundles,
+  serialization, Rust/Python APIs, authoritative stubs, and synthetic recovery
+  tests together. New physical parameters require bounded deterministic recovery
+  tests and partial-update regression coverage.
 - Preserve Rust/Python illumination parity, explicit SI-unit field names, sources
   normally at negative sample `z`, positive-`z` incident propagation, and the
   separately documented propagation-vector/Fourier-crop sign convention.

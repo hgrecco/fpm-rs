@@ -13,6 +13,7 @@ mod common;
 mod epry;
 mod fpie;
 mod gradient_descent;
+mod joint_reconstruction;
 mod metrics;
 pub mod objective;
 mod regularization;
@@ -22,6 +23,9 @@ pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;
 pub use fpie::Fpie;
 pub use gradient_descent::GradientDescent;
+pub use joint_reconstruction::{
+    JointIterationMetrics, JointReconstruction, JointReconstructionResult,
+};
 pub use metrics::{AlgorithmIterationMetrics, NoIterationMetrics, StepOutput, StepSummary};
 
 use crate::{

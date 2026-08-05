@@ -9,7 +9,12 @@ use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Result, array_serde::Array2Data, error::Error, measurements::MeasurementRead, model::Pupil,
+    Result,
+    array_serde::Array2Data,
+    error::Error,
+    illumination_calibration::IlluminationCalibrationState,
+    measurements::MeasurementRead,
+    model::{ImagePlaneModel, Pupil},
 };
 
 use super::{
@@ -17,7 +22,7 @@ use super::{
 };
 
 /// Current JSON checkpoint serialization format version.
-pub const CHECKPOINT_FORMAT_VERSION: u32 = 1;
+pub const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
 /// Serializable algorithm state used to resume a reconstruction exactly.
 #[derive(Clone, Debug)]
@@ -30,6 +35,8 @@ pub struct ReconstructionCheckpoint {
     pub(crate) illumination_corrections: Option<Vec<(f64, f64)>>,
     pub(crate) frame_gains: Option<Vec<f64>>,
     pub(crate) background: Option<Vec<f64>>,
+    pub(crate) physical_illumination_calibration: Option<IlluminationCalibrationState>,
+    pub(crate) calibrated_model: Option<ImagePlaneModel>,
     pub(crate) algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
     pub(crate) trace: ReconstructionTrace,
 }
@@ -49,6 +56,8 @@ impl ReconstructionCheckpoint {
             illumination_corrections: state.illumination_corrections.clone(),
             frame_gains: state.frame_gains.clone(),
             background: state.background.clone(),
+            physical_illumination_calibration: state.physical_illumination_calibration.clone(),
+            calibrated_model: state.calibrated_model.clone(),
             algorithm_auxiliary: state.algorithm_auxiliary.clone(),
             trace: trace.clone(),
         }
@@ -87,6 +96,16 @@ impl ReconstructionCheckpoint {
     /// Borrows optional additive intensity backgrounds in acquisition-frame order.
     pub fn background(&self) -> Option<&[f64]> {
         self.background.as_deref()
+    }
+
+    /// Borrows physical planar-array calibration state, when joint calibration is active.
+    pub fn physical_illumination_calibration(&self) -> Option<&IlluminationCalibrationState> {
+        self.physical_illumination_calibration.as_ref()
+    }
+
+    /// Borrows the illumination-refreshed model used at checkpoint capture.
+    pub fn calibrated_model(&self) -> Option<&ImagePlaneModel> {
+        self.calibrated_model.as_ref()
     }
 
     /// Borrows optional solver-specific resumable state.
@@ -183,6 +202,18 @@ impl ReconstructionCheckpoint {
                 "checkpoint background contains non-finite values".into(),
             ));
         }
+        if self.physical_illumination_calibration.is_some() != self.calibrated_model.is_some() {
+            return Err(Error::InvalidModel(
+                "checkpoint physical calibration and calibrated model must be present together"
+                    .into(),
+            ));
+        }
+        if let Some(model) = &self.calibrated_model {
+            model.validate()?;
+        }
+        if let Some(calibration) = &self.physical_illumination_calibration {
+            calibration.validate()?;
+        }
         if self
             .algorithm_auxiliary
             .as_ref()
@@ -268,6 +299,17 @@ impl ReconstructionCheckpoint {
                 "checkpoint frame gain count does not match the model".into(),
             ));
         }
+        if let Some(model) = &self.calibrated_model
+            && (model.image_shape() != problem.model.image_shape()
+                || model.reconstruction_shape() != problem.model.reconstruction_shape()
+                || model.source_count() != problem.model.source_count()
+                || model.frame_count() != problem.model.frame_count())
+        {
+            return Err(Error::InvalidModel(
+                "checkpoint calibrated model topology differs from the reconstruction problem"
+                    .into(),
+            ));
+        }
         let image_len = problem.measurements.frame_len();
         let stack_len = image_len
             .checked_mul(problem.model.frame_count())
@@ -323,6 +365,8 @@ impl Serialize for ReconstructionCheckpoint {
             illumination_corrections: &'a Option<Vec<(f64, f64)>>,
             frame_gains: &'a Option<Vec<f64>>,
             background: &'a Option<Vec<f64>>,
+            physical_illumination_calibration: &'a Option<IlluminationCalibrationState>,
+            calibrated_model: &'a Option<ImagePlaneModel>,
             algorithm_auxiliary: &'a Option<AlgorithmAuxiliaryState>,
             trace: &'a ReconstructionTrace,
         }
@@ -335,6 +379,8 @@ impl Serialize for ReconstructionCheckpoint {
             illumination_corrections: &self.illumination_corrections,
             frame_gains: &self.frame_gains,
             background: &self.background,
+            physical_illumination_calibration: &self.physical_illumination_calibration,
+            calibrated_model: &self.calibrated_model,
             algorithm_auxiliary: &self.algorithm_auxiliary,
             trace: &self.trace,
         }
@@ -359,6 +405,8 @@ impl<'de> Deserialize<'de> for ReconstructionCheckpoint {
             illumination_corrections: Option<Vec<(f64, f64)>>,
             frame_gains: Option<Vec<f64>>,
             background: Option<Vec<f64>>,
+            physical_illumination_calibration: Option<IlluminationCalibrationState>,
+            calibrated_model: Option<ImagePlaneModel>,
             #[serde(default)]
             algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
             trace: ReconstructionTrace,
@@ -376,6 +424,8 @@ impl<'de> Deserialize<'de> for ReconstructionCheckpoint {
             illumination_corrections: representation.illumination_corrections,
             frame_gains: representation.frame_gains,
             background: representation.background,
+            physical_illumination_calibration: representation.physical_illumination_calibration,
+            calibrated_model: representation.calibrated_model,
             algorithm_auxiliary: representation.algorithm_auxiliary,
             trace: representation.trace,
         };

@@ -12,6 +12,18 @@ Opened bundles load large arrays on first access and cache them until cleared.
 
 ::: fpm_rs.ReconstructionResult
 
+::: fpm_rs.PlanarArrayParameterValues
+
+::: fpm_rs.CalibrationParameterHistoryEntry
+
+::: fpm_rs.CalibrationLossHistoryEntry
+
+::: fpm_rs.CalibrationConditioning
+
+::: fpm_rs.IlluminationCalibrationState
+
+::: fpm_rs.JointReconstructionResult
+
 ## Result bundles
 
 ::: fpm_rs.BundleArtifact

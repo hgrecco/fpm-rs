@@ -140,8 +140,9 @@ must agree with the compiled model.
 
 `AlternatingProjection` is the simplest starting point. `Fpie` adds regularized
 object updates, `Epry` can recover the pupil and frame response, `Admm` separates
-data fitting from overlap consensus, and `GradientDescent` supports calibrated
-illumination/pupil recovery and regularization.
+data fitting from overlap consensus, and `GradientDescent` supports generic
+Fourier-grid source correction, pupil recovery, and regularization. Physical
+planar-array calibration is the separate `JointReconstruction` workflow below.
 
 ```python
 algorithm = fpm.AlternatingProjection(iterations=20, object_step=1.0)
@@ -212,6 +213,263 @@ bounded, damped least-squares update is controlled by `gain_step` and
 It preserves supplied spatial background maps, but a common absolute background
 is ambiguous with DC object intensity and should be referenced to a frame or
 dark measurement.
+
+## Physical planar LED-array calibration
+
+Physical calibration and generic k-vector correction solve different problems.
+`GradientDescent(recover_illumination=True)` estimates independent source shifts
+in Fourier-grid pixels for any compiled source geometry. Those shifts need not
+describe a realizable apparatus. `JointReconstruction` instead accepts only
+`PlanarLEDArray`, optimizes its pose and lattice in physical coordinates, and
+returns a normal serializable `Illumination`. `DirectionList`, `KVectorList`, and
+spherical geometries continue to use generic correction and are rejected by the
+physical calibrator.
+
+The forward model is the same `ImagePlaneModel`/`ForwardModel` implementation
+used by simulation and reconstruction. Each outer iteration performs complete
+passes of the wrapped analytic object algorithm, bounded physical updates, and
+an illumination-only model refresh. Rust accepts any compatible reconstruction
+algorithm; Python accepts `Fpie` or pupil-recovering `Epry`. The default
+calibration objective is amplitude MSE. Intensity MSE,
+Poisson negative log likelihood, and Huber amplitude loss are also available;
+all honor measurement masks and frame weights. A parameter prior contributes
+`0.5 * strength * ((value - center) / scale)²`.
+
+### Parameters, units, and gauges
+
+| Group | Absolute values | Unit and convention |
+| --- | --- | --- |
+| translation | `tx`, `ty`, `tz` | metres in sample coordinates |
+| rotation | `rx`, `ry`, `rz` | radians; active, right-handed, extrinsic fixed sample axes, x then y then z (`Rz * Ry * Rx`) |
+| pitch | `pitch_x`, `pitch_y` | metres |
+| reference index | `reference_column`, `reference_row` | fractional lattice indices |
+| selected offsets | `offset_x`, `offset_y`, `offset_z` | local array coordinates in metres, for explicitly named source indices only |
+| source power | one value per stable source | dimensionless relative intensity |
+| frame gain | one value per acquisition frame | dimensionless intensity gain |
+
+Every active parameter has finite inclusive bounds, a physical finite-difference
+step, an optimizer scale, and an optional quadratic prior. Unspecified
+parameters stay fixed. Perturbations use central differences when both sides
+are valid and a one-sided derivative at bounds or beside invalid geometries.
+The normalized variables exposed in results are `(current - initial) / scale`.
+Backtracking rejects non-finite positions, non-positive pitch or multipliers,
+sources on the sample plane, and crops outside the fixed reconstruction grid.
+
+The following gauges are enforced:
+
+- `tx` with `reference_column`, and `ty` with `reference_row`, are rejected.
+- Source power and frame gains are each normalized to mean one. Optimizing both
+  groups together is rejected because their product retains a scale ambiguity.
+- When translation and selected source offsets are active together, at least
+  two sources must be selected and their mean XYZ offset is constrained to zero.
+- Pitch and axial translation require explicit finite bounds. They may remain
+  strongly correlated, so the conditioning result emits a warning and reports
+  scaled sensitivity, approximate diagonal curvature, a diagonal condition
+  estimate, bound activity, and rejected steps. These are numerical
+  identifiability indicators, not statistical uncertainty.
+
+### Python workflow
+
+This example calibrates translation and rotation, jointly reconstructs the
+object, and then reuses the calibrated illumination for a continuation run:
+
+```python
+parameters = fpm.PlanarArrayCalibrationParameters(
+    translation=(True, True, True),
+    rotation=(True, True, True),
+    translation_spec=fpm.CalibrationParameterSpec(
+        -0.1,
+        0.1,
+        scale=1e-3,
+        finite_difference_step=1e-5,
+    ),
+    rotation_spec=fpm.CalibrationParameterSpec(
+        -0.25,
+        0.25,
+        scale=1e-2,
+        finite_difference_step=1e-4,
+    ),
+)
+calibration = fpm.IlluminationCalibration(
+    parameters,
+    optimizer=fpm.BoundedFiniteDifferenceOptimizer(
+        max_steps=2,
+        relative_tolerance=1e-6,
+    ),
+)
+joint = fpm.JointReconstruction(
+    fpm.Fpie(iterations=1, object_step=0.8),
+    optics,
+    illumination,
+    calibration,
+    outer_iterations=10,
+    object_iterations_per_outer=10,
+)
+joint_result = joint.run(problem)
+
+continued_model = fpm.compile_model(
+    optics,
+    joint_result.calibrated_illumination,
+    problem.image_shape,
+    problem.reconstruction_shape,
+)
+continued = fpm.Fpie(iterations=20).run(
+    fpm.ReconstructionProblem(measurements, continued_model)
+)
+```
+
+Use group-specific bounded configurations for the other supported cases:
+
+```python
+# Pitch plus axial distance: finite physical bounds are mandatory; inspect the warning.
+pitch_distance = fpm.PlanarArrayCalibrationParameters(
+    translation=(False, False, True),
+    pitch=(True, True),
+    translation_spec=fpm.CalibrationParameterSpec(
+        -0.12, -0.04, scale=1e-3, finite_difference_step=1e-5
+    ),
+    pitch_spec=fpm.CalibrationParameterSpec(
+        3.5e-3, 4.5e-3, scale=1e-4, finite_difference_step=1e-6
+    ),
+)
+
+# Only these stable source indices receive local XYZ variables.
+selected_offsets = fpm.PlanarArrayCalibrationParameters(
+    position_offsets=[12, 24, 103],
+    position_offset_spec=fpm.CalibrationParameterSpec(
+        -0.5e-3, 0.5e-3, scale=50e-6, finite_difference_step=1e-6,
+        prior_center=0.0, regularization_strength=1e-4,
+    ),
+)
+
+# Source powers use the intensity-only update path and are normalized to mean one.
+source_power = fpm.PlanarArrayCalibrationParameters(relative_source_power=True)
+
+# Frame gains are an alternative mean-one group, not simultaneous with source power.
+frame_gain = fpm.PlanarArrayCalibrationParameters(frame_gains=True)
+```
+
+For deterministic true-versus-assumed simulation, compile measurements with a
+deliberately translated/tilted/pitch-perturbed `true_illumination`, pass the
+nominal model as `reconstruction_model`, and build the reconstruction problem
+from `simulation.reconstruction_model`. The calibrated illumination can then be
+resolved, serialized, plotted, simulated, or compiled exactly like the nominal
+one. `result.parameter_history`, `loss_history`, `conditioning`, and
+`diagnostics` retain accepted/rejected steps and units through stable parameter
+names.
+
+### Rust workflow
+
+The equivalent Rust selection and joint run use the same canonical units:
+
+```rust,no_run
+use fpm_rs::{
+    Result,
+    algorithms::{Fpie, JointReconstruction},
+    experiment::{Illumination, Optics},
+    illumination_calibration::{
+        BoundedFiniteDifferenceOptimizer, CalibrationParameterSpec,
+        IlluminationCalibration, PlanarArrayCalibrationParameters,
+    },
+    measurements::MeasurementStack,
+    model::{ImagePlaneModel, ReconstructionShape},
+    reconstruction::{ReconstructionProblem},
+};
+
+# fn run(
+#   optics: Optics,
+#   illumination: Illumination,
+#   measurements: MeasurementStack,
+# ) -> Result<()> {
+let translation = CalibrationParameterSpec::new(-0.1, 0.1, 1e-3)
+    .finite_difference_step(1e-5);
+let rotation = CalibrationParameterSpec::new(-0.25, 0.25, 1e-2)
+    .finite_difference_step(1e-4);
+let parameters = PlanarArrayCalibrationParameters::builder()
+    .translation_specs(std::array::from_fn(|_| Some(translation.clone())))
+    .rotation_specs(std::array::from_fn(|_| Some(rotation.clone())))
+    .build()?;
+let calibration = IlluminationCalibration::new(parameters).optimizer(
+    BoundedFiniteDifferenceOptimizer {
+        max_steps: 2,
+        relative_tolerance: 1e-6,
+        ..Default::default()
+    },
+);
+let model = ImagePlaneModel::from_experiment(
+    &optics,
+    &illumination,
+    measurements.image_shape(),
+    ReconstructionShape::Smooth,
+)?;
+let problem = ReconstructionProblem::new(measurements, model)?;
+let result = JointReconstruction::new(
+    Fpie::default().iterations(1),
+    optics.clone(),
+    illumination,
+    calibration,
+    10,
+)
+.object_iterations_per_outer(10)
+.run(&problem)?;
+
+let reusable: &Illumination = &result.calibrated_illumination;
+let continued_model = ImagePlaneModel::from_experiment(
+    &optics,
+    reusable,
+    problem.model.image_shape(),
+    ReconstructionShape::Exact(problem.model.reconstruction_shape()),
+)?;
+# let _ = continued_model;
+# Ok(())
+# }
+```
+
+Rust selects pitch/distance, offsets, powers, and gains with
+`pitch_specs`, `position_offset_specs` or `position_offsets`,
+`relative_source_power_spec`, and `frame_gain_spec`. A fixed reconstructed
+object can be calibrated without alternating updates through
+`IlluminationCalibration::calibrate`.
+
+### Partial updates, persistence, and limitations
+
+Geometry changes recompute source positions, directions, k-vectors, crops, and
+subpixel offsets inside the existing grid. They retain pupil samples, optical
+sampling, background, shapes, and backend FFT plans. Source powers and frame
+gains update only compiled incoherent weights and gains; tests assert that
+k-vectors, crops, offsets, and pupils remain byte-for-byte unchanged. A global
+geometry finite difference requires one forward evaluation and one
+illumination-geometry refresh per valid side, while a power or gain difference
+uses a model clone and the intensity-only update boundary. The
+`geometry_recompilations` and `multiplicative_updates` counters include accepted
+and rejected finite-difference/line-search trial evaluations, making the partial
+update cost directly observable.
+
+Ordinary callbacks run at outer-iteration boundaries and receive
+`physical_illumination` metrics for the object and illumination phases.
+Checkpoints contain absolute/normalized physical values, histories, the final
+illumination, and the refreshed model, so resumed trajectories use the same
+state. Result bundles store these in the verified
+`domain.physical_illumination` artifact; histories do not inflate string
+metadata. Rust `JointReconstructionResult::save_json`/`load_json` and the
+matching Python methods preserve the complete structured result; `write_bundle`
+uses the normal verified bundle layout.
+
+The formulation follows the joint-estimation motivation of [J. Sun, Q. Chen,
+Y. Zhang, and C. Zuo, “Efficient positional misalignment correction method for
+Fourier ptychographic microscopy,” *Biomedical Optics Express* **7**(4),
+1336–1350 (2016)](https://doi.org/10.1364/BOE.7.001336) and the illumination
+self-calibration context of [R. Eckert, Z. F. Phillips, and L. Waller,
+“Efficient illumination angle self-calibration in Fourier ptychography,”
+*Applied Optics* **57**(19), 5434–5442
+(2018)](https://doi.org/10.1364/AO.57.005434). Unlike Sun et al., fpm-rs uses
+deterministic bounded, scaled finite differences rather than simulated
+annealing and nonlinear regression; unlike Eckert et al., it does not perform
+brightfield circle detection or spectral correlation. The shared thin-sample
+FPM forward model originates with [G. Zheng, R. Horstmeyer, and C. Yang,
+“Wide-field, high-resolution Fourier ptychographic microscopy,” *Nature
+Photonics* **7**, 739–745
+(2013)](https://doi.org/10.1038/nphoton.2013.187).
 
 ## Checkpoints, results, callbacks, and schedules
 

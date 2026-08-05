@@ -9,7 +9,8 @@ use fpm_rs::{
     Complex64, Error,
     algorithms::objective::LossType,
     algorithms::{
-        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
+        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, JointReconstruction,
+        JointReconstructionResult as CoreJointReconstructionResult, ReconstructionAlgorithm,
     },
     callbacks::{
         Callback, CallbackAction, CallbackHook, CheckpointEvery, CsvLogger, ProgressLogger,
@@ -18,6 +19,12 @@ use fpm_rs::{
     diagnostics::{
         DiagnosticRecorder as CoreDiagnosticRecorder, DiagnosticRecorderConfig, DiagnosticRequest,
         ReconstructionDiagnostics,
+    },
+    illumination_calibration::{
+        BoundedFiniteDifferenceOptimizer, CalibrationConditioning, CalibrationConvergenceReason,
+        CalibrationLossHistoryEntry, CalibrationParameterHistoryEntry, CalibrationParameterSpec,
+        IlluminationCalibration, IlluminationCalibrationState, PlanarArrayCalibrationParameters,
+        PlanarArrayParameterValues,
     },
     measurements::{FrameMetadata, MeasurementRead, MeasurementStack},
     model::Pupil,
@@ -34,6 +41,7 @@ use pyo3::{
 
 use crate::{
     arrays::{array2_to_py, complex_array2_to_py, copy_array2, vec2_to_py},
+    config::{PyIllumination, PyOptics},
     errors::to_py_err,
     measurements::extract_measurements,
     model::PyImagePlaneModel,
@@ -209,6 +217,8 @@ pub(crate) struct PyReconstructionResult {
     pub(crate) calibrated_illumination: Option<Py<PyArray2<f64>>>,
     pub(crate) recovered_frame_gains: Option<Py<PyArray1<f64>>>,
     pub(crate) recovered_background: Option<Py<PyArray1<f64>>>,
+    pub(crate) physical_illumination_calibration: Option<IlluminationCalibrationState>,
+    pub(crate) calibrated_model: Option<fpm_rs::model::ImagePlaneModel>,
     pub(crate) trace: Vec<(usize, f64, f64)>,
     pub(crate) algorithm_metrics: Vec<(usize, String, String, f64)>,
     pub(crate) scalar_diagnostics: BTreeMap<String, f64>,
@@ -219,6 +229,8 @@ pub(crate) struct PyReconstructionResult {
 impl PyReconstructionResult {
     pub(crate) fn from_core(py: Python<'_>, result: ReconstructionResult) -> PyResult<Self> {
         let pupil_shape = result.recovered_pupil.shape();
+        let physical_illumination_calibration = result.physical_illumination_calibration.clone();
+        let calibrated_model = result.calibrated_model.clone();
         let pupil_support = result.recovered_pupil.support().iter().copied().collect();
         let calibrated_illumination = result
             .calibrated_illumination
@@ -272,6 +284,8 @@ impl PyReconstructionResult {
             calibrated_illumination,
             recovered_frame_gains,
             recovered_background,
+            physical_illumination_calibration,
+            calibrated_model,
             trace,
             algorithm_metrics,
             scalar_diagnostics: result.scalar_diagnostics,
@@ -351,6 +365,8 @@ impl PyReconstructionResult {
             calibrated_illumination,
             recovered_frame_gains,
             recovered_background,
+            physical_illumination_calibration: self.physical_illumination_calibration.clone(),
+            calibrated_model: self.calibrated_model.clone(),
             trace: ReconstructionTrace {
                 iterations: self
                     .trace
@@ -539,6 +555,22 @@ impl PyReconstructionResult {
         self.recovered_background
             .as_ref()
             .map(|value| value.clone_ref(py))
+    }
+
+    #[getter]
+    fn physical_illumination_calibration(&self) -> Option<PyIlluminationCalibrationState> {
+        self.physical_illumination_calibration
+            .clone()
+            .map(|inner| PyIlluminationCalibrationState { inner })
+    }
+
+    #[getter]
+    fn calibrated_model(&self) -> Option<PyImagePlaneModel> {
+        self.calibrated_model
+            .clone()
+            .map(|inner| PyImagePlaneModel {
+                inner: Arc::new(inner),
+            })
     }
 
     #[getter]
@@ -930,6 +962,19 @@ impl Callback for PythonIterationCallback {
                     })
                     .collect::<Vec<_>>(),
             )?;
+            let physical_calibration = context
+                .state
+                .physical_illumination_calibration()
+                .map(|state| {
+                    Py::new(
+                        py,
+                        PyIlluminationCalibrationState {
+                            inner: state.clone(),
+                        },
+                    )
+                })
+                .transpose()?;
+            values.set_item("physical_illumination_calibration", physical_calibration)?;
             values.set_item("problem_name", context.problem_name)?;
             let response = self.callable.bind(py).call1((values,));
             match response {
@@ -1081,6 +1126,1072 @@ where
         }
     }
     PyReconstructionResult::from_core(py, result.map_err(to_py_err)?)
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "CalibrationParameterSpec",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyCalibrationParameterSpec {
+    inner: CalibrationParameterSpec,
+}
+
+#[pymethods]
+impl PyCalibrationParameterSpec {
+    #[new]
+    #[pyo3(signature = (lower_bound, upper_bound, *, scale=1.0, finite_difference_step=None, prior_center=None, regularization_strength=0.0))]
+    fn new(
+        lower_bound: f64,
+        upper_bound: f64,
+        scale: f64,
+        finite_difference_step: Option<f64>,
+        prior_center: Option<f64>,
+        regularization_strength: f64,
+    ) -> PyResult<Self> {
+        let mut inner = CalibrationParameterSpec::new(lower_bound, upper_bound, scale);
+        if let Some(step) = finite_difference_step {
+            inner.finite_difference_step = step;
+        }
+        inner.prior_center = prior_center;
+        inner.regularization_strength = regularization_strength;
+        inner.validate("calibration parameter").map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn lower_bound(&self) -> f64 {
+        self.inner.lower_bound
+    }
+
+    #[getter]
+    fn upper_bound(&self) -> f64 {
+        self.inner.upper_bound
+    }
+
+    #[getter]
+    fn scale(&self) -> f64 {
+        self.inner.scale
+    }
+
+    #[getter]
+    fn finite_difference_step(&self) -> f64 {
+        self.inner.finite_difference_step
+    }
+
+    #[getter]
+    fn prior_center(&self) -> Option<f64> {
+        self.inner.prior_center
+    }
+
+    #[getter]
+    fn regularization_strength(&self) -> f64 {
+        self.inner.regularization_strength
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "PlanarArrayCalibrationParameters",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyPlanarArrayCalibrationParameters {
+    inner: PlanarArrayCalibrationParameters,
+}
+
+#[pymethods]
+impl PyPlanarArrayCalibrationParameters {
+    #[new]
+    #[pyo3(signature = (*, translation=(false, false, false), rotation=(false, false, false), pitch=(false, false), reference_index=(false, false), position_offsets=Vec::new(), relative_source_power=false, frame_gains=false, translation_spec=None, rotation_spec=None, pitch_spec=None, reference_index_spec=None, position_offset_spec=None, relative_source_power_spec=None, frame_gain_spec=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        translation: (bool, bool, bool),
+        rotation: (bool, bool, bool),
+        pitch: (bool, bool),
+        reference_index: (bool, bool),
+        position_offsets: Vec<usize>,
+        relative_source_power: bool,
+        frame_gains: bool,
+        translation_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+        rotation_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+        pitch_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+        reference_index_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+        position_offset_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+        relative_source_power_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+        frame_gain_spec: Option<PyRef<'_, PyCalibrationParameterSpec>>,
+    ) -> PyResult<Self> {
+        if translation.0 && reference_index.0 || translation.1 && reference_index.1 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "lateral translation and the corresponding reference index are gauge-ambiguous",
+            ));
+        }
+        if relative_source_power && frame_gains {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "relative source power and frame gains cannot be optimized together",
+            ));
+        }
+        for (provided, selected, name) in [
+            (
+                translation_spec.is_some(),
+                translation.0 || translation.1 || translation.2,
+                "translation_spec",
+            ),
+            (
+                rotation_spec.is_some(),
+                rotation.0 || rotation.1 || rotation.2,
+                "rotation_spec",
+            ),
+            (pitch_spec.is_some(), pitch.0 || pitch.1, "pitch_spec"),
+            (
+                reference_index_spec.is_some(),
+                reference_index.0 || reference_index.1,
+                "reference_index_spec",
+            ),
+            (
+                position_offset_spec.is_some(),
+                !position_offsets.is_empty(),
+                "position_offset_spec",
+            ),
+        ] {
+            if provided && !selected {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "{name} requires at least one corresponding active parameter"
+                )));
+            }
+        }
+        let mut inner = PlanarArrayCalibrationParameters::builder()
+            .translation([translation.0, translation.1, translation.2])
+            .rotation([rotation.0, rotation.1, rotation.2])
+            .pitch([pitch.0, pitch.1])
+            .reference_index([reference_index.0, reference_index.1])
+            .position_offsets(position_offsets)
+            .relative_source_power(relative_source_power)
+            .frame_gains(frame_gains)
+            .build()
+            .map_err(to_py_err)?;
+        replace_active_specs(&mut inner.translation, translation_spec.as_deref());
+        replace_active_specs(&mut inner.rotation, rotation_spec.as_deref());
+        replace_active_specs(&mut inner.pitch, pitch_spec.as_deref());
+        replace_active_specs(&mut inner.reference_index, reference_index_spec.as_deref());
+        if let Some(spec) = position_offset_spec {
+            for specs in inner.position_offsets.values_mut() {
+                specs.fill(spec.inner.clone());
+            }
+        }
+        if relative_source_power_spec.is_some() && !relative_source_power {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "relative_source_power_spec requires relative_source_power=True",
+            ));
+        }
+        if frame_gain_spec.is_some() && !frame_gains {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "frame_gain_spec requires frame_gains=True",
+            ));
+        }
+        if let Some(spec) = relative_source_power_spec {
+            inner.relative_source_power = Some(spec.inner.clone());
+        }
+        if let Some(spec) = frame_gain_spec {
+            inner.frame_gains = Some(spec.inner.clone());
+        }
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn translation(&self) -> (bool, bool, bool) {
+        (
+            self.inner.translation[0].is_some(),
+            self.inner.translation[1].is_some(),
+            self.inner.translation[2].is_some(),
+        )
+    }
+
+    #[getter]
+    fn rotation(&self) -> (bool, bool, bool) {
+        (
+            self.inner.rotation[0].is_some(),
+            self.inner.rotation[1].is_some(),
+            self.inner.rotation[2].is_some(),
+        )
+    }
+
+    #[getter]
+    fn pitch(&self) -> (bool, bool) {
+        (self.inner.pitch[0].is_some(), self.inner.pitch[1].is_some())
+    }
+
+    #[getter]
+    fn reference_index(&self) -> (bool, bool) {
+        (
+            self.inner.reference_index[0].is_some(),
+            self.inner.reference_index[1].is_some(),
+        )
+    }
+
+    #[getter]
+    fn position_offsets(&self) -> Vec<usize> {
+        self.inner.position_offsets.keys().copied().collect()
+    }
+
+    #[getter]
+    fn relative_source_power(&self) -> bool {
+        self.inner.relative_source_power.is_some()
+    }
+
+    #[getter]
+    fn frame_gains(&self) -> bool {
+        self.inner.frame_gains.is_some()
+    }
+
+    #[getter]
+    fn translation_specs(
+        &self,
+    ) -> (
+        Option<PyCalibrationParameterSpec>,
+        Option<PyCalibrationParameterSpec>,
+        Option<PyCalibrationParameterSpec>,
+    ) {
+        specification_triple(&self.inner.translation)
+    }
+
+    #[getter]
+    fn rotation_specs(
+        &self,
+    ) -> (
+        Option<PyCalibrationParameterSpec>,
+        Option<PyCalibrationParameterSpec>,
+        Option<PyCalibrationParameterSpec>,
+    ) {
+        specification_triple(&self.inner.rotation)
+    }
+
+    #[getter]
+    fn pitch_specs(
+        &self,
+    ) -> (
+        Option<PyCalibrationParameterSpec>,
+        Option<PyCalibrationParameterSpec>,
+    ) {
+        specification_pair(&self.inner.pitch)
+    }
+
+    #[getter]
+    fn reference_index_specs(
+        &self,
+    ) -> (
+        Option<PyCalibrationParameterSpec>,
+        Option<PyCalibrationParameterSpec>,
+    ) {
+        specification_pair(&self.inner.reference_index)
+    }
+
+    #[getter]
+    fn position_offset_specs(
+        &self,
+    ) -> BTreeMap<
+        usize,
+        (
+            PyCalibrationParameterSpec,
+            PyCalibrationParameterSpec,
+            PyCalibrationParameterSpec,
+        ),
+    > {
+        self.inner
+            .position_offsets
+            .iter()
+            .map(|(&source, specs)| {
+                (
+                    source,
+                    (
+                        PyCalibrationParameterSpec {
+                            inner: specs[0].clone(),
+                        },
+                        PyCalibrationParameterSpec {
+                            inner: specs[1].clone(),
+                        },
+                        PyCalibrationParameterSpec {
+                            inner: specs[2].clone(),
+                        },
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[getter]
+    fn relative_source_power_spec(&self) -> Option<PyCalibrationParameterSpec> {
+        self.inner
+            .relative_source_power
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner })
+    }
+
+    #[getter]
+    fn frame_gain_spec(&self) -> Option<PyCalibrationParameterSpec> {
+        self.inner
+            .frame_gains
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner })
+    }
+}
+
+fn specification_triple(
+    values: &[Option<CalibrationParameterSpec>; 3],
+) -> (
+    Option<PyCalibrationParameterSpec>,
+    Option<PyCalibrationParameterSpec>,
+    Option<PyCalibrationParameterSpec>,
+) {
+    (
+        values[0]
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner }),
+        values[1]
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner }),
+        values[2]
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner }),
+    )
+}
+
+fn specification_pair(
+    values: &[Option<CalibrationParameterSpec>; 2],
+) -> (
+    Option<PyCalibrationParameterSpec>,
+    Option<PyCalibrationParameterSpec>,
+) {
+    (
+        values[0]
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner }),
+        values[1]
+            .clone()
+            .map(|inner| PyCalibrationParameterSpec { inner }),
+    )
+}
+
+fn replace_active_specs<const N: usize>(
+    values: &mut [Option<CalibrationParameterSpec>; N],
+    replacement: Option<&PyCalibrationParameterSpec>,
+) {
+    if let Some(replacement) = replacement {
+        for value in values.iter_mut().flatten() {
+            *value = replacement.inner.clone();
+        }
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "BoundedFiniteDifferenceOptimizer",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyBoundedFiniteDifferenceOptimizer {
+    inner: BoundedFiniteDifferenceOptimizer,
+}
+
+#[pymethods]
+impl PyBoundedFiniteDifferenceOptimizer {
+    #[new]
+    #[pyo3(signature = (*, max_steps=2, relative_tolerance=1e-6, initial_step_size=0.25, minimum_step_size=1e-6, step_reduction=0.5))]
+    fn new(
+        max_steps: usize,
+        relative_tolerance: f64,
+        initial_step_size: f64,
+        minimum_step_size: f64,
+        step_reduction: f64,
+    ) -> PyResult<Self> {
+        let inner = BoundedFiniteDifferenceOptimizer {
+            max_steps,
+            relative_tolerance,
+            initial_step_size,
+            minimum_step_size,
+            step_reduction,
+        };
+        inner.validate().map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn max_steps(&self) -> usize {
+        self.inner.max_steps
+    }
+
+    #[getter]
+    fn relative_tolerance(&self) -> f64 {
+        self.inner.relative_tolerance
+    }
+
+    #[getter]
+    fn initial_step_size(&self) -> f64 {
+        self.inner.initial_step_size
+    }
+
+    #[getter]
+    fn minimum_step_size(&self) -> f64 {
+        self.inner.minimum_step_size
+    }
+
+    #[getter]
+    fn step_reduction(&self) -> f64 {
+        self.inner.step_reduction
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "IlluminationCalibration",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyIlluminationCalibration {
+    inner: IlluminationCalibration,
+}
+
+#[pymethods]
+impl PyIlluminationCalibration {
+    #[new]
+    #[pyo3(signature = (parameters, *, optimizer=None, loss_type="amplitude_mse"))]
+    fn new(
+        parameters: PyRef<'_, PyPlanarArrayCalibrationParameters>,
+        optimizer: Option<PyRef<'_, PyBoundedFiniteDifferenceOptimizer>>,
+        loss_type: &str,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: IlluminationCalibration::new(parameters.inner.clone())
+                .optimizer(
+                    optimizer
+                        .map(|value| value.inner.clone())
+                        .unwrap_or_default(),
+                )
+                .loss_type(parse_loss_type(loss_type)?),
+        })
+    }
+
+    #[getter]
+    fn parameters(&self) -> PyPlanarArrayCalibrationParameters {
+        PyPlanarArrayCalibrationParameters {
+            inner: self.inner.parameters.clone(),
+        }
+    }
+
+    #[getter]
+    fn optimizer(&self) -> PyBoundedFiniteDifferenceOptimizer {
+        PyBoundedFiniteDifferenceOptimizer {
+            inner: self.inner.optimizer.clone(),
+        }
+    }
+
+    #[getter]
+    fn loss_type(&self) -> &'static str {
+        loss_type_name(self.inner.loss_type)
+    }
+}
+
+fn loss_type_name(loss_type: LossType) -> &'static str {
+    match loss_type {
+        LossType::AmplitudeMse => "amplitude_mse",
+        LossType::IntensityMse => "intensity_mse",
+        LossType::PoissonNegativeLogLikelihood => "poisson_nll",
+        LossType::HuberAmplitude => "huber_amplitude",
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "PlanarArrayParameterValues",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyPlanarArrayParameterValues {
+    inner: PlanarArrayParameterValues,
+}
+
+#[pymethods]
+impl PyPlanarArrayParameterValues {
+    #[getter]
+    fn translation_m(&self) -> (f64, f64, f64) {
+        self.inner.translation_m.into()
+    }
+
+    #[getter]
+    fn rotation_rad(&self) -> (f64, f64, f64) {
+        self.inner.rotation_rad.into()
+    }
+
+    #[getter]
+    fn pitch_m(&self) -> (f64, f64) {
+        self.inner.pitch_m.into()
+    }
+
+    #[getter]
+    fn reference_index(&self) -> (f64, f64) {
+        self.inner.reference_index.into()
+    }
+
+    #[getter]
+    fn position_offsets_m(&self) -> Vec<(f64, f64, f64)> {
+        self.inner
+            .position_offsets_m
+            .iter()
+            .map(|value| (*value).into())
+            .collect()
+    }
+
+    #[getter]
+    fn relative_source_power(&self) -> Vec<f64> {
+        self.inner.relative_source_power.clone()
+    }
+
+    #[getter]
+    fn frame_gains(&self) -> Vec<f64> {
+        self.inner.frame_gains.clone()
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "CalibrationParameterHistoryEntry",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyCalibrationParameterHistoryEntry {
+    inner: CalibrationParameterHistoryEntry,
+}
+
+#[pymethods]
+impl PyCalibrationParameterHistoryEntry {
+    #[getter]
+    fn outer_iteration(&self) -> usize {
+        self.inner.outer_iteration
+    }
+
+    #[getter]
+    fn optimizer_step(&self) -> usize {
+        self.inner.optimizer_step
+    }
+
+    #[getter]
+    fn accepted(&self) -> bool {
+        self.inner.accepted
+    }
+
+    #[getter]
+    fn step_size(&self) -> f64 {
+        self.inner.step_size
+    }
+
+    #[getter]
+    fn normalized_values(&self) -> Vec<f64> {
+        self.inner.normalized_values.clone()
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "CalibrationLossHistoryEntry",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyCalibrationLossHistoryEntry {
+    inner: CalibrationLossHistoryEntry,
+}
+
+#[pymethods]
+impl PyCalibrationLossHistoryEntry {
+    #[getter]
+    fn outer_iteration(&self) -> usize {
+        self.inner.outer_iteration
+    }
+
+    #[getter]
+    fn optimizer_step(&self) -> usize {
+        self.inner.optimizer_step
+    }
+
+    #[getter]
+    fn total_loss(&self) -> f64 {
+        self.inner.total_loss
+    }
+
+    #[getter]
+    fn data_loss(&self) -> f64 {
+        self.inner.data_loss
+    }
+
+    #[getter]
+    fn regularization_loss(&self) -> f64 {
+        self.inner.regularization_loss
+    }
+
+    #[getter]
+    fn accepted(&self) -> bool {
+        self.inner.accepted
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "CalibrationConditioning",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyCalibrationConditioning {
+    inner: CalibrationConditioning,
+}
+
+#[pymethods]
+impl PyCalibrationConditioning {
+    #[getter]
+    fn parameter_names(&self) -> Vec<String> {
+        self.inner.parameter_names.clone()
+    }
+
+    #[getter]
+    fn scaled_sensitivities(&self) -> Vec<f64> {
+        self.inner.scaled_sensitivities.clone()
+    }
+
+    #[getter]
+    fn scaled_diagonal_curvature(&self) -> Vec<f64> {
+        self.inner.scaled_diagonal_curvature.clone()
+    }
+
+    #[getter]
+    fn diagonal_condition_estimate(&self) -> Option<f64> {
+        self.inner.diagonal_condition_estimate
+    }
+
+    #[getter]
+    fn parameters_at_bounds(&self) -> Vec<String> {
+        self.inner.parameters_at_bounds.clone()
+    }
+
+    #[getter]
+    fn rejected_steps(&self) -> usize {
+        self.inner.rejected_steps
+    }
+
+    #[getter]
+    fn warnings(&self) -> Vec<String> {
+        self.inner.warnings.clone()
+    }
+}
+
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "IlluminationCalibrationState",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyIlluminationCalibrationState {
+    inner: IlluminationCalibrationState,
+}
+
+#[pymethods]
+impl PyIlluminationCalibrationState {
+    #[getter]
+    fn initial_illumination(&self) -> PyIllumination {
+        PyIllumination {
+            inner: self.inner.initial_illumination.clone(),
+        }
+    }
+
+    #[getter]
+    fn current_illumination(&self) -> PyIllumination {
+        PyIllumination {
+            inner: self.inner.current_illumination.clone(),
+        }
+    }
+
+    #[getter]
+    fn initial_parameters(&self) -> PyPlanarArrayParameterValues {
+        PyPlanarArrayParameterValues {
+            inner: self.inner.initial_parameters.clone(),
+        }
+    }
+
+    #[getter]
+    fn current_parameters(&self) -> PyPlanarArrayParameterValues {
+        PyPlanarArrayParameterValues {
+            inner: self.inner.current_parameters.clone(),
+        }
+    }
+
+    #[getter]
+    fn parameter_names(&self) -> Vec<String> {
+        self.inner.parameter_names.clone()
+    }
+
+    #[getter]
+    fn normalized_variables(&self) -> Vec<f64> {
+        self.inner.normalized_variables.clone()
+    }
+
+    #[getter]
+    fn applied_constraints(&self) -> Vec<String> {
+        self.inner.applied_constraints.clone()
+    }
+
+    #[getter]
+    fn parameter_history(&self) -> Vec<PyCalibrationParameterHistoryEntry> {
+        self.inner
+            .parameter_history
+            .iter()
+            .cloned()
+            .map(|inner| PyCalibrationParameterHistoryEntry { inner })
+            .collect()
+    }
+
+    #[getter]
+    fn loss_history(&self) -> Vec<PyCalibrationLossHistoryEntry> {
+        self.inner
+            .loss_history
+            .iter()
+            .cloned()
+            .map(|inner| PyCalibrationLossHistoryEntry { inner })
+            .collect()
+    }
+
+    #[getter]
+    fn convergence_reason(&self) -> Option<&'static str> {
+        self.inner.convergence_reason.map(convergence_reason_name)
+    }
+
+    #[getter]
+    fn conditioning(&self) -> PyCalibrationConditioning {
+        PyCalibrationConditioning {
+            inner: self.inner.conditioning.clone(),
+        }
+    }
+
+    #[getter]
+    fn geometry_recompilations(&self) -> usize {
+        self.inner.geometry_recompilations
+    }
+
+    #[getter]
+    fn multiplicative_updates(&self) -> usize {
+        self.inner.multiplicative_updates
+    }
+
+    #[getter]
+    fn rejected_steps(&self) -> usize {
+        self.inner.rejected_steps
+    }
+}
+
+fn convergence_reason_name(reason: CalibrationConvergenceReason) -> &'static str {
+    match reason {
+        CalibrationConvergenceReason::MaximumSteps => "maximum_steps",
+        CalibrationConvergenceReason::RelativeTolerance => "relative_tolerance",
+        CalibrationConvergenceReason::NegligibleGradient => "negligible_gradient",
+        CalibrationConvergenceReason::LineSearchFailed => "line_search_failed",
+    }
+}
+
+#[pyclass(module = "fpm_rs._core", name = "JointReconstruction", frozen)]
+pub(crate) struct PyJointReconstruction {
+    inner: PyJointObjectAlgorithm,
+}
+
+#[derive(Clone)]
+enum PyJointObjectAlgorithm {
+    Fpie(JointReconstruction<Fpie>),
+    Epry(JointReconstruction<Epry>),
+}
+
+impl PyJointObjectAlgorithm {
+    fn outer_iterations(&self) -> usize {
+        match self {
+            Self::Fpie(value) => value.outer_iterations,
+            Self::Epry(value) => value.outer_iterations,
+        }
+    }
+
+    fn validate(&self) -> fpm_rs::Result<()> {
+        match self {
+            Self::Fpie(value) => value.validate(),
+            Self::Epry(value) => value.validate(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyJointReconstruction {
+    #[new]
+    #[pyo3(signature = (object_algorithm, optics, initial_illumination, illumination_calibration, *, outer_iterations=10, object_iterations_per_outer=1, illumination_steps_per_outer=1))]
+    fn new(
+        object_algorithm: &Bound<'_, PyAny>,
+        optics: PyRef<'_, PyOptics>,
+        initial_illumination: PyRef<'_, PyIllumination>,
+        illumination_calibration: PyRef<'_, PyIlluminationCalibration>,
+        outer_iterations: usize,
+        object_iterations_per_outer: usize,
+        illumination_steps_per_outer: usize,
+    ) -> PyResult<Self> {
+        let inner = if let Ok(algorithm) = object_algorithm.extract::<PyRef<'_, PyFpie>>() {
+            PyJointObjectAlgorithm::Fpie(
+                JointReconstruction::new(
+                    algorithm.inner.clone(),
+                    optics.inner.clone(),
+                    initial_illumination.inner.clone(),
+                    illumination_calibration.inner.clone(),
+                    outer_iterations,
+                )
+                .object_iterations_per_outer(object_iterations_per_outer)
+                .illumination_steps_per_outer(illumination_steps_per_outer),
+            )
+        } else if let Ok(algorithm) = object_algorithm.extract::<PyRef<'_, PyEpry>>() {
+            PyJointObjectAlgorithm::Epry(
+                JointReconstruction::new(
+                    algorithm.inner.clone(),
+                    optics.inner.clone(),
+                    initial_illumination.inner.clone(),
+                    illumination_calibration.inner.clone(),
+                    outer_iterations,
+                )
+                .object_iterations_per_outer(object_iterations_per_outer)
+                .illumination_steps_per_outer(illumination_steps_per_outer),
+            )
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "object_algorithm must be Fpie or Epry",
+            ));
+        };
+        inner.validate().map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (problem, *, callbacks=None, resume_from=None, schedule="sequential", schedule_seed=0))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        problem: PyRef<'_, PyReconstructionProblem>,
+        callbacks: Option<&Bound<'_, PyAny>>,
+        resume_from: Option<PyRef<'_, PyReconstructionCheckpoint>>,
+        schedule: &str,
+        schedule_seed: u64,
+    ) -> PyResult<PyJointReconstructionResult> {
+        let algorithm = self.inner.clone();
+        let options = RunOptions {
+            max_iterations: algorithm.outer_iterations(),
+            batch_size: usize::MAX,
+            schedule: parse_schedule(schedule, schedule_seed)?,
+            enable_frame_callbacks: false,
+        };
+        let problem = problem.inner.clone();
+        let checkpoint = resume_from.map(|value| (*value.inner).clone());
+        let (callbacks, callback_errors) = build_callbacks(py, callbacks)?;
+        let result = py.detach(move || {
+            let reconstruction = match algorithm {
+                PyJointObjectAlgorithm::Fpie(algorithm) => {
+                    let mut runner = Runner::new(algorithm, options).with_callbacks(callbacks);
+                    if let Some(checkpoint) = checkpoint {
+                        runner = runner.resume_from(checkpoint);
+                    }
+                    runner.run(&problem)
+                }
+                PyJointObjectAlgorithm::Epry(algorithm) => {
+                    let mut runner = Runner::new(algorithm, options).with_callbacks(callbacks);
+                    if let Some(checkpoint) = checkpoint {
+                        runner = runner.resume_from(checkpoint);
+                    }
+                    runner.run(&problem)
+                }
+            }?;
+            CoreJointReconstructionResult::from_reconstruction(reconstruction)
+        });
+        for error in callback_errors {
+            if let Some(error) = lock_callback_error(&error).take() {
+                return Err(error);
+            }
+        }
+        PyJointReconstructionResult::from_core(py, result.map_err(to_py_err)?)
+    }
+}
+
+#[pyclass(module = "fpm_rs._core", name = "JointReconstructionResult", frozen)]
+pub(crate) struct PyJointReconstructionResult {
+    reconstruction: Py<PyReconstructionResult>,
+    initial_illumination: PyIllumination,
+    calibrated_illumination: PyIllumination,
+    calibrated_model: PyImagePlaneModel,
+    initial_parameters: PyPlanarArrayParameterValues,
+    final_parameters: PyPlanarArrayParameterValues,
+    parameter_history: Vec<PyCalibrationParameterHistoryEntry>,
+    loss_history: Vec<PyCalibrationLossHistoryEntry>,
+    convergence_reason: Option<&'static str>,
+    conditioning: PyCalibrationConditioning,
+    diagnostics: PyIlluminationCalibrationState,
+}
+
+impl PyJointReconstructionResult {
+    fn from_core(py: Python<'_>, result: CoreJointReconstructionResult) -> PyResult<Self> {
+        let initial_illumination = PyIllumination {
+            inner: result.initial_illumination,
+        };
+        let calibrated_illumination = PyIllumination {
+            inner: result.calibrated_illumination,
+        };
+        let calibrated_model = PyImagePlaneModel {
+            inner: Arc::new(result.calibrated_model),
+        };
+        let initial_parameters = PyPlanarArrayParameterValues {
+            inner: result.initial_parameters,
+        };
+        let final_parameters = PyPlanarArrayParameterValues {
+            inner: result.final_parameters,
+        };
+        let parameter_history = result
+            .parameter_history
+            .into_iter()
+            .map(|inner| PyCalibrationParameterHistoryEntry { inner })
+            .collect();
+        let loss_history = result
+            .loss_history
+            .into_iter()
+            .map(|inner| PyCalibrationLossHistoryEntry { inner })
+            .collect();
+        let convergence_reason = result.convergence_reason.map(convergence_reason_name);
+        let conditioning = PyCalibrationConditioning {
+            inner: result.conditioning,
+        };
+        let diagnostics = PyIlluminationCalibrationState {
+            inner: result.diagnostics,
+        };
+        let reconstruction = Py::new(
+            py,
+            PyReconstructionResult::from_core(py, result.reconstruction)?,
+        )?;
+        Ok(Self {
+            reconstruction,
+            initial_illumination,
+            calibrated_illumination,
+            calibrated_model,
+            initial_parameters,
+            final_parameters,
+            parameter_history,
+            loss_history,
+            convergence_reason,
+            conditioning,
+            diagnostics,
+        })
+    }
+
+    fn to_core(&self, py: Python<'_>) -> PyResult<CoreJointReconstructionResult> {
+        let reconstruction = self.reconstruction.bind(py).borrow().to_core(py)?;
+        CoreJointReconstructionResult::from_reconstruction(reconstruction).map_err(to_py_err)
+    }
+}
+
+#[pymethods]
+impl PyJointReconstructionResult {
+    #[getter]
+    fn reconstruction(&self, py: Python<'_>) -> Py<PyReconstructionResult> {
+        self.reconstruction.clone_ref(py)
+    }
+
+    #[getter]
+    fn initial_illumination(&self) -> PyIllumination {
+        self.initial_illumination.clone()
+    }
+
+    #[getter]
+    fn calibrated_illumination(&self) -> PyIllumination {
+        self.calibrated_illumination.clone()
+    }
+
+    #[getter]
+    fn calibrated_model(&self) -> PyImagePlaneModel {
+        self.calibrated_model.clone()
+    }
+
+    #[getter]
+    fn initial_parameters(&self) -> PyPlanarArrayParameterValues {
+        self.initial_parameters.clone()
+    }
+
+    #[getter]
+    fn final_parameters(&self) -> PyPlanarArrayParameterValues {
+        self.final_parameters.clone()
+    }
+
+    #[getter]
+    fn parameter_history(&self) -> Vec<PyCalibrationParameterHistoryEntry> {
+        self.parameter_history.clone()
+    }
+
+    #[getter]
+    fn loss_history(&self) -> Vec<PyCalibrationLossHistoryEntry> {
+        self.loss_history.clone()
+    }
+
+    #[getter]
+    fn convergence_reason(&self) -> Option<&'static str> {
+        self.convergence_reason
+    }
+
+    #[getter]
+    fn conditioning(&self) -> PyCalibrationConditioning {
+        self.conditioning.clone()
+    }
+
+    #[getter]
+    fn diagnostics(&self) -> PyIlluminationCalibrationState {
+        self.diagnostics.clone()
+    }
+
+    fn save_json(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
+        let result = self.to_core(py)?;
+        py.detach(move || result.save_json(path)).map_err(to_py_err)
+    }
+
+    #[staticmethod]
+    fn load_json(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
+        let result = py
+            .detach(move || CoreJointReconstructionResult::load_json(path))
+            .map_err(to_py_err)?;
+        Self::from_core(py, result)
+    }
+
+    #[pyo3(signature = (path, *, run_id=None, label=None, include_previews=true))]
+    fn write_bundle(
+        &self,
+        py: Python<'_>,
+        path: PathBuf,
+        run_id: Option<String>,
+        label: Option<String>,
+        include_previews: bool,
+    ) -> PyResult<crate::bundle::PyResultBundle> {
+        let result = self.to_core(py)?;
+        let bundle = py
+            .detach(move || {
+                result.write_bundle(
+                    path,
+                    fpm_rs::reconstruction::BundleExportOptions {
+                        run_id,
+                        label,
+                        include_previews,
+                    },
+                )
+            })
+            .map_err(to_py_err)?;
+        Ok(crate::bundle::PyResultBundle::from_core(bundle))
+    }
 }
 
 /// Alternating-projection reconstruction for Fourier ptychographic microscopy.
@@ -1562,6 +2673,17 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySavePupilEvery>()?;
     module.add_class::<PySaveResidualsEvery>()?;
     module.add_class::<PyIterationCallback>()?;
+    module.add_class::<PyCalibrationParameterSpec>()?;
+    module.add_class::<PyPlanarArrayCalibrationParameters>()?;
+    module.add_class::<PyBoundedFiniteDifferenceOptimizer>()?;
+    module.add_class::<PyIlluminationCalibration>()?;
+    module.add_class::<PyPlanarArrayParameterValues>()?;
+    module.add_class::<PyCalibrationParameterHistoryEntry>()?;
+    module.add_class::<PyCalibrationLossHistoryEntry>()?;
+    module.add_class::<PyCalibrationConditioning>()?;
+    module.add_class::<PyIlluminationCalibrationState>()?;
+    module.add_class::<PyJointReconstruction>()?;
+    module.add_class::<PyJointReconstructionResult>()?;
     module.add_class::<PyAlternatingProjection>()?;
     module.add_class::<PyFpie>()?;
     module.add_class::<PyEpry>()?;

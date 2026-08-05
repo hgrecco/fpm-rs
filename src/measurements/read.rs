@@ -35,6 +35,40 @@ pub trait MeasurementRead: Sync {
     fn validate(&self) -> Result<()>;
 }
 
+impl<T: MeasurementRead + ?Sized> MeasurementRead for &T {
+    fn frame_count(&self) -> usize {
+        T::frame_count(self)
+    }
+
+    fn image_shape(&self) -> (usize, usize) {
+        T::image_shape(self)
+    }
+
+    fn frame_len(&self) -> usize {
+        T::frame_len(self)
+    }
+
+    fn frame(&self, index: usize) -> Result<impl Deref<Target = [f64]> + '_> {
+        T::frame(self, index)
+    }
+
+    fn frame_weight(&self, index: usize) -> Result<f64> {
+        T::frame_weight(self, index)
+    }
+
+    fn frame_mask(&self, index: usize) -> Result<Option<&[u8]>> {
+        T::frame_mask(self, index)
+    }
+
+    fn frame_metadata(&self) -> &[FrameMetadata] {
+        T::frame_metadata(self)
+    }
+
+    fn validate(&self) -> Result<()> {
+        T::validate(self)
+    }
+}
+
 impl MeasurementRead for MeasurementStack {
     fn frame_count(&self) -> usize {
         MeasurementStack::frame_count(self)

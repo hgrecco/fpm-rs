@@ -29,12 +29,12 @@ use super::{
         ARRAY_BACKGROUND, ARRAY_FRAME_GAINS, ARRAY_ILLUMINATION_CALIBRATION, ARRAY_OBJECT,
         ARRAY_OBJECT_SPECTRUM, ARRAY_PUPIL, ARRAY_PUPIL_SUPPORT, BUNDLE_FORMAT_VERSION,
         BundleExportOptions, BundleManifest, DOMAIN_DIAGNOSTICS, DOMAIN_EVALUATION,
-        DatasetIdentity, ManifestArtifact, PREVIEW_FOURIER_COVERAGE, PREVIEW_OBJECT_AMPLITUDE,
-        PREVIEW_OBJECT_PHASE, PREVIEW_PUPIL_AMPLITUDE, PREVIEW_PUPIL_PHASE, ResultDescriptor,
-        TABLE_ALGORITHM_METRICS, TABLE_FRAME_CALIBRATION, TABLE_FRAME_DIAGNOSTICS,
-        TABLE_FRAME_EVALUATION, TABLE_HISTORY, TABLE_ILLUMINATION_CALIBRATION,
-        TABLE_ITERATION_DIAGNOSTICS, TABLE_METADATA, TABLE_RAW_FRAME_STATISTICS,
-        TABLE_SCALAR_DIAGNOSTICS, TABLE_SUMMARY,
+        DOMAIN_PHYSICAL_ILLUMINATION, DatasetIdentity, ManifestArtifact, PREVIEW_FOURIER_COVERAGE,
+        PREVIEW_OBJECT_AMPLITUDE, PREVIEW_OBJECT_PHASE, PREVIEW_PUPIL_AMPLITUDE,
+        PREVIEW_PUPIL_PHASE, ResultDescriptor, TABLE_ALGORITHM_METRICS, TABLE_FRAME_CALIBRATION,
+        TABLE_FRAME_DIAGNOSTICS, TABLE_FRAME_EVALUATION, TABLE_HISTORY,
+        TABLE_ILLUMINATION_CALIBRATION, TABLE_ITERATION_DIAGNOSTICS, TABLE_METADATA,
+        TABLE_RAW_FRAME_STATISTICS, TABLE_SCALAR_DIAGNOSTICS, TABLE_SUMMARY,
     },
     npy,
     options::ParquetWriteOptions,
@@ -173,6 +173,18 @@ pub(crate) fn write_result_bundle(
                 "domain/evaluation.json",
                 DOMAIN_EVALUATION,
                 evaluation,
+                &mut artifacts,
+            )?;
+        }
+        if let (Some(calibration), Some(model)) = (
+            &result.physical_illumination_calibration,
+            &result.calibrated_model,
+        ) {
+            write_json_artifact(
+                &workspace,
+                "domain/physical_illumination.json",
+                DOMAIN_PHYSICAL_ILLUMINATION,
+                &(calibration, model),
                 &mut artifacts,
             )?;
         }

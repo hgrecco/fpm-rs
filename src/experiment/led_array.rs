@@ -160,6 +160,24 @@ impl PlanarLedArray {
         self
     }
 
+    /// Replaces the physical `(pitch_x, pitch_y)` lattice spacing in metres.
+    pub fn with_pitch_m(mut self, pitch_m: (f64, f64)) -> Self {
+        self.pitch_m = pitch_m;
+        self
+    }
+
+    /// Replaces the fractional `(column, row)` lattice coordinate at the pose origin.
+    pub fn with_reference_index(mut self, reference_index: (f64, f64)) -> Self {
+        self.reference_index = reference_index;
+        self
+    }
+
+    /// Replaces the active-extrinsic-XYZ rigid pose of the array.
+    pub fn with_pose(mut self, pose: ArrayPose) -> Self {
+        self.pose = pose;
+        self
+    }
+
     /// Returns array shape as `(rows, columns)`.
     pub const fn shape(&self) -> (usize, usize) {
         self.shape

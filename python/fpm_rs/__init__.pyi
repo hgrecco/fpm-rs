@@ -1115,6 +1115,246 @@ def simulate(
         acquisition metadata.
     """
 
+class CalibrationParameterSpec:
+    """Numerical controls for one bounded physical parameter.
+
+    Bounds, finite-difference steps, prior centers, and scales use the physical
+    unit of the selected parameter: metres for translations, pitches, and
+    offsets; radians for rotations; and dimensionless values otherwise.
+    """
+    def __init__(
+        self,
+        lower_bound: float,
+        upper_bound: float,
+        *,
+        scale: float = 1.0,
+        finite_difference_step: float | None = None,
+        prior_center: float | None = None,
+        regularization_strength: float = 0.0,
+    ) -> None: ...
+    lower_bound: float
+    """Inclusive lower bound in the parameter's physical unit."""
+    upper_bound: float
+    """Inclusive upper bound in the parameter's physical unit."""
+    scale: float
+    """Positive physical increment represented by one normalized unit."""
+    finite_difference_step: float
+    """Positive perturbation used for central or one-sided differences."""
+    prior_center: float | None
+    """Optional center of the quadratic prior in physical units."""
+    regularization_strength: float
+    """Nonnegative coefficient of the quadratic prior."""
+
+class PlanarArrayCalibrationParameters:
+    """Explicit physical parameters selected for planar LED-array calibration.
+
+    Unselected groups remain fixed. ``position_offsets`` contains stable
+    row-major source indices; each selected source exposes local XYZ offsets.
+    Lateral translation cannot be combined with the corresponding reference
+    index, and source powers cannot be combined with frame gains because those
+    choices contain unresolved gauges.
+    """
+    def __init__(
+        self,
+        *,
+        translation: tuple[bool, bool, bool] = (False, False, False),
+        rotation: tuple[bool, bool, bool] = (False, False, False),
+        pitch: tuple[bool, bool] = (False, False),
+        reference_index: tuple[bool, bool] = (False, False),
+        position_offsets: Sequence[int] = (),
+        relative_source_power: bool = False,
+        frame_gains: bool = False,
+        translation_spec: CalibrationParameterSpec | None = None,
+        rotation_spec: CalibrationParameterSpec | None = None,
+        pitch_spec: CalibrationParameterSpec | None = None,
+        reference_index_spec: CalibrationParameterSpec | None = None,
+        position_offset_spec: CalibrationParameterSpec | None = None,
+        relative_source_power_spec: CalibrationParameterSpec | None = None,
+        frame_gain_spec: CalibrationParameterSpec | None = None,
+    ) -> None: ...
+    translation: tuple[bool, bool, bool]
+    """Active ``(tx, ty, tz)`` pose components in metres."""
+    rotation: tuple[bool, bool, bool]
+    """Active extrinsic ``(rx, ry, rz)`` components in radians."""
+    pitch: tuple[bool, bool]
+    """Active ``(pitch_x, pitch_y)`` lattice spacings in metres."""
+    reference_index: tuple[bool, bool]
+    """Active fractional ``(column, row)`` reference-index coordinates."""
+    position_offsets: list[int]
+    """Sorted row-major source indices whose XYZ offsets are active."""
+    relative_source_power: bool
+    """Whether mean-one per-source relative intensities are active."""
+    frame_gains: bool
+    """Whether mean-one per-frame intensity gains are active."""
+    translation_specs: tuple[
+        CalibrationParameterSpec | None,
+        CalibrationParameterSpec | None,
+        CalibrationParameterSpec | None,
+    ]
+    """Inspectable per-component ``(tx, ty, tz)`` numerical specifications."""
+    rotation_specs: tuple[
+        CalibrationParameterSpec | None,
+        CalibrationParameterSpec | None,
+        CalibrationParameterSpec | None,
+    ]
+    """Inspectable per-component ``(rx, ry, rz)`` numerical specifications."""
+    pitch_specs: tuple[
+        CalibrationParameterSpec | None, CalibrationParameterSpec | None
+    ]
+    """Inspectable per-component ``(pitch_x, pitch_y)`` specifications."""
+    reference_index_specs: tuple[
+        CalibrationParameterSpec | None, CalibrationParameterSpec | None
+    ]
+    """Inspectable reference-column and reference-row specifications."""
+    position_offset_specs: dict[
+        int,
+        tuple[
+            CalibrationParameterSpec,
+            CalibrationParameterSpec,
+            CalibrationParameterSpec,
+        ],
+    ]
+    """Inspectable source-indexed XYZ offset specifications."""
+    relative_source_power_spec: CalibrationParameterSpec | None
+    """Common numerical specification for active source powers."""
+    frame_gain_spec: CalibrationParameterSpec | None
+    """Common numerical specification for active frame gains."""
+
+class BoundedFiniteDifferenceOptimizer:
+    """Deterministic scaled finite differences with bounded backtracking."""
+    def __init__(
+        self,
+        *,
+        max_steps: int = 2,
+        relative_tolerance: float = 1e-6,
+        initial_step_size: float = 0.25,
+        minimum_step_size: float = 1e-6,
+        step_reduction: float = 0.5,
+    ) -> None: ...
+    max_steps: int
+    """Maximum bounded gradient steps per illumination-update phase."""
+    relative_tolerance: float
+    """Relative objective-improvement threshold for convergence."""
+    initial_step_size: float
+    """Initial step length in normalized parameter coordinates."""
+    minimum_step_size: float
+    """Smallest normalized step attempted by backtracking."""
+    step_reduction: float
+    """Factor in ``(0, 1)`` applied after a rejected trial."""
+
+class IlluminationCalibration:
+    """Physical parameter selection, bounded optimizer, and canonical data loss.
+
+    The default ``amplitude_mse`` is the same measurement-domain objective used
+    by reconstruction diagnostics. Masks and frame weights are honored.
+    """
+    def __init__(
+        self,
+        parameters: PlanarArrayCalibrationParameters,
+        *,
+        optimizer: BoundedFiniteDifferenceOptimizer | None = None,
+        loss_type: str = "amplitude_mse",
+    ) -> None: ...
+    parameters: PlanarArrayCalibrationParameters
+    """Explicit planar-array parameter selection and numerical specifications."""
+    optimizer: BoundedFiniteDifferenceOptimizer
+    """Bounded deterministic optimizer settings."""
+    loss_type: str
+    """Canonical measurement-domain loss name."""
+
+class PlanarArrayParameterValues:
+    """Absolute inspectable planar-array, power, and frame-gain values."""
+    translation_m: tuple[float, float, float]
+    """Absolute array-pose translation ``(tx, ty, tz)`` in metres."""
+    rotation_rad: tuple[float, float, float]
+    """Absolute active extrinsic XYZ rotation angles in radians."""
+    pitch_m: tuple[float, float]
+    """Absolute column and row pitch in metres."""
+    reference_index: tuple[float, float]
+    """Absolute fractional reference column and row."""
+    position_offsets_m: list[tuple[float, float, float]]
+    """Row-major per-source XYZ offsets in metres."""
+    relative_source_power: list[float]
+    """Mean-one relative intensity for every source."""
+    frame_gains: list[float]
+    """Mean-one intensity gain for every acquisition frame."""
+
+class CalibrationParameterHistoryEntry:
+    """One accepted or rejected bounded parameter trial."""
+    outer_iteration: int
+    """One-based alternating-reconstruction iteration."""
+    optimizer_step: int
+    """One-based physical optimizer step within the phase."""
+    accepted: bool
+    """Whether this trial reduced the regularized objective."""
+    step_size: float
+    """Attempted line-search step in normalized coordinates."""
+    normalized_values: list[float]
+    """Parameter values relative to their initial values and scales."""
+
+class CalibrationLossHistoryEntry:
+    """Data, regularization, and total loss for one physical trial."""
+    outer_iteration: int
+    """One-based alternating-reconstruction iteration."""
+    optimizer_step: int
+    """One-based physical optimizer step within the phase."""
+    total_loss: float
+    """Sum of the canonical data loss and all configured priors."""
+    data_loss: float
+    """Masked and frame-weighted measurement-domain loss."""
+    regularization_loss: float
+    """Sum of configured quadratic prior and regularization contributions."""
+    accepted: bool
+    """Whether the corresponding parameter trial was accepted."""
+
+class CalibrationConditioning:
+    """Practical scaled sensitivity and curvature diagnostics, not uncertainty."""
+    parameter_names: list[str]
+    """Stable names corresponding to every diagnostic vector entry."""
+    scaled_sensitivities: list[float]
+    """Absolute finite-difference derivatives in normalized coordinates."""
+    scaled_diagonal_curvature: list[float]
+    """Finite-difference diagonal curvature estimates in normalized coordinates."""
+    diagonal_condition_estimate: float | None
+    """Largest-to-smallest useful diagonal-curvature ratio, when defined."""
+    parameters_at_bounds: list[str]
+    """Names whose final physical values meet a configured bound."""
+    rejected_steps: int
+    """Cumulative number of rejected line-search trials."""
+    warnings: list[str]
+    """Human-readable weak-identifiability and numerical warnings."""
+
+class IlluminationCalibrationState:
+    """Checkpointable physical values, gauges, histories, and update counters."""
+    initial_illumination: Illumination
+    """Serializable illumination supplied before gauge normalization."""
+    current_illumination: Illumination
+    """Current normal serializable calibrated illumination."""
+    initial_parameters: PlanarArrayParameterValues
+    """Immutable absolute values at initialization."""
+    current_parameters: PlanarArrayParameterValues
+    """Current absolute physical and multiplicative values."""
+    parameter_names: list[str]
+    """Stable ordered names of active scalar optimization variables."""
+    normalized_variables: list[float]
+    """Current values relative to initial values and configured scales."""
+    applied_constraints: list[str]
+    """Inspectable gauge constraints imposed by the calibrator."""
+    parameter_history: list[CalibrationParameterHistoryEntry]
+    """Accepted and rejected bounded optimizer trials."""
+    loss_history: list[CalibrationLossHistoryEntry]
+    """Canonical data, regularization, and total objective history."""
+    convergence_reason: str | None
+    """Most recent physical optimizer termination reason."""
+    conditioning: CalibrationConditioning
+    """Practical finite-difference conditioning summary."""
+    geometry_recompilations: int
+    """Cumulative accepted and trial geometry-dependent model updates."""
+    multiplicative_updates: int
+    """Cumulative accepted and trial intensity-only model updates."""
+    rejected_steps: int
+    """Cumulative rejected physical optimizer trials."""
+
 class ReconstructionProblem:
     """Validated pairing of measurements and a compiled image-plane model.
 
@@ -1205,6 +1445,10 @@ class ReconstructionResult:
     """Optional recovered positive multiplicative gain per frame."""
     recovered_background: FloatArray | None
     """Optional recovered nonnegative uniform background per frame."""
+    physical_illumination_calibration: IlluminationCalibrationState | None
+    """Physical planar-array state for a joint run, distinct from k-vector offsets."""
+    calibrated_model: ImagePlaneModel | None
+    """Reusable model refreshed from the final physical illumination."""
     trace: list[tuple[int, float, float]]
     """``(iteration, objective, elapsed_seconds)`` records."""
     algorithm_metrics: list[tuple[int, str, str, float]]
@@ -1471,6 +1715,10 @@ class IterationCallback:
     """Call Python with a read-only step mapping every ``every`` iterations.
 
     The callable may return ``False`` to stop or any other object to continue.
+    The mapping contains ``iteration``, ``objective``, ``algorithm_metrics``,
+    ``problem_name``, and ``physical_illumination_calibration``. The last value
+    is an ``IlluminationCalibrationState`` snapshot for joint runs and ``None``
+    for ordinary reconstruction.
     Unlike Rust-backed callbacks, this callback reacquires the GIL for each
     invocation and therefore has interpreter-crossing overhead.
     """
@@ -1610,6 +1858,89 @@ class Fpie(_Algorithm):
         epsilon: float = 1e-10,
         loss_type: str = "amplitude_mse",
     ) -> None: ...
+
+class JointReconstruction:
+    """Alternate analytic object/pupil updates with bounded physical LED calibration.
+
+    The initial model in ``problem`` must have been compiled from ``optics`` and
+    ``initial_illumination``. Rotations are active right-handed extrinsic XYZ
+    radians, positions and pitches are metres, and multiplicative groups are
+    normalized to mean one. This implementation uses the canonical forward
+    model; unlike generic k-vector correction it always returns a realizable
+    ``PlanarLEDArray`` illumination.
+
+    References
+    ----------
+    [Sun et al., *Efficient positional misalignment correction method for
+    Fourier ptychographic microscopy* (2016)](https://doi.org/10.1364/BOE.7.001336).
+    The implementation differs by using deterministic bounded finite
+    differences rather than simulated annealing.
+    """
+    def __init__(
+        self,
+        object_algorithm: Fpie | Epry,
+        optics: Optics,
+        initial_illumination: Illumination,
+        illumination_calibration: IlluminationCalibration,
+        *,
+        outer_iterations: int = 10,
+        object_iterations_per_outer: int = 1,
+        illumination_steps_per_outer: int = 1,
+    ) -> None: ...
+    def run(
+        self,
+        problem: ReconstructionProblem,
+        *,
+        callbacks: Iterable[Callback] | None = None,
+        resume_from: ReconstructionCheckpoint | None = None,
+        schedule: str = "sequential",
+        schedule_seed: int = 0,
+    ) -> JointReconstructionResult:
+        """Run or resume alternating reconstruction without holding the Python GIL.
+
+        Callbacks receive the standard iteration context plus namespaced object
+        metrics and ``physical_illumination`` data, regularization, update-count,
+        and rejection metrics.
+        """
+
+class JointReconstructionResult:
+    """Structured reconstruction, reusable illumination/model, and calibration history."""
+    reconstruction: ReconstructionResult
+    """Canonical reconstruction result including physical calibration state."""
+    initial_illumination: Illumination
+    """Serializable illumination supplied to the joint algorithm."""
+    calibrated_illumination: Illumination
+    """Final reusable planar-array illumination."""
+    calibrated_model: ImagePlaneModel
+    """Compiled final model suitable for continued reconstruction."""
+    initial_parameters: PlanarArrayParameterValues
+    """Immutable absolute physical and multiplicative starting values."""
+    final_parameters: PlanarArrayParameterValues
+    """Final absolute physical and multiplicative parameter values."""
+    parameter_history: list[CalibrationParameterHistoryEntry]
+    """Accepted and rejected optimizer-trial history."""
+    loss_history: list[CalibrationLossHistoryEntry]
+    """Data, prior, and total physical objective history."""
+    convergence_reason: str | None
+    """Final physical optimizer termination reason."""
+    conditioning: CalibrationConditioning
+    """Final practical finite-difference conditioning diagnostics."""
+    diagnostics: IlluminationCalibrationState
+    """Complete checkpointable physical-calibration state and counters."""
+    def save_json(self, path: Path) -> None:
+        """Serialize the complete structured joint result to ``path``."""
+    @staticmethod
+    def load_json(path: Path) -> JointReconstructionResult:
+        """Load and validate a complete structured joint JSON result."""
+    def write_bundle(
+        self,
+        path: Path,
+        *,
+        run_id: str | None = None,
+        label: str | None = None,
+        include_previews: bool = True,
+    ) -> ResultBundle:
+        """Write a verified result bundle including physical calibration state."""
 
 class Epry(_Algorithm):
     """Embedded pupil-recovery reconstruction for FPM.

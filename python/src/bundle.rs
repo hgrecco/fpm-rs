@@ -483,6 +483,8 @@ impl PyResultBundle {
                     .map(|value| value.clone_ref(py)),
                 recovered_frame_gains: cache.frame_gains.as_ref().map(|value| value.clone_ref(py)),
                 recovered_background: cache.background.as_ref().map(|value| value.clone_ref(py)),
+                physical_illumination_calibration: result.physical_illumination_calibration.clone(),
+                calibrated_model: result.calibrated_model.clone(),
                 trace: result
                     .trace
                     .iterations

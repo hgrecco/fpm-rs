@@ -8,6 +8,7 @@ use crate::{
     array_layout::{StandardArray2, StandardView2, checked_len_2d},
     backend::{Backend, CpuBackend, FftDirection},
     error::Error,
+    illumination_calibration::IlluminationCalibrationState,
     measurements::MeasurementRead,
     model::{FourierOffset, ImagePlaneModel, Pupil, fftshift_copy},
 };
@@ -94,6 +95,8 @@ pub struct ReconstructionState {
     pub(crate) illumination_corrections: Option<Vec<(f64, f64)>>,
     pub(crate) frame_gains: Option<Vec<f64>>,
     pub(crate) background: Option<Vec<f64>>,
+    pub(crate) physical_illumination_calibration: Option<IlluminationCalibrationState>,
+    pub(crate) calibrated_model: Option<ImagePlaneModel>,
     pub(crate) algorithm_auxiliary: Option<AlgorithmAuxiliaryState>,
     pub(crate) scratch: ReconstructionScratch,
     pub(crate) backend: Arc<dyn Backend>,
@@ -108,6 +111,11 @@ impl std::fmt::Debug for ReconstructionState {
             .field("illumination_corrections", &self.illumination_corrections)
             .field("frame_gains", &self.frame_gains)
             .field("background", &self.background)
+            .field(
+                "physical_illumination_calibration",
+                &self.physical_illumination_calibration,
+            )
+            .field("calibrated_model", &self.calibrated_model)
             .field("algorithm_auxiliary", &self.algorithm_auxiliary)
             .finish_non_exhaustive()
     }
@@ -143,6 +151,16 @@ impl ReconstructionState {
     /// Borrows optional additive backgrounds in acquisition-frame order.
     pub fn background(&self) -> Option<&[f64]> {
         self.background.as_deref()
+    }
+
+    /// Borrows checkpointable physical planar-array calibration state, when active.
+    pub fn physical_illumination_calibration(&self) -> Option<&IlluminationCalibrationState> {
+        self.physical_illumination_calibration.as_ref()
+    }
+
+    /// Borrows the illumination-refreshed model used by joint reconstruction, when active.
+    pub fn calibrated_model(&self) -> Option<&ImagePlaneModel> {
+        self.calibrated_model.as_ref()
     }
 
     /// Most recently accumulated per-source illumination gradient.
@@ -259,6 +277,8 @@ impl ReconstructionState {
             illumination_corrections: None,
             frame_gains: problem.model.frame_gains.clone(),
             background: problem.model.background.clone(),
+            physical_illumination_calibration: None,
+            calibrated_model: None,
             algorithm_auxiliary: None,
             scratch: ReconstructionScratch::new(low_shape, high_shape)?,
             backend,
@@ -321,6 +341,8 @@ impl ReconstructionState {
             illumination_corrections: checkpoint.illumination_corrections.clone(),
             frame_gains: checkpoint.frame_gains.clone(),
             background: checkpoint.background.clone(),
+            physical_illumination_calibration: checkpoint.physical_illumination_calibration.clone(),
+            calibrated_model: checkpoint.calibrated_model.clone(),
             algorithm_auxiliary: checkpoint.algorithm_auxiliary.clone(),
             scratch: ReconstructionScratch::new(low_shape, high_shape)?,
             backend,

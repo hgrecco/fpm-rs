@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::reconstruction::RuntimeInfo;
 
 /// Current reconstruction result-bundle manifest format version.
-pub const BUNDLE_FORMAT_VERSION: u32 = 1;
+pub const BUNDLE_FORMAT_VERSION: u32 = 2;
 
 /// Options controlling result-bundle identity and preview generation.
 #[derive(Clone, Debug, Default)]
@@ -88,6 +88,7 @@ pub(crate) const PREVIEW_FOURIER_COVERAGE: &str = "previews.fourier_coverage";
 
 pub(crate) const DOMAIN_DIAGNOSTICS: &str = "domain.diagnostics";
 pub(crate) const DOMAIN_EVALUATION: &str = "domain.evaluation";
+pub(crate) const DOMAIN_PHYSICAL_ILLUMINATION: &str = "domain.physical_illumination";
 
 pub(crate) const KNOWN_ROLES: &[&str] = &[
     TABLE_SUMMARY,
@@ -115,4 +116,5 @@ pub(crate) const KNOWN_ROLES: &[&str] = &[
     PREVIEW_FOURIER_COVERAGE,
     DOMAIN_DIAGNOSTICS,
     DOMAIN_EVALUATION,
+    DOMAIN_PHYSICAL_ILLUMINATION,
 ];

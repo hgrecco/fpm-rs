@@ -48,7 +48,7 @@ def test_checkpoint_load_save_and_resume(
         problem,
         resume_from=restored,
     )
-    assert checkpoint.format_version == 1
+    assert checkpoint.format_version == 2
     assert checkpoint.completed_iterations == 1
     assert result.runtime.completed_iterations == 2
     assert len(result.trace) == 2

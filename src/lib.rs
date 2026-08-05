@@ -89,6 +89,8 @@ pub mod error;
 pub mod evaluation;
 /// Physical optics and illumination geometry compiled into numerical models.
 pub mod experiment;
+/// Bounded physical planar-array calibration configuration, state, and diagnostics.
+pub mod illumination_calibration;
 mod image_io;
 /// Resident and lazy low-resolution intensity measurement stacks.
 pub mod measurements;

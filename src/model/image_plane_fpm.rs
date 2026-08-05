@@ -6,7 +6,9 @@ use crate::{
     Result,
     array_layout::{StandardView2, checked_len_2d},
     error::Error,
-    experiment::{Illumination, KVector, MultiplexingMatrix, Optics, ResolvedIllumination},
+    experiment::{
+        AcquisitionPlan, Illumination, KVector, MultiplexingMatrix, Optics, ResolvedIllumination,
+    },
 };
 
 use super::{CropIndices, FourierCrop, FourierOffset, Pupil, Sampling};
@@ -408,6 +410,152 @@ impl ImagePlaneModel {
         self.frame_gains = values;
         self.validate()?;
         Ok(self)
+    }
+
+    /// Refreshes only source powers, sparse acquisition weights, and frame gains.
+    ///
+    /// Physical positions, propagation vectors, Fourier crops, subpixel offsets,
+    /// pupil samples, sampling metadata, and reconstruction shapes are retained.
+    /// This is the intensity-only update boundary used by physical illumination
+    /// calibration.
+    pub fn update_intensity_calibration(
+        &mut self,
+        source_power: &[f64],
+        acquisition: &AcquisitionPlan,
+    ) -> Result<()> {
+        if source_power.len() != self.source_count()
+            || source_power
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(Error::InvalidParameter {
+                name: "source_power",
+                reason: format!(
+                    "must contain {} finite non-negative values",
+                    self.source_count()
+                ),
+            });
+        }
+        if acquisition.frame_count() != self.frame_count() {
+            return Err(Error::InvalidParameter {
+                name: "acquisition",
+                reason: format!(
+                    "frame count {} differs from compiled frame count {}",
+                    acquisition.frame_count(),
+                    self.frame_count()
+                ),
+            });
+        }
+        let mut matrix = Vec::with_capacity(acquisition.frame_count());
+        let mut gains = Vec::with_capacity(acquisition.frame_count());
+        for frame in acquisition.frames() {
+            let mut row = Vec::with_capacity(frame.contributions.len());
+            for contribution in &frame.contributions {
+                let power = source_power.get(contribution.source).ok_or_else(|| {
+                    Error::InvalidParameter {
+                        name: "acquisition",
+                        reason: format!(
+                            "source index {} is outside {} compiled sources",
+                            contribution.source,
+                            self.source_count()
+                        ),
+                    }
+                })?;
+                let weight = contribution.intensity_weight * power;
+                if !weight.is_finite() || weight < 0.0 {
+                    return Err(Error::InvalidParameter {
+                        name: "acquisition",
+                        reason: "compiled source weights must be finite and non-negative".into(),
+                    });
+                }
+                if weight != 0.0 {
+                    row.push((contribution.source, weight));
+                }
+            }
+            if row.is_empty() {
+                return Err(Error::InvalidParameter {
+                    name: "acquisition",
+                    reason: "every calibrated frame must retain positive source weight".into(),
+                });
+            }
+            matrix.push(row);
+            gains.push(frame.gain);
+        }
+        let identity = matrix.len() == self.source_count()
+            && matrix
+                .iter()
+                .enumerate()
+                .all(|(source, row)| row.as_slice() == [(source, 1.0)]);
+        let previous_matrix =
+            std::mem::replace(&mut self.multiplexing_matrix, (!identity).then_some(matrix));
+        let previous_gains = self.frame_gains.replace(gains);
+        if let Err(error) = self.validate() {
+            self.multiplexing_matrix = previous_matrix;
+            self.frame_gains = previous_gains;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Recompiles illumination-dependent geometry into the existing numerical grid.
+    ///
+    /// The low- and high-resolution shapes, optical sampling, pupil values,
+    /// background, and other static model state are retained. A geometry that
+    /// would move a crop outside the existing reconstruction grid is rejected.
+    pub fn update_illumination_geometry(
+        &mut self,
+        optics: &Optics,
+        illumination: &Illumination,
+    ) -> Result<()> {
+        let resolved = illumination.resolve(optics)?;
+        if resolved.source_count() != self.source_count()
+            || resolved.frame_count() != self.frame_count()
+        {
+            return Err(Error::InvalidModel(
+                "calibrated illumination must preserve source and frame counts".into(),
+            ));
+        }
+        let k_vectors = resolved.k_vectors().to_vec();
+        let mut offsets = Vec::with_capacity(k_vectors.len());
+        let crops = k_vectors
+            .iter()
+            .map(|vector| {
+                let (crop, offset) = Self::crop_for_k_vector(
+                    vector,
+                    &self.sampling,
+                    self.image_shape,
+                    self.reconstruction_shape,
+                )?;
+                offsets.push(offset);
+                Ok(crop)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let previous_vectors = std::mem::replace(&mut self.k_vectors, k_vectors);
+        let previous_crops = std::mem::replace(&mut self.crop_indices, CropIndices::new(crops));
+        let previous_offsets = self.subpixel_offsets.replace(offsets);
+        let previous_synthetic_na = self.sampling.synthetic_na;
+        self.sampling.synthetic_na = Some(
+            optics.objective_na
+                + self
+                    .k_vectors
+                    .iter()
+                    .map(|vector| {
+                        vector.kx.hypot(vector.ky) * optics.wavelength_vacuum_m
+                            / std::f64::consts::TAU
+                    })
+                    .fold(0.0, f64::max),
+        );
+        if let Err(error) =
+            self.update_intensity_calibration(resolved.source_power(), illumination.acquisition())
+        {
+            self.k_vectors = previous_vectors;
+            self.crop_indices = previous_crops;
+            self.subpixel_offsets = previous_offsets;
+            self.sampling.synthetic_na = previous_synthetic_na;
+            return Err(error);
+        }
+        self.validate()
     }
 
     /// Replaces the source wave vectors while preserving the compiled crops.
