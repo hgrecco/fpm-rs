@@ -1,5 +1,8 @@
 # fpm-rs
 
+[![CI](https://github.com/hgrecco/fpm-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hgrecco/fpm-rs/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/fpm-rs.svg)](https://pypi.org/project/fpm-rs/)
+
 Reconstruct and simulate image-plane Fourier ptychographic microscopy (FPM)
 acquisitions from Rust or Python.
 
@@ -72,14 +75,21 @@ Then compile a small model, simulate it, and reconstruct it:
 import numpy as np
 import fpm_rs as fpm
 
-optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
-geometry = fpm.PlanarLEDArray(
-    (3, 3),
-    4e-3,
-    (1.0, 1.0),
-    fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+optics = fpm.Optics(
+    wavelength_vacuum_m=532e-9,
+    objective_na=0.10,
+    magnification=4.0,
+    camera_pixel_size=6.5e-6,
 )
-illumination = fpm.Illumination(geometry)
+geometry = fpm.PlanarLEDArray(
+    shape=(3, 3),
+    pitch_m=4e-3,
+    reference_index=(1.0, 1.0),
+    pose=fpm.ArrayPose.from_translation(
+        translation_m=(0.0, 0.0, -90e-3),
+    ),
+)
+illumination = fpm.Illumination(geometry=geometry)
 model = fpm.compile_model(optics, illumination, (32, 32))
 
 simulation = fpm.simulate(

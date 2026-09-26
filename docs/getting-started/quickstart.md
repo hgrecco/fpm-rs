@@ -2,6 +2,8 @@
 
 This workflow generates a tiny deterministic FPM acquisition in memory and
 reconstructs it. It needs no downloaded data or machine-specific path.
+For unfamiliar optics terms, keep the [FPM glossary](../concepts/glossary.md)
+open alongside the example.
 
 ```python
 import numpy as np
@@ -18,9 +20,11 @@ geometry = fpm.PlanarLEDArray(
     shape=(3, 3),
     pitch_m=4e-3,
     reference_index=(1.0, 1.0),
-    pose=fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+    pose=fpm.ArrayPose.from_translation(
+        translation_m=(0.0, 0.0, -90e-3),
+    ),
 )
-illumination = fpm.Illumination(geometry)
+illumination = fpm.Illumination(geometry=geometry)
 model = fpm.compile_model(optics, illumination, image_shape=(32, 32))
 
 row, column = np.indices(model.reconstruction_shape)
@@ -50,52 +54,10 @@ object shape. `simulate` returns both detector intensities and the reconstructio
 model appropriate for those intensities. The algorithm returns NumPy amplitude,
 phase, spectrum, and pupil arrays.
 
-## Choose the reconstruction grid
-
-Omitting `reconstruction_shape` selects the default `"smooth"` grid. You can
-inspect every automatic choice before compiling the model:
-
-```python
-image_shape = (32, 32)
-
-minimum_shape = fpm.suggest_reconstruction_shape(
-    optics, illumination, image_shape, "minimum"
-)
-# Omitting the fourth argument selects "smooth".
-smooth_shape = fpm.suggest_reconstruction_shape(optics, illumination, image_shape)
-power_of_two_shape = fpm.suggest_reconstruction_shape(
-    optics, illumination, image_shape, "power_of_two"
-)
-
-print(minimum_shape, smooth_shape, power_of_two_shape)
-# (42, 42) (42, 42) (64, 64)
-
-radix2_model = fpm.compile_model(
-    optics,
-    illumination,
-    image_shape,
-    reconstruction_shape="power_of_two",
-)
-exact_model = fpm.compile_model(
-    optics,
-    illumination,
-    image_shape,
-    reconstruction_shape=(64, 64),
-)
-```
-
-`"minimum"` uses the smallest grid that contains every shifted
-low-resolution Fourier crop. `"smooth"` rounds the shared aspect-ratio factor
-to a number composed of 2, 3, 5, and 7, while `"power_of_two"` rounds that
-factor to a power of two. An exact tuple is validated against the same crop
-bounds. Pass one of these values explicitly or omit the argument; `None` is not
-accepted.
-
-The linear increase in pixels is often estimated by the ratio of synthetic NA
-to objective NA, but that is only a heuristic. The software sizes from the
-actual illumination wave vectors and includes the interpolation margin needed
-for fractional Fourier shifts. See [Configure and run a reconstruction](../guides/reconstruction.md#choose-the-reconstruction-shape)
-for the complete sizing rules.
+The default reconstruction grid works for this example; see
+[Choose the reconstruction shape](../guides/reconstruction.md#choose-the-reconstruction-shape)
+for exact sizing, the three automatic strategies, and the synthetic-NA
+heuristic's limits.
 
 Next, follow the rendered [first reconstruction tutorial](../tutorials/notebooks/quickstart.ipynb),
 learn how to [record diagnostics](../diagnostics.md), or consult the

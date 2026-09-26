@@ -97,6 +97,7 @@ nav:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
       - Concepts and conventions: concepts/core-concepts.md
+      - Glossary: concepts/glossary.md
   - User guide:
       - Reconstruction workflow: guides/reconstruction.md
       - Measurements and acquisitions: guides/measurements.md

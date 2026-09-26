@@ -2,9 +2,10 @@
 
 ## Citation
 
-The repository does not yet publish a software paper or citation metadata.
-Until one is added, cite the repository URL and release version, and cite the
-scientific methods through the references in their API documentation.
+Use the repository's machine-readable
+[`CITATION.cff`](https://github.com/hgrecco/fpm-rs/blob/main/CITATION.cff)
+metadata to cite the software and its release version. Cite scientific methods
+separately through the references in their API documentation.
 
 ## License
 

@@ -4,13 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Image-plane Fourier ptychographic microscopy reconstruction and simulation"
-documentation = "https://docs.rs/fpm-rs"
+# The Rust crate is not yet published on crates.io; link to the rustdoc built
+# and deployed with the project documentation instead of a nonexistent docs.rs page.
+documentation = "https://hgrecco.github.io/fpm-rs/reference/rust/"
 license.workspace = true
 include = [
+  "/CITATION.cff",
+  "/CODE_OF_CONDUCT.md",
+  "/CONTRIBUTING.md",
   "/Cargo.lock",
   "/Cargo.toml",
   "/LICENSE-MIT",
   "/README.md",
+  "/SECURITY.md",
   "/benches/**",
   "/dataset_registry.json",
   "/dataset_spec.md",

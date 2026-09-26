@@ -136,6 +136,29 @@ Measurements must be a float64 array shaped `(frames, height, width)` or a
 shape) and zero-valued pixels are excluded. The frame count and image dimensions
 must agree with the compiled model.
 
+## Choose an algorithm
+
+Choose for the dominant data or model mismatch. These are starting points for
+the implementations in fpm-rs, not a claim that one method dominates across
+experiments.
+
+| Condition or priority | Reach for | Decision boundary |
+| --- | --- | --- |
+| Clean data and a trusted pupil, illumination, gain, and background model | `AlternatingProjection` | Use the smallest baseline first. It has few controls and exposes whether the acquisition and compiled model are internally consistent. |
+| Object-only recovery with weak pupil transfer or mild noise | `Fpie` | Prefer its stabilized object update when plain projection is too sensitive in weak-transfer regions. It does not estimate the pupil or source geometry. |
+| Noise statistics, outliers, or an object prior must enter the update | `GradientDescent` | Select Poisson, Huber-amplitude, intensity, or amplitude loss as appropriate; use total variation only when that prior is defensible. This is the most configurable route, with more tuning and compute. |
+| Pupil aberration or defocus is suspected | `Epry` | Recover the complex pupil with the object. It can also estimate per-frame gain or uniform background. If a selectable data loss or pupil regularization is essential, use pupil-recovering `GradientDescent` instead. |
+| Updates need full- or multi-frame consensus rather than sequential frame corrections | `Admm` | Its auxiliary fields and dual variables make cross-frame agreement explicit. The default full-frame batch costs more memory and introduces penalty and relaxation controls. |
+| Independent illumination vectors may be wrong | `GradientDescent(recover_illumination=True)` | Use this for generic per-source Fourier-grid corrections. The result is not necessarily a realizable apparatus geometry. |
+| A planar LED array's pose, pitch, reference index, selected offsets, source powers, or frame gains must be self-calibrated | `JointReconstruction` around `Fpie` or `Epry` | Use the physical workflow when the desired result must remain a bounded, serializable `PlanarLEDArray`. Its identifiability constraints are part of the model, not optional tuning. |
+
+When several rows apply, establish an object-only baseline before enabling the
+smallest set of recovery variables that explains the residuals. In particular,
+do not use generic source correction as a substitute for physical planar-array
+calibration. The generated [algorithm API](../reference/python/algorithms.md)
+documents each implementation and its cited method; the physical calibration
+assumptions and gauges are detailed below.
+
 ## Select and run an algorithm
 
 `AlternatingProjection` is the simplest starting point. `Fpie` adds regularized

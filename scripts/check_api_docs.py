@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKS = (
     "check_python_docs.py",
     "check_python_api.py",
+    "check_algorithm_guidance.py",
     "check_citations.py",
 )
 

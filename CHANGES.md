@@ -31,6 +31,11 @@ first.
 
 ### Added
 
+- Added machine-readable citation metadata and root contribution, security,
+  and conduct policies.
+- Added decision-oriented reconstruction algorithm guidance, an FPM glossary,
+  and an inline coordinate/Fourier-crop convention diagram. A documentation
+  check keeps public reconstruction algorithms represented in the guidance.
 - Added automatic reconstruction-grid sizing. Callers can request the exact
   minimum geometry-valid shape, a smooth FFT-friendly shape, or a power-of-two
   shape, and can inspect the choice with `suggest_reconstruction_shape`.
@@ -47,6 +52,11 @@ first.
 
 ### Changed
 
+- Shortened the Python quickstart to the default successful path, moved grid
+  sizing details into the reconstruction guide, and made first-touch Python
+  constructors consistently use keyword arguments.
+- Pointed Cargo documentation metadata and Rust installation guidance at the
+  hosted project rustdoc while the crate remains unpublished on crates.io.
 - Reworked diagnostic records, reports, and plots around objective histories,
   per-frame summaries, Fourier coverage, raw-stack statistics, and explicit
   evaluation data.

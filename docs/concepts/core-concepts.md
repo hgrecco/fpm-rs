@@ -38,6 +38,10 @@ must represent propagating waves: their transverse magnitude cannot exceed
 wave-propagation vectors instead of angles. Component-angle construction uses
 `dx = sin(theta_x)` and `dy = sin(theta_y)`; polar construction uses `theta`
 from positive `z` and azimuth `phi` from positive `x` toward positive `y`.
+The corresponding illumination numerical aperture is
+`wavelength_vacuum * hypot(kx, ky) / (2π)`. A source is bright-field when this
+value does not exceed `objective_na`, so its unscattered wave lies inside the
+objective passband; larger values are dark-field.
 
 The sample plane is `z = 0`, illumination sources normally have `z < 0`, and
 the objective is on the `z > 0` side. The right-handed on-axis incident
@@ -47,6 +51,50 @@ sign is a physical convention. Separately, the centered FFT implementation
 uses positive `kx` for increasing Fourier columns and positive `ky` for
 increasing Fourier rows. Model compilation applies no extra sign reversal.
 
+<figure>
+  <svg viewBox="0 0 900 330" role="img" aria-labelledby="coordinate-diagram-title coordinate-diagram-desc" style="width: 100%; height: auto;" xmlns="http://www.w3.org/2000/svg">
+    <title id="coordinate-diagram-title">FPM axial and Fourier-crop conventions</title>
+    <desc id="coordinate-diagram-desc">A source below the sample propagates toward positive z and the objective. Its positive transverse wave vector selects an offset crop of the centered high-resolution object spectrum.</desc>
+    <defs>
+      <marker id="coordinate-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,4 L0,8 Z" fill="currentColor"/>
+      </marker>
+      <marker id="coordinate-accent-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L8,4 L0,8 Z" fill="#d97706"/>
+      </marker>
+    </defs>
+    <g fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="55" y1="285" x2="55" y2="35" marker-end="url(#coordinate-arrow)"/>
+      <line x1="75" y1="160" x2="390" y2="160"/>
+      <path d="M220,55 Q260,25 300,55 Q260,85 220,55 Z"/>
+      <circle cx="115" cy="275" r="13" fill="#4f7cac" stroke="#4f7cac"/>
+      <line x1="127" y1="266" x2="253" y2="166" stroke="#d97706" stroke-width="3" marker-end="url(#coordinate-accent-arrow)"/>
+      <line x1="260" y1="153" x2="260" y2="82" stroke="#d97706" stroke-dasharray="7 5" marker-end="url(#coordinate-accent-arrow)"/>
+      <rect x="510" y="45" width="300" height="240" rx="4"/>
+      <line x1="660" y1="170" x2="790" y2="170" marker-end="url(#coordinate-arrow)"/>
+      <line x1="660" y1="170" x2="660" y2="270" marker-end="url(#coordinate-arrow)"/>
+      <circle cx="660" cy="170" r="4" fill="currentColor"/>
+      <rect x="605" y="125" width="110" height="90" stroke-dasharray="6 5" opacity="0.55"/>
+      <line x1="660" y1="170" x2="735" y2="220" stroke="#d97706" stroke-width="3" marker-end="url(#coordinate-accent-arrow)"/>
+      <rect x="680" y="175" width="110" height="90" fill="#4f7cac" fill-opacity="0.18" stroke="#4f7cac" stroke-width="3"/>
+    </g>
+    <g fill="currentColor" font-family="sans-serif" font-size="16">
+      <text x="38" y="28">+z</text>
+      <text x="80" y="150">sample, z = 0</text>
+      <text x="215" y="25">objective, z &gt; 0</text>
+      <text x="74" y="310">source, z &lt; 0</text>
+      <text x="150" y="240" fill="#d97706">incident k, propagation toward +z</text>
+      <text x="510" y="28">centered high-resolution object spectrum</text>
+      <text x="795" y="164">+kx</text>
+      <text x="670" y="285">+ky (rows)</text>
+      <text x="643" y="160">0</text>
+      <text x="700" y="168" fill="#d97706">(kx, ky)</text>
+      <text x="690" y="250">selected low-resolution crop</text>
+    </g>
+  </svg>
+  <figcaption>A source below the sample produces a positive-z incident wave. Its transverse <code>(kx, ky)</code> shifts the crop toward increasing Fourier columns and rows; no additional sign reversal is applied.</figcaption>
+</figure>
+
 The low-resolution Fourier spacings are `dkx = 2π / (width * object-plane
 pixel size)` and equivalently for `dky`. CPU FFTs normalize the forward
 transform by `1/N` and leave the inverse unnormalized, preserving
@@ -54,7 +102,8 @@ constant-object amplitude through a high-resolution crop and low-resolution
 inverse transform. The ideal pupil includes samples whose transverse frequency
 is at most `2π NA / λ`. `PupilAberration` coefficients are direct radian
 weights for the documented sampled radial-polynomial terms, not normalized
-Zernike coefficients.
+Zernike coefficients. A `defocus_distance` of `d` metres adds the paraxial
+pupil phase `-d * (kx² + ky²) / (2 * k_medium)` inside the support.
 
 `CoordinateConvention::CenteredPositiveK` records these choices in compiled
 models.
@@ -76,6 +125,11 @@ low-resolution crops and any fractional interpolation neighbors. This handles
 asymmetric, calibrated, and one-sided illumination without assuming symmetric
 coverage. Automatic choices preserve the low-resolution aspect ratio and
 isotropic high-resolution pixel sampling.
+
+The compiled `sampling.synthetic_na` diagnostic is `objective_na` plus the
+largest illumination numerical aperture. It summarizes the outermost ideal
+radial extent; it does not assert complete, isotropic, or recoverable Fourier
+coverage.
 
 See [Configure and run a reconstruction](../guides/reconstruction.md#choose-the-reconstruction-shape)
 for the exact, minimum, smooth, and power-of-two selection modes.

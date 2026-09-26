@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use fpm-rs, please cite it using the metadata below."
+type: software
+title: "fpm-rs"
+abstract: "Image-plane Fourier ptychographic microscopy reconstruction and simulation."
+authors:
+  - family-names: "Grecco"
+    given-names: "Hernán E."
+    email: "hernan.grecco@gmail.com"
+version: "0.2.0-beta.2"
+license: MIT
+repository-code: "https://github.com/hgrecco/fpm-rs"
+url: "https://hgrecco.github.io/fpm-rs"

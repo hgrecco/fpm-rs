@@ -67,7 +67,8 @@ integrations, while `python-test` is the lighter core suite.
 
 ## Rust library
 
-Applications can use the public `fpm-rs` crate from a local checkout:
+The Rust crate is not yet published on crates.io. Applications can use the
+public `fpm-rs` crate from a local checkout:
 
 ```toml
 [dependencies]
@@ -81,7 +82,9 @@ cargo run --example simulate_and_reconstruct
 ```
 
 The `fpm-rs-python` workspace member is an implementation detail of the Python
-package, not a supported Rust integration crate.
+package, not a supported Rust integration crate. The generated
+[Rust API reference](../reference/rust.md) is published with this documentation
+rather than on docs.rs until a crates.io release exists.
 
 ## Verify Python
 
