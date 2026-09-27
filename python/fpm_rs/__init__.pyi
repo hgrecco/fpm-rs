@@ -1878,6 +1878,63 @@ class Fpie(_Algorithm):
         loss_type: str = "amplitude_mse",
     ) -> None: ...
 
+class Mpie(_Algorithm):
+    """Momentum-accelerated regularized PIE adapted to image-plane FPM.
+
+    The algorithm applies the object-only rPIE projection used by ``Fpie`` and
+    periodically accelerates the centered complex object spectrum. A
+    multiplexed measurement counts once after all source modes are inserted,
+    zero-weight frames do not advance the interval, and batching does not
+    change momentum cadence. Velocity, anchor, and a partial interval are
+    preserved in checkpoints.
+
+    The cited method was tested for scanned ptychography and accelerates both
+    object and probe. This implementation keeps the FPM pupil fixed and exposes
+    separate friction and feedback controls. Equal values reproduce the
+    paper's single object momentum coefficient.
+
+    Parameters
+    ----------
+    iterations
+        Complete passes through the acquisition schedule.
+    object_step
+        Positive scale applied to each rPIE object-spectrum correction.
+    stability
+        Blend from local (0) to maximum (1) pupil power in the denominator.
+    momentum_interval
+        Positive-weight measured-frame updates between momentum events.
+    momentum_friction
+        Previous-velocity fraction in the half-open interval ``[0, 1)``.
+    momentum_feedback
+        Updated-velocity fraction added to the object, in ``[0, 1]``.
+    batch_size
+        Measured frames supplied to each reconstruction step. This does not
+        change momentum cadence.
+    epsilon
+        Positive floor added to the rPIE denominator.
+    loss_type
+        Diagnostic loss; the projection itself always enforces amplitude.
+
+    References
+    ----------
+    [A. Maiden, D. Johnson, and P. Li, *Further improvements to the
+    ptychographical iterative engine* (2017)](https://doi.org/10.1364/OPTICA.4.000736),
+    *Optica* **4**(7), 736–745.
+    """
+    def __init__(
+        self,
+        *,
+        iterations: int = 50,
+        object_step: float = 0.2,
+        stability: float = 0.05,
+        momentum_interval: int = 30,
+        momentum_friction: float = 0.9,
+        momentum_feedback: float = 0.9,
+        batch_size: int = 1,
+        epsilon: float = 1e-10,
+        loss_type: str = "amplitude_mse",
+    ) -> None: ...
+
 class JointReconstruction:
     """Alternate analytic object/pupil updates with bounded physical LED calibration.
 

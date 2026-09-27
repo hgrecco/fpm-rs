@@ -101,7 +101,11 @@ Checkpoints use format version 2 and include `physical_illumination_calibration`
 and `calibrated_model` together. The physical state contains the initial and
 current normal `Illumination`, absolute and normalized parameters, applied
 gauge constraints, histories, convergence reason, conditioning indicators, and
-partial-update counters. Result bundles use format version 2 and persist the
+partial-update counters. The existing `algorithm_auxiliary` extension also
+stores mPIE's centered object velocity and anchor, effective-frame counter, and
+defining parameters. Readers that predate its `Mpie` enum variant cannot load a
+checkpoint containing that state; the checkpoint format remains version 2.
+Result bundles use format version 2 and persist the
 same pair as the verified `domain.physical_illumination` JSON artifact; generic
 per-source Fourier-grid corrections remain in the separate illumination
 calibration table/array artifacts.

@@ -85,6 +85,33 @@ def test_pupil_recovery_resume_preserves_canonical_arrays(
     )
 
 
+def test_mpie_resume_preserves_partial_momentum_interval(
+    problem: fpm.ReconstructionProblem,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "mpie-checkpoints"
+    fpm.Mpie(iterations=1, momentum_interval=7).run(
+        problem,
+        callbacks=[fpm.CheckpointEvery(1, directory)],
+    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(
+        directory / "checkpoint_00001.json"
+    )
+
+    resumed = fpm.Mpie(iterations=3, momentum_interval=7).run(
+        problem,
+        resume_from=checkpoint,
+    )
+    uninterrupted = fpm.Mpie(iterations=3, momentum_interval=7).run(problem)
+
+    np.testing.assert_allclose(
+        resumed.object_spectrum,
+        uninterrupted.object_spectrum,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+
 def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> None:
     result = fpm.AlternatingProjection(iterations=10).run(
         problem,

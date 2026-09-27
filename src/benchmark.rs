@@ -70,6 +70,7 @@ pub const BENCHMARK_PROFILES: &[BenchmarkProfile] = &[
         algorithms: &[
             "AlternatingProjection",
             "Fpie",
+            "Mpie",
             "Epry",
             "Admm",
             "GradientDescent",
@@ -83,6 +84,7 @@ pub const BENCHMARK_PROFILES: &[BenchmarkProfile] = &[
         algorithms: &[
             "AlternatingProjection",
             "Fpie",
+            "Mpie",
             "Epry",
             "Admm",
             "GradientDescent",

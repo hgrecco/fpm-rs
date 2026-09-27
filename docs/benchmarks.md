@@ -81,8 +81,8 @@ directly instead of using an algorithm registry.
 
 | Profile | Command | Algorithms | Expected runtime | Output |
 |---|---|---|---|---|
-| `smoke` | `cargo run --example benchmark_algorithms -- smoke` | AP, Fpie, Epry, ADMM, GradientDescent | Under 1 minute on a typical laptop CPU | `target/benchmark-results/smoke` |
-| `cpu` | `cargo run --example benchmark_algorithms -- cpu` | AP, Fpie, Epry, ADMM, GradientDescent | 1-5 minutes on a typical laptop CPU | `target/benchmark-results/cpu` |
+| `smoke` | `cargo run --example benchmark_algorithms -- smoke` | AP, Fpie, Mpie, Epry, ADMM, GradientDescent | Under 1 minute on a typical laptop CPU | `target/benchmark-results/smoke` |
+| `cpu` | `cargo run --example benchmark_algorithms -- cpu` | AP, Fpie, Mpie, Epry, ADMM, GradientDescent | 1-5 minutes on a typical laptop CPU | `target/benchmark-results/cpu` |
 
 Run the default offline smoke profile with:
 

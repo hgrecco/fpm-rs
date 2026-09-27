@@ -215,6 +215,13 @@ impl<A: ReconstructionAlgorithm> ReconstructionAlgorithm for JointReconstruction
 
     fn validate(&self) -> Result<()> {
         self.object_algorithm.validate()?;
+        if !self.object_algorithm.supports_joint_reconstruction() {
+            return Err(Error::InvalidParameter {
+                name: "object_algorithm",
+                reason: "the selected algorithm carries state that cannot be transported across physical model recompilation"
+                    .into(),
+            });
+        }
         self.illumination_calibration
             .validate_for(&self.initial_illumination)?;
         self.optics.validate()?;

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Result,
+    array_layout::checked_len_2d,
     array_serde::Array2Data,
     error::Error,
     illumination_calibration::IlluminationCalibrationState,
@@ -30,7 +31,9 @@ pub const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 /// their iteration-boundary gauge projection. Older valid checkpoints are
 /// projected immediately after restoration. Problem-aware validation requires
 /// the stored pupil support to equal the compiled model support, not only to
-/// have the same shape.
+/// have the same shape. Format version 2 uses `algorithm_auxiliary` as an
+/// extension point for solver state. Readers predating a particular auxiliary
+/// enum variant cannot deserialize checkpoints containing that variant.
 #[derive(Clone, Debug)]
 pub struct ReconstructionCheckpoint {
     pub(crate) format_version: u32,
@@ -232,6 +235,26 @@ impl ReconstructionCheckpoint {
                             .chain(&admm.dual_fields)
                             .any(|value| !value.re.is_finite() || !value.im.is_finite())
                 }
+                AlgorithmAuxiliaryState::Mpie(mpie) => {
+                    mpie.velocity.len() != mpie.anchor.len()
+                        || mpie
+                            .velocity
+                            .iter()
+                            .chain(&mpie.anchor)
+                            .any(|value| !value.re.is_finite() || !value.im.is_finite())
+                        || !mpie.object_step.is_finite()
+                        || mpie.object_step <= 0.0
+                        || !mpie.stability.is_finite()
+                        || !(0.0..=1.0).contains(&mpie.stability)
+                        || !mpie.epsilon.is_finite()
+                        || mpie.epsilon <= 0.0
+                        || mpie.momentum_interval == 0
+                        || mpie.effective_frames_since_momentum >= mpie.momentum_interval
+                        || !mpie.momentum_friction.is_finite()
+                        || !(0.0..1.0).contains(&mpie.momentum_friction)
+                        || !mpie.momentum_feedback.is_finite()
+                        || !(0.0..=1.0).contains(&mpie.momentum_feedback)
+                }
             })
         {
             return Err(Error::InvalidModel(
@@ -347,11 +370,15 @@ impl ReconstructionCheckpoint {
         let auxiliary_len = image_len
             .checked_mul(mode_count)
             .ok_or_else(|| Error::InvalidShape("checkpoint auxiliary length overflows".into()))?;
+        let object_len = checked_len_2d(problem.model.reconstruction_shape())?;
         if self
             .algorithm_auxiliary
             .as_ref()
             .is_some_and(|auxiliary| match auxiliary {
                 AlgorithmAuxiliaryState::Admm(admm) => admm.auxiliary_fields.len() != auxiliary_len,
+                AlgorithmAuxiliaryState::Mpie(mpie) => {
+                    mpie.velocity.len() != object_len || mpie.anchor.len() != object_len
+                }
             })
         {
             return Err(Error::InvalidModel(

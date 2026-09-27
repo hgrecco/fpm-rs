@@ -24,11 +24,41 @@ pub struct AdmmAuxiliaryState {
     pub dual_fields: Vec<Complex64>,
 }
 
+/// Resumable object-spectrum momentum state for mPIE.
+///
+/// `velocity` and `anchor` use centered, row-major reconstruction-spectrum
+/// ordering. The stored scalar parameters make the recurrence unambiguous and
+/// allow a resumed [`crate::algorithms::Mpie`] run to reject a configuration
+/// that would reinterpret its pending momentum interval.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MpieAuxiliaryState {
+    /// Centered complex velocity spectrum accumulated at momentum events.
+    pub velocity: Vec<Complex64>,
+    /// Centered object spectrum immediately after the last momentum event.
+    pub anchor: Vec<Complex64>,
+    /// Positive-weight measured frames processed since the last event.
+    pub effective_frames_since_momentum: usize,
+    /// Per-frame rPIE object-correction scale used to create this state.
+    pub object_step: f64,
+    /// Local-to-maximum pupil-power blend used to create this state.
+    pub stability: f64,
+    /// Numerical denominator floor used to create this state.
+    pub epsilon: f64,
+    /// Effective-frame count between momentum events.
+    pub momentum_interval: usize,
+    /// Fraction of the previous velocity retained at each event.
+    pub momentum_friction: f64,
+    /// Fraction of the updated velocity added to the object spectrum.
+    pub momentum_feedback: f64,
+}
+
 /// Solver-specific state preserved in checkpoints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AlgorithmAuxiliaryState {
     /// ADMM auxiliary and scaled-dual fields.
     Admm(AdmmAuxiliaryState),
+    /// mPIE object-spectrum velocity, anchor, cadence, and parameters.
+    Mpie(MpieAuxiliaryState),
 }
 
 #[derive(Clone, Debug)]

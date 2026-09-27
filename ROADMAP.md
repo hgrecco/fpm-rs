@@ -34,24 +34,95 @@ material differences from its cited method.
 - [x] Add a compact table-driven convention suite covering representative
   wavelengths, pixel sizes, magnifications, and LED layouts.
 
-## Core reconstruction
-
-- [ ] Implement a CUDA backend with cuFFT and resident kernels for Fourier
-  crops, pupil operations, intensity formation, projection, and reductions.
-- [ ] Keep reconstruction state and scratch buffers device-resident across AP,
-  FPIE, EPRY, ADMM, and gradient-descent updates.
-- [ ] Add CPU/GPU numerical-parity, unsupported-device, performance, and memory
-  tests.
-
 ## Reconstruction algorithms
 
-- [ ] **Design first:** Adapt momentum-accelerated PIE (mPIE) to the existing
+- [x] Adapt momentum-accelerated PIE (mPIE) to the existing
   rPIE-based `Fpie` update. Specify momentum state, friction and feedback
   parameters, batch and schedule semantics, checkpoint persistence, and whether
   the adaptation remains object-only or also supports pupil recovery. Reference:
   A. Maiden, D. Johnson, and P. Li, “Further improvements to the
   ptychographical iterative engine,” *Optica* **4**(7), 736–745 (2017),
   [https://doi.org/10.1364/OPTICA.4.000736](https://doi.org/10.1364/OPTICA.4.000736).
+
+  **Implemented design:**
+
+  - Add a separate public `Mpie` algorithm that reuses the sequential rPIE
+    projection kernel used by `Fpie`. Keep `Fpie` behavior and defaults
+    unchanged. `Mpie` remains object-only with a fixed pupil; pupil recovery and
+    its object/pupil gauge are outside this milestone. It supports the same
+    masks, frame weights, gains, backgrounds, and incoherent multiplexing as
+    `Fpie` because momentum is applied after the complete measured-frame update.
+  - Use `stability` for the rPIE denominator blend, `object_step` for the
+    per-frame correction scale, `momentum_interval` for the number of effective
+    frame updates between momentum events, `momentum_friction` for retained
+    velocity, and `momentum_feedback` for the velocity added to the object. The
+    defaults are `stability = 0.05`, `object_step = 0.2`,
+    `momentum_interval = 30`, and `momentum_friction = momentum_feedback = 0.9`,
+    which lie within the ranges reported by Maiden et al.; they are starting
+    values to validate for image-plane FPM, not claimed universal optima.
+  - Let `O_anchor` be the centered object spectrum immediately after the last
+    momentum event, `V` the centered complex velocity spectrum, and `O_rpie` the
+    object after the ordinary rPIE update for the current frame. After
+    `momentum_interval` effective frame updates, apply
+    `V <- momentum_friction * V + (O_rpie - O_anchor)` and then
+    `O <- O_rpie + momentum_feedback * V`; store that `O` as the next anchor and
+    reset the interval counter. Initialize `V` to zero and `O_anchor` to the
+    initial object. The paper uses one `eta_obj` for both friction and feedback;
+    the two public controls are intentionally separated here, while equal
+    values reproduce its Eqs. (19) and (21). `object_step` is the adaptation of
+    the paper's `gamma_obj` in Eq. (22).
+  - Count one event after all source modes of a positive-weight measured frame
+    have been projected and inserted. Do not count zero-weight frames. Carry a
+    partial interval across batch and iteration boundaries; do not force a
+    momentum event at either boundary. Consequently `batch_size` only groups
+    runner calls and cannot change the numerical path. Sequential or seeded
+    random acquisition order still changes the path intentionally, and a
+    multiplexed frame counts once rather than once per source mode.
+  - Add public `MpieAuxiliaryState` and an `Mpie` variant of
+    `AlgorithmAuxiliaryState`. Persist the velocity spectrum, anchor spectrum,
+    effective-frame counter, and the update parameters that determine their
+    interpretation. A matching mPIE checkpoint resumes exactly, including in
+    the middle of an interval. A checkpoint with no auxiliary state is accepted
+    as an explicit warm start and initializes momentum from its stored object;
+    a different algorithm's auxiliary variant is rejected. Keep checkpoint
+    format version 2 because `algorithm_auxiliary` is already the versioned
+    extension point; document that older readers cannot consume checkpoints
+    containing the new enum variant.
+  - Expose `Mpie` and all controls in Rust builders and the Python constructor,
+    exports, and authoritative stub. Validate finite positive `object_step` and
+    `epsilon`, `stability` in `[0, 1]`, `momentum_friction` in `[0, 1)`,
+    `momentum_feedback` in `[0, 1]`, and nonzero `momentum_interval` and
+    `batch_size`, using stable parameter names. Validate auxiliary dimensions,
+    finite complex values, counter bounds, and stored-parameter agreement before
+    applying an update. Reject mPIE inside `JointReconstruction` until a design
+    defines whether velocity is reset or transported when physical calibration
+    recompiles the forward model.
+  - Refactor the shared projection loop only enough to run a post-frame momentum
+    hook; do not change the forward model, amplitude projection, loss
+    diagnostics, callback timing, or existing algorithms. Invalidate the
+    object-domain cache after every momentum event and return `Error::Numerical`
+    if an update produces a non-finite spectrum.
+  - Add deterministic tests for the complex recurrence, default validation,
+    stable validation errors, zero-feedback equivalence to identically
+    configured `Fpie`, batch-size invariance, seeded schedule repeatability,
+    zero-weight and multiplexed-frame counting, rejection of incompatible or
+    malformed auxiliary state, and uninterrupted versus checkpoint-resumed
+    equality when the interval crosses an iteration boundary. Add Python
+    construction, validation, execution, and resume coverage.
+  - Add `Mpie` to Rust and Python API documentation, the algorithm-selection
+    guide, the benchmark example, and `CHANGES.md`, with the complete Maiden et
+    al. citation and DOI near the method. State that the paper studies scanned
+    ptychography, jointly accelerates object and probe, and explicitly leaves
+    Fourier-ptychography testing as future work; this implementation instead
+    accelerates only the fixed-pupil FPM object spectrum. Keep `CITATION.cff`
+    unchanged because it describes how to cite this software rather than the
+    scientific methods used inside it.
+  - Before marking this item complete, demonstrate on a deterministic difficult
+    FPM simulation that `Mpie` improves the gauge-aligned object error or reaches
+    a fixed objective threshold in fewer effective frame updates than `Fpie`
+    under the same schedule and update budget. Run `pixi run ci`, the Rust and
+    Python API documentation checks, the MkDocs and notebook checks, citation
+    checking, and the reconstruction benchmark/example.
 - [ ] **Design first:** Add an adaptive-step alternating-projection method only
   after defining its line-search or feedback state, failure behavior, scheduling
   semantics, and benchmark advantage over fixed-step AP. Reference: C. Zuo,
@@ -224,3 +295,12 @@ selection guidance.
   and propagation distance.
 - [ ] Add a focused guide for implementing and validating a non-CPU resident
   backend when the first such backend is available.
+
+## CUDA backend
+
+- [ ] Implement a CUDA backend with cuFFT and resident kernels for Fourier
+  crops, pupil operations, intensity formation, projection, and reductions.
+- [ ] Keep reconstruction state and scratch buffers device-resident across AP,
+  FPIE, EPRY, ADMM, and gradient-descent updates.
+- [ ] Add CPU/GPU numerical-parity, unsupported-device, performance, and memory
+  tests.

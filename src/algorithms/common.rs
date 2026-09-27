@@ -11,7 +11,7 @@ use crate::{
     error::Error,
     measurements::MeasurementRead,
     model::{fftshift_copy, ifftshift_copy},
-    reconstruction::{Batch, ReconstructionProblem, ReconstructionState},
+    reconstruction::{AlgorithmAuxiliaryState, Batch, ReconstructionProblem, ReconstructionState},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +30,14 @@ pub(crate) struct UpdateConfiguration {
     pub constrain_pupil: bool,
     pub gain_update: Option<GainUpdateConfiguration>,
     pub background_update: Option<BackgroundUpdateConfiguration>,
+    pub momentum: Option<MomentumConfiguration>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MomentumConfiguration {
+    pub interval: usize,
+    pub friction: f64,
+    pub feedback: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -290,8 +298,92 @@ pub(crate) fn projection_update<M: MeasurementRead>(
                 state.pupil.apply_support();
             }
         }
+        if let Some(momentum) = configuration.momentum {
+            apply_object_momentum(state, momentum)?;
+        }
     }
     Ok(diagnostics)
+}
+
+fn apply_object_momentum(
+    state: &mut ReconstructionState,
+    configuration: MomentumConfiguration,
+) -> Result<()> {
+    let object = state.object_spectrum.as_slice_mut();
+    let auxiliary = match state.algorithm_auxiliary.as_mut() {
+        Some(AlgorithmAuxiliaryState::Mpie(auxiliary)) => auxiliary,
+        Some(_) => {
+            return Err(Error::InvalidModel(
+                "mPIE received auxiliary state owned by another algorithm".into(),
+            ));
+        }
+        None => {
+            return Err(Error::InvalidModel(
+                "mPIE auxiliary state is missing".into(),
+            ));
+        }
+    };
+    if auxiliary.velocity.len() != object.len() || auxiliary.anchor.len() != object.len() {
+        return Err(Error::InvalidModel(
+            "mPIE auxiliary dimensions do not match the object spectrum".into(),
+        ));
+    }
+    auxiliary.effective_frames_since_momentum = auxiliary
+        .effective_frames_since_momentum
+        .checked_add(1)
+        .ok_or_else(|| Error::Numerical("mPIE frame counter overflowed".into()))?;
+    if auxiliary.effective_frames_since_momentum < configuration.interval {
+        return Ok(());
+    }
+    if auxiliary.effective_frames_since_momentum != configuration.interval {
+        return Err(Error::InvalidModel(
+            "mPIE frame counter exceeds the configured momentum interval".into(),
+        ));
+    }
+
+    apply_momentum_event(
+        object,
+        &mut auxiliary.velocity,
+        &mut auxiliary.anchor,
+        configuration,
+    )?;
+    auxiliary.effective_frames_since_momentum = 0;
+    state.object_real_space_cache = None;
+    Ok(())
+}
+
+fn apply_momentum_event(
+    object: &mut [Complex64],
+    velocity: &mut [Complex64],
+    anchor: &mut [Complex64],
+    configuration: MomentumConfiguration,
+) -> Result<()> {
+    if velocity.len() != object.len() || anchor.len() != object.len() {
+        return Err(Error::InvalidModel(
+            "mPIE momentum arrays have inconsistent lengths".into(),
+        ));
+    }
+    for ((object_value, velocity), anchor) in object.iter_mut().zip(velocity).zip(anchor) {
+        let next_velocity = configuration.friction * *velocity + (*object_value - *anchor);
+        let next_object = if configuration.feedback == 0.0 {
+            *object_value
+        } else {
+            *object_value + configuration.feedback * next_velocity
+        };
+        if !next_velocity.re.is_finite()
+            || !next_velocity.im.is_finite()
+            || !next_object.re.is_finite()
+            || !next_object.im.is_finite()
+        {
+            return Err(Error::Numerical(
+                "mPIE momentum produced a non-finite object or velocity".into(),
+            ));
+        }
+        *velocity = next_velocity;
+        *object_value = next_object;
+        *anchor = next_object;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -409,4 +501,56 @@ fn background_value(
             frame * image_len + pixel
         }]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use num_complex::Complex64;
+
+    use super::{MomentumConfiguration, apply_momentum_event};
+
+    #[test]
+    fn mpie_complex_recurrence_updates_velocity_object_and_anchor() {
+        let mut object = [Complex64::new(3.0, 2.0), Complex64::new(-1.0, 0.0)];
+        let mut velocity = [Complex64::new(1.0, 0.0), Complex64::new(0.0, -2.0)];
+        let mut anchor = [Complex64::new(1.0, 1.0), Complex64::new(-2.0, 0.0)];
+
+        apply_momentum_event(
+            &mut object,
+            &mut velocity,
+            &mut anchor,
+            MomentumConfiguration {
+                interval: 3,
+                friction: 0.5,
+                feedback: 0.25,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(velocity[0], Complex64::new(2.5, 1.0));
+        assert_eq!(velocity[1], Complex64::new(1.0, -1.0));
+        assert_eq!(object[0], Complex64::new(3.625, 2.25));
+        assert_eq!(object[1], Complex64::new(-0.75, -0.25));
+        assert_eq!(anchor, object);
+    }
+
+    #[test]
+    fn mpie_recurrence_rejects_non_finite_values() {
+        let mut object = [Complex64::new(f64::INFINITY, 0.0)];
+        let mut velocity = [Complex64::default()];
+        let mut anchor = [Complex64::default()];
+        assert!(
+            apply_momentum_event(
+                &mut object,
+                &mut velocity,
+                &mut anchor,
+                MomentumConfiguration {
+                    interval: 1,
+                    friction: 0.9,
+                    feedback: 0.9,
+                },
+            )
+            .is_err()
+        );
+    }
 }

@@ -41,6 +41,10 @@ first.
 
 ### Added
 
+- Added object-only momentum-accelerated PIE (`Mpie`) for fixed-pupil FPM, with
+  frame-cadence-independent batching, checkpointed velocity and partial
+  intervals, Rust and Python APIs, and deterministic comparison against its
+  underlying rPIE update.
 - Added machine-readable citation metadata and root contribution, security,
   and conduct policies.
 - Added decision-oriented reconstruction algorithm guidance, an FPM glossary,

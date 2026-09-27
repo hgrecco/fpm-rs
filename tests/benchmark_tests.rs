@@ -62,6 +62,7 @@ fn benchmark_profiles_have_stable_names_and_metadata() {
     let smoke = benchmark_profile(SMOKE_BENCHMARK_PROFILE).unwrap();
     assert_eq!(smoke.output_directory, "target/benchmark-results/smoke");
     assert!(smoke.algorithms.contains(&"AlternatingProjection"));
+    assert!(smoke.algorithms.contains(&"Mpie"));
     assert!(smoke.algorithms.contains(&"GradientDescent"));
     assert!(benchmark_profile("unknown").is_none());
 }

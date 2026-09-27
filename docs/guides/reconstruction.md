@@ -146,6 +146,7 @@ experiments.
 | --- | --- | --- |
 | Clean data and a trusted pupil, illumination, gain, and background model | `AlternatingProjection` | Use the smallest baseline first. It has few controls and exposes whether the acquisition and compiled model are internally consistent. |
 | Object-only recovery with weak pupil transfer or mild noise | `Fpie` | Prefer its stabilized object update when plain projection is too sensitive in weak-transfer regions. It does not estimate the pupil or source geometry. |
+| A fixed-pupil `Fpie` trajectory converges slowly or stagnates | `Mpie` | Add periodic object-spectrum momentum after establishing a stable rPIE baseline. It adds interval, friction, and feedback tuning and cannot be wrapped by `JointReconstruction`. |
 | Noise statistics, outliers, or an object prior must enter the update | `GradientDescent` | Select Poisson, Huber-amplitude, intensity, or amplitude loss as appropriate; use total variation only when that prior is defensible. This is the most configurable route, with more tuning and compute. |
 | Pupil aberration or defocus is suspected | `Epry` | Recover the complex pupil with the object. It can also estimate per-frame gain or uniform background. If a selectable data loss or pupil regularization is essential, use pupil-recovering `GradientDescent` instead. |
 | Updates need full- or multi-frame consensus rather than sequential frame corrections | `Admm` | Its auxiliary fields and dual variables make cross-frame agreement explicit. The default full-frame batch costs more memory and introduces penalty and relaxation controls. |
@@ -162,8 +163,9 @@ assumptions and gauges are detailed below.
 ## Select and run an algorithm
 
 `AlternatingProjection` is the simplest starting point. `Fpie` adds regularized
-object updates, `Epry` can recover the pupil and frame response, `Admm` separates
-data fitting from overlap consensus, and `GradientDescent` supports generic
+object updates, `Mpie` adds periodic object-spectrum momentum to that fixed-pupil
+update, `Epry` can recover the pupil and frame response, `Admm` separates data
+fitting from overlap consensus, and `GradientDescent` supports generic
 Fourier-grid source correction, pupil recovery, and regularization. Physical
 planar-array calibration is the separate `JointReconstruction` workflow below.
 
@@ -191,6 +193,28 @@ and `dual_relaxation` control those updates. The default batch spans all frames.
 For multiplexed data, its joint amplitude proximal operates across all source
 modes, so checkpointed auxiliary and dual fields contain two complex values per
 frame-source-mode pixel.
+
+`Mpie` starts from the `Fpie` rPIE update and applies momentum after a configured
+number of positive-weight measured frames. If `O_rpie` is the spectrum after
+the current frame, `O_anchor` is the spectrum after the preceding momentum
+event, and `V` is velocity, an event applies
+`V = friction * V + (O_rpie - O_anchor)` followed by
+`O = O_rpie + feedback * V`. A multiplexed frame counts once after all source
+modes are inserted, zero-weight frames do not count, and a partial interval
+crosses batch and iteration boundaries. `batch_size` therefore does not change
+the numerical path. Defaults use an interval of 30, friction and feedback of
+0.9, an object step of 0.2, and rPIE stability of 0.05; the deterministic CPU
+benchmark also records a tuned interval-10, coefficient-0.7 case. Establish a
+stable `Fpie` result before tuning these controls.
+
+This is an object-only FPM adaptation of [A. Maiden, D. Johnson, and P. Li,
+“Further improvements to the ptychographical iterative engine,” *Optica*
+**4**(7), 736–745
+(2017)](https://doi.org/10.1364/OPTICA.4.000736). Their work tested scanned
+ptychography, applied momentum to both object and probe, and left Fourier
+ptychography testing for future work. Equal friction and feedback reproduce
+their object recurrence; fpm-rs exposes them separately and keeps the compiled
+pupil fixed.
 
 `GradientDescent` defaults to an image-amplitude residual. Its `loss_type` can
 select amplitude MSE, intensity MSE, Poisson negative log likelihood, or robust
@@ -269,8 +293,10 @@ physical calibrator.
 The forward model is the same `ImagePlaneModel`/`ForwardModel` implementation
 used by simulation and reconstruction. Each outer iteration performs complete
 passes of the wrapped analytic object algorithm, bounded physical updates, and
-an illumination-only model refresh. Rust accepts any compatible reconstruction
-algorithm; Python accepts `Fpie` or pupil-recovering `Epry`. The default
+an illumination-only model refresh. Rust accepts compatible reconstruction
+algorithms; Python accepts `Fpie` or pupil-recovering `Epry`. `Mpie` is rejected
+because its velocity has no defined reset or transport across physical model
+recompilation. The default
 calibration objective is amplitude MSE. Intensity MSE,
 Poisson negative log likelihood, and Huber amplitude loss are also available;
 all honor measurement masks and frame weights. A parameter prior contributes
@@ -526,6 +552,12 @@ support, and calibration against a specific problem before reconstruction
 begins. Pupil-recovering algorithms store iteration-boundary canonical arrays;
 an older valid checkpoint is projected into the current convention before start
 callbacks and resumed work without changing the checkpoint format version.
+`Mpie` stores its centered velocity and anchor spectra, effective-frame counter,
+and defining update parameters in `algorithm_auxiliary`. A matching checkpoint
+continues a partial interval; an auxiliary-free checkpoint is a warm start, and
+a different solver's auxiliary variant is rejected. The format remains version
+2 because this field is the solver-state extension point, though readers that
+predate the `Mpie` enum variant cannot load a checkpoint containing it.
 
 Every result owns a trace, even when no diagnostic callback is installed.
 Universal iteration rows are `(iteration, objective, elapsed_seconds)`.

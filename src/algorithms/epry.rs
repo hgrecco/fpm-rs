@@ -280,6 +280,7 @@ impl ReconstructionAlgorithm for Epry {
                         maximum: self.maximum_background,
                     },
                 ),
+                momentum: None,
             },
         )?
         .into())

@@ -4,7 +4,7 @@ use approx::assert_abs_diff_eq;
 use fpm_rs::{
     Complex64,
     algorithms::{
-        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, ReconstructionAlgorithm,
+        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, Mpie, ReconstructionAlgorithm,
         objective::{LossType, loss},
     },
     callbacks::CheckpointEvery,
@@ -13,10 +13,10 @@ use fpm_rs::{
     measurements::{LazyMeasurementStack, MeasurementRead},
     model::{ForwardModel, FourierOffset, ImagePlaneModel, Pupil, ReconstructionShape},
     reconstruction::{
-        Batch, ReconstructionCheckpoint, ReconstructionProblem, ReconstructionState,
-        ReconstructionTrace, RunOptions, Runner,
+        AlgorithmAuxiliaryState, Batch, FrameSchedule, ReconstructionCheckpoint,
+        ReconstructionProblem, ReconstructionState, ReconstructionTrace, RunOptions, Runner,
     },
-    simulation::{CameraModel, Simulator, SyntheticObject},
+    simulation::{CameraModel, Simulator, SyntheticObject, presets::noiseless_mixed_fpm},
 };
 use image::{ImageBuffer, Luma};
 use ndarray::{Array2, ShapeBuilder};
@@ -253,6 +253,403 @@ fn fpie_loss_decreases_on_noiseless_data() {
 }
 
 #[test]
+fn mpie_zero_feedback_matches_the_same_fpie_updates() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let fpie = Fpie::default()
+        .iterations(4)
+        .object_step(0.2)
+        .stability(0.05)
+        .run(&problem)
+        .unwrap();
+    let mpie = Mpie::default()
+        .iterations(4)
+        .momentum_interval(3)
+        .momentum_feedback(0.0)
+        .run(&problem)
+        .unwrap();
+
+    assert_eq!(mpie.object_spectrum, fpie.object_spectrum);
+    assert_eq!(
+        mpie.trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>(),
+        fpie.trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mpie_frame_cadence_is_independent_of_batch_partitioning() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let single = Mpie::default()
+        .iterations(4)
+        .momentum_interval(3)
+        .batch_size(1)
+        .run(&problem)
+        .unwrap();
+    let grouped = Mpie::default()
+        .iterations(4)
+        .momentum_interval(3)
+        .batch_size(problem.model.frame_count())
+        .run(&problem)
+        .unwrap();
+
+    assert_eq!(single.object_spectrum, grouped.object_spectrum);
+    assert_eq!(
+        single
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>(),
+        grouped
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mpie_seeded_schedule_is_repeatable() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let options = RunOptions {
+        max_iterations: 4,
+        batch_size: 2,
+        schedule: FrameSchedule::RandomShuffle { seed: 41 },
+        ..RunOptions::default()
+    };
+    let first = Runner::new(Mpie::default().momentum_interval(3), options.clone())
+        .run(&problem)
+        .unwrap();
+    let second = Runner::new(Mpie::default().momentum_interval(3), options)
+        .run(&problem)
+        .unwrap();
+
+    assert_eq!(first.object_spectrum, second.object_spectrum);
+    assert_eq!(
+        first
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>(),
+        second
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mpie_checkpoint_resume_preserves_partial_interval() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    Mpie::default()
+        .iterations(2)
+        .momentum_interval(7)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(2, directory.path()))],
+        )
+        .unwrap();
+    let checkpoint = ReconstructionCheckpoint::load_for_problem(
+        directory.path().join("checkpoint_00002.json"),
+        &problem,
+    )
+    .unwrap();
+    let Some(AlgorithmAuxiliaryState::Mpie(auxiliary)) = checkpoint.algorithm_auxiliary() else {
+        panic!("expected mPIE auxiliary state");
+    };
+    assert_eq!(auxiliary.effective_frames_since_momentum, 3);
+
+    let resumed = Mpie::default()
+        .iterations(4)
+        .momentum_interval(7)
+        .run_from_checkpoint(&problem, checkpoint.clone())
+        .unwrap();
+    let uninterrupted = Mpie::default()
+        .iterations(4)
+        .momentum_interval(7)
+        .run(&problem)
+        .unwrap();
+    for (&resumed, &uninterrupted) in resumed
+        .object_spectrum
+        .iter()
+        .zip(uninterrupted.object_spectrum.iter())
+    {
+        assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-14);
+        assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-14);
+    }
+    assert_eq!(resumed.recovered_pupil, uninterrupted.recovered_pupil);
+
+    let error = Mpie::default()
+        .iterations(4)
+        .momentum_interval(7)
+        .momentum_friction(0.8)
+        .run_from_checkpoint(&problem, checkpoint)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        fpm_rs::Error::InvalidParameter {
+            name: "momentum_friction",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn mpie_counts_effective_measured_frames_and_multiplexed_frames_once() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let mut weighted_measurements = simulation.measurements;
+    weighted_measurements.set_frame_weight(0, 0.0).unwrap();
+    weighted_measurements.set_frame_weight(1, 0.0).unwrap();
+    let weighted_problem =
+        ReconstructionProblem::new(weighted_measurements, simulation.reconstruction_model).unwrap();
+    let weighted_directory = tempfile::tempdir().unwrap();
+    Mpie::default()
+        .iterations(1)
+        .momentum_interval(3)
+        .run_with_callbacks(
+            &weighted_problem,
+            vec![Box::new(CheckpointEvery::new(1, weighted_directory.path()))],
+        )
+        .unwrap();
+    let weighted_checkpoint =
+        ReconstructionCheckpoint::load(weighted_directory.path().join("checkpoint_00001.json"))
+            .unwrap();
+    let Some(AlgorithmAuxiliaryState::Mpie(weighted_auxiliary)) =
+        weighted_checkpoint.algorithm_auxiliary()
+    else {
+        panic!("expected mPIE auxiliary state");
+    };
+    assert_eq!(weighted_auxiliary.effective_frames_since_momentum, 0);
+
+    let multiplexed_model = common::direct_model()
+        .unwrap()
+        .with_multiplexing(vec![
+            vec![(0, 0.6), (1, 0.4)],
+            vec![(2, 0.3), (3, 0.2), (4, 0.5)],
+        ])
+        .unwrap();
+    let multiplexed_simulation = Simulator::ideal(multiplexed_model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let multiplexed_problem = ReconstructionProblem::new(
+        multiplexed_simulation.measurements,
+        multiplexed_simulation.reconstruction_model,
+    )
+    .unwrap();
+    let multiplexed_directory = tempfile::tempdir().unwrap();
+    Mpie::default()
+        .iterations(1)
+        .momentum_interval(2)
+        .run_with_callbacks(
+            &multiplexed_problem,
+            vec![Box::new(CheckpointEvery::new(
+                1,
+                multiplexed_directory.path(),
+            ))],
+        )
+        .unwrap();
+    let multiplexed_checkpoint =
+        ReconstructionCheckpoint::load(multiplexed_directory.path().join("checkpoint_00001.json"))
+            .unwrap();
+    let Some(AlgorithmAuxiliaryState::Mpie(multiplexed_auxiliary)) =
+        multiplexed_checkpoint.algorithm_auxiliary()
+    else {
+        panic!("expected mPIE auxiliary state");
+    };
+    assert_eq!(multiplexed_auxiliary.effective_frames_since_momentum, 0);
+}
+
+#[test]
+fn mpie_validation_uses_stable_parameter_names() {
+    assert!(
+        Mpie::default()
+            .loss_type(LossType::IntensityMse)
+            .validate()
+            .is_ok()
+    );
+    for (algorithm, expected) in [
+        (Mpie::default().object_step(0.0), "object_step"),
+        (Mpie::default().stability(-0.1), "stability"),
+        (Mpie::default().momentum_interval(0), "momentum_interval"),
+        (Mpie::default().momentum_friction(1.0), "momentum_friction"),
+        (Mpie::default().momentum_feedback(1.1), "momentum_feedback"),
+        (Mpie::default().batch_size(0), "batch_size"),
+        (Mpie::default().epsilon(0.0), "epsilon"),
+    ] {
+        let error = algorithm.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            fpm_rs::Error::InvalidParameter { name, .. } if name == expected
+        ));
+    }
+}
+
+#[test]
+fn mpie_rejects_incompatible_and_malformed_checkpoint_state() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let warm_state = ReconstructionState::initialize(&problem).unwrap();
+    let warm_checkpoint =
+        ReconstructionCheckpoint::capture(0, &warm_state, &ReconstructionTrace::default());
+    assert!(
+        Mpie::default()
+            .iterations(1)
+            .run_from_checkpoint(&problem, warm_checkpoint)
+            .is_ok()
+    );
+
+    Admm::default()
+        .iterations(1)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(1, directory.path()))],
+        )
+        .unwrap();
+    let admm_checkpoint =
+        ReconstructionCheckpoint::load(directory.path().join("checkpoint_00001.json")).unwrap();
+    assert!(matches!(
+        Mpie::default()
+            .iterations(2)
+            .run_from_checkpoint(&problem, admm_checkpoint),
+        Err(fpm_rs::Error::InvalidModel(_))
+    ));
+
+    Mpie::default()
+        .iterations(1)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(1, directory.path()))],
+        )
+        .unwrap();
+    let path = directory.path().join("checkpoint_00001.json");
+    let mut malformed: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+    malformed["algorithm_auxiliary"]["Mpie"]["velocity"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    malformed["algorithm_auxiliary"]["Mpie"]["anchor"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    std::fs::write(&path, serde_json::to_vec(&malformed).unwrap()).unwrap();
+    let malformed = ReconstructionCheckpoint::load(&path).unwrap();
+    assert!(malformed.validate_for_problem(&problem).is_err());
+}
+
+#[test]
+fn mpie_accelerates_the_same_rpie_base_on_deterministic_strong_phase_fpm_data() {
+    let model = noiseless_mixed_fpm(2026).unwrap().true_model;
+    let base_object = SyntheticObject::mixed_test_pattern((64, 64)).unwrap();
+    // Fourfold phase creates multiple wraps while preserving the deterministic
+    // mixed target's amplitude and spatial structure.
+    let strong_phase = SyntheticObject::new(
+        base_object
+            .field()
+            .mapv(|value| Complex64::from_polar(value.norm(), 4.0 * value.arg())),
+    )
+    .unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(strong_phase)
+        .seed(2026)
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let fpie = Fpie::default()
+        .iterations(20)
+        .object_step(0.2)
+        .stability(0.05)
+        .run(&problem)
+        .unwrap();
+    let mpie = Mpie::default()
+        .iterations(20)
+        .momentum_interval(10)
+        .momentum_friction(0.7)
+        .momentum_feedback(0.7)
+        .run(&problem)
+        .unwrap();
+    let fpie_objective = fpie.trace.iterations.last().unwrap().objective;
+    let mpie_objective = mpie.trace.iterations.last().unwrap().objective;
+    assert!(
+        mpie_objective < 0.95 * fpie_objective,
+        "expected mPIE acceleration at an equal frame-update budget, got {fpie_objective} -> {mpie_objective}"
+    );
+    let target = 5.4e-5;
+    let mpie_reached = mpie
+        .trace
+        .iterations
+        .iter()
+        .find(|record| record.objective < target)
+        .map(|record| record.iteration);
+    let fpie_reached = fpie
+        .trace
+        .iterations
+        .iter()
+        .find(|record| record.objective < target)
+        .map(|record| record.iteration);
+    assert!(
+        mpie_reached.is_some_and(|mpie_iteration| {
+            fpie_reached.is_none_or(|fpie_iteration| mpie_iteration < fpie_iteration)
+        }),
+        "mPIE did not reach the fixed {target} objective threshold first: mPIE={mpie_reached:?}, FPIE={fpie_reached:?}"
+    );
+}
+
+#[test]
 fn multiplexed_admm_reports_finite_consensus_residuals() {
     let model = common::direct_model()
         .unwrap()
@@ -397,8 +794,9 @@ fn multiplexed_admm_checkpoint_preserves_per_mode_state() {
         &problem,
     )
     .unwrap();
-    let fpm_rs::reconstruction::AlgorithmAuxiliaryState::Admm(auxiliary) =
-        checkpoint.algorithm_auxiliary().unwrap();
+    let AlgorithmAuxiliaryState::Admm(auxiliary) = checkpoint.algorithm_auxiliary().unwrap() else {
+        panic!("expected ADMM auxiliary state");
+    };
     assert_eq!(
         auxiliary.auxiliary_fields.len(),
         5 * problem.measurements.frame_len()

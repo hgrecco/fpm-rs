@@ -128,6 +128,7 @@ impl ReconstructionAlgorithm for Fpie {
                 constrain_pupil: true,
                 gain_update: None,
                 background_update: None,
+                momentum: None,
             },
         )?
         .into())

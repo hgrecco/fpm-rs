@@ -10,7 +10,7 @@ use fpm_rs::{
     algorithms::objective::LossType,
     algorithms::{
         Admm, AlternatingProjection, Epry, Fpie, GradientDescent, JointReconstruction,
-        JointReconstructionResult as CoreJointReconstructionResult, ReconstructionAlgorithm,
+        JointReconstructionResult as CoreJointReconstructionResult, Mpie, ReconstructionAlgorithm,
     },
     callbacks::{
         Callback, CallbackAction, CallbackHook, CheckpointEvery, CsvLogger, ProgressLogger,
@@ -2356,6 +2356,104 @@ impl PyFpie {
     }
 }
 
+/// Momentum-accelerated regularized PIE adapted to image-plane FPM.
+///
+/// `Mpie` applies the object-only rPIE projection used by `Fpie`, then updates a
+/// centered complex object-spectrum velocity after a fixed number of
+/// positive-weight measured frames. Multiplexed frames count once after all
+/// source modes are inserted; zero-weight frames do not advance the interval.
+/// Momentum state and a partial interval are preserved in checkpoints.
+///
+/// The cited method was tested for scanned ptychography and accelerates both
+/// object and probe. This implementation keeps the FPM pupil fixed. It exposes
+/// separate friction and feedback controls; equal values reproduce the paper's
+/// single object momentum coefficient.
+///
+/// Parameters
+/// ----------
+/// iterations : int
+///     Number of complete passes through the acquisition schedule.
+/// object_step : float
+///     Positive scale applied to each rPIE object-spectrum correction.
+/// stability : float
+///     Blend from local pupil power (0) to maximum pupil power (1).
+/// momentum_interval : int
+///     Positive-weight measured-frame updates between momentum events.
+/// momentum_friction : float
+///     Previous-velocity fraction in the half-open interval ``[0, 1)``.
+/// momentum_feedback : float
+///     Updated-velocity fraction added to the object, in ``[0, 1]``.
+/// batch_size : int
+///     Number of measured frames supplied to each reconstruction step. This
+///     does not change momentum cadence.
+/// epsilon : float
+///     Positive floor added to the rPIE denominator.
+/// loss_type : str
+///     Loss reported in diagnostics. The projection always enforces amplitude.
+///
+/// Reference
+/// ---------
+/// [A. Maiden, D. Johnson, and P. Li, "Further improvements to the
+/// ptychographical iterative engine" (2017)](https://doi.org/10.1364/OPTICA.4.000736),
+/// Optica 4(7), 736-745.
+#[pyclass(module = "fpm_rs._core", name = "Mpie", frozen)]
+pub(crate) struct PyMpie {
+    inner: Mpie,
+}
+
+#[pymethods]
+impl PyMpie {
+    #[new]
+    #[pyo3(signature = (*, iterations=50, object_step=0.2, stability=0.05, momentum_interval=30, momentum_friction=0.9, momentum_feedback=0.9, batch_size=1, epsilon=1e-10, loss_type="amplitude_mse"))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        iterations: usize,
+        object_step: f64,
+        stability: f64,
+        momentum_interval: usize,
+        momentum_friction: f64,
+        momentum_feedback: f64,
+        batch_size: usize,
+        epsilon: f64,
+        loss_type: &str,
+    ) -> PyResult<Self> {
+        let inner = Mpie {
+            iterations,
+            object_step,
+            stability,
+            momentum_interval,
+            momentum_friction,
+            momentum_feedback,
+            batch_size,
+            epsilon,
+            loss_type: parse_loss_type(loss_type)?,
+        };
+        inner.validate().map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (problem, *, callbacks=None, resume_from=None, schedule="sequential", schedule_seed=0))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        problem: PyRef<'_, PyReconstructionProblem>,
+        callbacks: Option<&Bound<'_, PyAny>>,
+        resume_from: Option<PyRef<'_, PyReconstructionCheckpoint>>,
+        schedule: &str,
+        schedule_seed: u64,
+    ) -> PyResult<PyReconstructionResult> {
+        run_algorithm(
+            py,
+            self.inner.clone(),
+            &problem,
+            callbacks,
+            resume_from.as_deref(),
+            schedule,
+            schedule_seed,
+        )
+    }
+}
+
 /// Embedded pupil-recovery reconstruction for Fourier ptychographic microscopy.
 ///
 /// EPRY projects each predicted field onto the measured amplitude and uses the
@@ -2723,6 +2821,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyJointReconstructionResult>()?;
     module.add_class::<PyAlternatingProjection>()?;
     module.add_class::<PyFpie>()?;
+    module.add_class::<PyMpie>()?;
     module.add_class::<PyEpry>()?;
     module.add_class::<PyAdmm>()?;
     module.add_class::<PyGradientDescent>()?;

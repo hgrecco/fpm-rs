@@ -167,6 +167,21 @@ def test_joint_reconstruction_accepts_pupil_recovery_algorithm() -> None:
     assert result.calibrated_model.source_count == 9
 
 
+def test_joint_reconstruction_rejects_mpie() -> None:
+    optics, nominal, _problem = calibration_problem()
+    calibration = fpm.IlluminationCalibration(
+        fpm.PlanarArrayCalibrationParameters(translation=(True, False, False))
+    )
+    with pytest.raises(TypeError, match="Fpie or Epry"):
+        fpm.JointReconstruction(
+            fpm.Mpie(iterations=1),
+            optics,
+            nominal,
+            calibration,
+            outer_iterations=1,
+        )
+
+
 def test_unsupported_geometry_fails_clearly(optics: fpm.Optics) -> None:
     illumination = fpm.Illumination(
         fpm.DirectionList.from_unit_vectors(np.array([[0.0, 0.0, 1.0]]))

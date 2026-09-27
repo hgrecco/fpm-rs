@@ -60,6 +60,7 @@ from ._core import (
     LengthMismatchError,
     MeasurementStack,
     NumericalError,
+    Mpie,
     Optics,
     ProgressLogger,
     PupilAberration,

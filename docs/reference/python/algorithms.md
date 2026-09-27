@@ -8,6 +8,8 @@ rule, recoverable quantities, and algorithm-specific parameters.
 
 ::: fpm_rs.Fpie
 
+::: fpm_rs.Mpie
+
 ::: fpm_rs.Epry
 
 ::: fpm_rs.Admm

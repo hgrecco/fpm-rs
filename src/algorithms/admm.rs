@@ -221,6 +221,11 @@ impl ReconstructionAlgorithm for Admm {
                 dual_fields: vec![Complex64::default(); expected],
             },
             Some(AlgorithmAuxiliaryState::Admm(auxiliary)) => auxiliary,
+            Some(_) => {
+                return Err(Error::InvalidModel(
+                    "ADMM cannot resume auxiliary state owned by another algorithm".into(),
+                ));
+            }
         };
         let result = self.step_with_auxiliary(problem, state, batch, &mut auxiliary);
         state.algorithm_auxiliary = Some(AlgorithmAuxiliaryState::Admm(auxiliary));

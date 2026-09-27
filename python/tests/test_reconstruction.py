@@ -33,11 +33,12 @@ def assert_canonical_blind_result(
     [
         fpm.AlternatingProjection(iterations=1),
         fpm.Fpie(iterations=1),
+        fpm.Mpie(iterations=1),
         fpm.Epry(iterations=1),
         fpm.Admm(iterations=1, batch_size=1),
         fpm.GradientDescent(iterations=1, parallel_workers=1),
     ],
-    ids=["ap", "fpie", "epry", "admm", "gradient"],
+    ids=["ap", "fpie", "mpie", "epry", "admm", "gradient"],
 )
 def test_all_algorithms_return_numpy_results(
     problem: fpm.ReconstructionProblem,
@@ -95,6 +96,12 @@ def test_algorithm_parameter_errors_remain_typed() -> None:
     with pytest.raises(fpm.InvalidParameterError, match="object_step"):
         fpm.AlternatingProjection(object_step=0.0)
 
+    with pytest.raises(fpm.InvalidParameterError, match="momentum_interval"):
+        fpm.Mpie(momentum_interval=0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="momentum_friction"):
+        fpm.Mpie(momentum_friction=1.0)
+
     with pytest.raises(ValueError, match="loss_type"):
         fpm.GradientDescent(loss_type="unknown")
 
@@ -121,6 +128,17 @@ def test_pupil_recovery_results_use_the_canonical_gauge(
 
 def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
     expected = {
+        fpm.Mpie: [
+            "iterations",
+            "object_step",
+            "stability",
+            "momentum_interval",
+            "momentum_friction",
+            "momentum_feedback",
+            "batch_size",
+            "epsilon",
+            "loss_type",
+        ],
         fpm.Epry: [
             "iterations",
             "object_step",

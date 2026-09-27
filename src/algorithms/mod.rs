@@ -1,7 +1,8 @@
 //! Iterative reconstruction algorithms for compiled image-plane models.
 //!
 //! Choose a concrete solver such as [`crate::algorithms::AlternatingProjection`],
-//! [`crate::algorithms::Fpie`], [`crate::algorithms::Epry`],
+//! [`crate::algorithms::Fpie`], [`crate::algorithms::Mpie`],
+//! [`crate::algorithms::Epry`],
 //! [`crate::algorithms::Admm`], or [`crate::algorithms::GradientDescent`]. All
 //! implement [`crate::algorithms::ReconstructionAlgorithm`] and consume a validated
 //! [`crate::reconstruction::ReconstructionProblem`]; illumination geometry is compiled
@@ -16,6 +17,7 @@ mod gauge;
 mod gradient_descent;
 mod joint_reconstruction;
 mod metrics;
+mod mpie;
 pub mod objective;
 mod regularization;
 
@@ -28,6 +30,7 @@ pub use joint_reconstruction::{
     JointIterationMetrics, JointReconstruction, JointReconstructionResult,
 };
 pub use metrics::{AlgorithmIterationMetrics, NoIterationMetrics, StepOutput, StepSummary};
+pub use mpie::Mpie;
 
 use crate::{
     Result,
@@ -96,6 +99,16 @@ pub trait ReconstructionAlgorithm {
         _state: &mut ReconstructionState,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Reports whether the algorithm may run inside physical joint calibration.
+    ///
+    /// The default permits wrapping. Stateful methods whose internal variables
+    /// would become invalid when the calibrated forward model is recompiled can
+    /// return `false`; [`JointReconstruction`] then rejects them during
+    /// validation.
+    fn supports_joint_reconstruction(&self) -> bool {
+        true
     }
 
     /// Updates `state` for one scheduled batch in zero-based `iteration`.

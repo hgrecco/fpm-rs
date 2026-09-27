@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use fpm_rs::{
-    algorithms::{Fpie, JointReconstruction, ReconstructionAlgorithm},
+    algorithms::{Fpie, JointReconstruction, Mpie, ReconstructionAlgorithm},
     callbacks::CheckpointEvery,
     experiment::{
         ArrayPose, DirectionList, Illumination, Optics, PlanarLedArray, SourceCalibration,
@@ -856,6 +856,33 @@ fn joint_reconstruction_returns_reusable_physical_state() {
         decoded.final_parameters.translation_m,
         result.final_parameters.translation_m
     );
+}
+
+#[test]
+fn joint_reconstruction_rejects_mpie_model_recompilation() {
+    let nominal = Illumination::from_geometry(array([0.0, 0.0, -80e-3])).unwrap();
+    let (measurements, nominal_model, _) = simulate_pair(&nominal, &nominal);
+    let problem = ReconstructionProblem::new(measurements, nominal_model).unwrap();
+    let parameters = PlanarArrayCalibrationParameters::builder()
+        .translation([true, false, false])
+        .build()
+        .unwrap();
+    let error = JointReconstruction::new(
+        Mpie::default().iterations(1),
+        optics(),
+        nominal,
+        IlluminationCalibration::new(parameters),
+        1,
+    )
+    .run(&problem)
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        fpm_rs::Error::InvalidParameter {
+            name: "object_algorithm",
+            ..
+        }
+    ));
 }
 
 #[test]

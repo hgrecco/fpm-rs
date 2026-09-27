@@ -125,6 +125,7 @@ impl ReconstructionAlgorithm for AlternatingProjection {
                 constrain_pupil: true,
                 gain_update: None,
                 background_update: None,
+                momentum: None,
             },
         )?
         .into())
