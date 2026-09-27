@@ -52,6 +52,37 @@ pub struct MpieAuxiliaryState {
     pub momentum_feedback: f64,
 }
 
+/// Resumable cycle-level feedback state for adaptive alternating projection.
+///
+/// Objective sums use the same weighted, mask-aware amplitude-MSE convention
+/// as the reconstruction trace. Controller parameters are stored so resume
+/// cannot silently reinterpret an in-progress feedback cycle.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AdaptiveAlternatingProjectionAuxiliaryState {
+    /// Zero-based iteration whose batches are currently accumulated.
+    pub active_iteration: usize,
+    /// Object relaxation used by the active iteration.
+    pub current_object_step: f64,
+    /// Objective of the pass preceding the active pass, when established.
+    pub previous_objective: Option<f64>,
+    /// Frame-weighted objective sum accumulated in the active pass.
+    pub objective_sum: f64,
+    /// Non-negative frame-weight sum accumulated in the active pass.
+    pub weight_sum: f64,
+    /// Number of scheduled frames accumulated in the active pass.
+    pub frames_accumulated: usize,
+    /// Initial object relaxation that created this controller state.
+    pub initial_object_step: f64,
+    /// Required relative objective decrease that created this state.
+    pub progress_threshold: f64,
+    /// Multiplicative reduction factor that created this state.
+    pub reduction_factor: f64,
+    /// Positive object-step floor that created this state.
+    pub minimum_object_step: f64,
+    /// Numerical floor used for relative-progress division.
+    pub epsilon: f64,
+}
+
 /// Solver-specific state preserved in checkpoints.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AlgorithmAuxiliaryState {
@@ -59,6 +90,8 @@ pub enum AlgorithmAuxiliaryState {
     Admm(AdmmAuxiliaryState),
     /// mPIE object-spectrum velocity, anchor, cadence, and parameters.
     Mpie(MpieAuxiliaryState),
+    /// Adaptive alternating-projection pass objective and controller state.
+    AdaptiveAlternatingProjection(AdaptiveAlternatingProjectionAuxiliaryState),
 }
 
 #[derive(Clone, Debug)]

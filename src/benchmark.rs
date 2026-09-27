@@ -69,6 +69,7 @@ pub const BENCHMARK_PROFILES: &[BenchmarkProfile] = &[
         output_directory: "target/benchmark-results/smoke",
         algorithms: &[
             "AlternatingProjection",
+            "AdaptiveAlternatingProjection",
             "Fpie",
             "Mpie",
             "Epry",
@@ -83,6 +84,7 @@ pub const BENCHMARK_PROFILES: &[BenchmarkProfile] = &[
         output_directory: "target/benchmark-results/cpu",
         algorithms: &[
             "AlternatingProjection",
+            "AdaptiveAlternatingProjection",
             "Fpie",
             "Mpie",
             "Epry",

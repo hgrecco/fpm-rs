@@ -255,6 +255,41 @@ impl ReconstructionCheckpoint {
                         || !mpie.momentum_feedback.is_finite()
                         || !(0.0..=1.0).contains(&mpie.momentum_feedback)
                 }
+                AlgorithmAuxiliaryState::AdaptiveAlternatingProjection(adaptive) => {
+                    !adaptive.current_object_step.is_finite()
+                        || adaptive.current_object_step <= 0.0
+                        || !adaptive.initial_object_step.is_finite()
+                        || adaptive.initial_object_step <= 0.0
+                        || !adaptive.minimum_object_step.is_finite()
+                        || adaptive.minimum_object_step <= 0.0
+                        || adaptive.minimum_object_step > adaptive.initial_object_step
+                        || adaptive.current_object_step < adaptive.minimum_object_step
+                        || adaptive.current_object_step > adaptive.initial_object_step
+                        || !adaptive.progress_threshold.is_finite()
+                        || !(0.0..1.0).contains(&adaptive.progress_threshold)
+                        || !adaptive.reduction_factor.is_finite()
+                        || adaptive.reduction_factor <= 0.0
+                        || adaptive.reduction_factor >= 1.0
+                        || !adaptive.epsilon.is_finite()
+                        || adaptive.epsilon <= 0.0
+                        || !adaptive.objective_sum.is_finite()
+                        || adaptive.objective_sum < 0.0
+                        || !adaptive.weight_sum.is_finite()
+                        || adaptive.weight_sum < 0.0
+                        || adaptive
+                            .previous_objective
+                            .is_some_and(|value| !value.is_finite() || value < 0.0)
+                        || (adaptive.frames_accumulated == 0
+                            && (adaptive.objective_sum != 0.0 || adaptive.weight_sum != 0.0))
+                        || (adaptive.frames_accumulated > 0 && adaptive.weight_sum <= 0.0)
+                        || (self.completed_iterations == 0
+                            && (adaptive.active_iteration != 0 || adaptive.frames_accumulated != 0))
+                        || (self.completed_iterations > 0
+                            && (adaptive.active_iteration.checked_add(1)
+                                != Some(self.completed_iterations)
+                                || adaptive.frames_accumulated == 0))
+                        || (self.completed_iterations >= 2 && adaptive.previous_objective.is_none())
+                }
             })
         {
             return Err(Error::InvalidModel(
@@ -378,6 +413,10 @@ impl ReconstructionCheckpoint {
                 AlgorithmAuxiliaryState::Admm(admm) => admm.auxiliary_fields.len() != auxiliary_len,
                 AlgorithmAuxiliaryState::Mpie(mpie) => {
                     mpie.velocity.len() != object_len || mpie.anchor.len() != object_len
+                }
+                AlgorithmAuxiliaryState::AdaptiveAlternatingProjection(adaptive) => {
+                    self.completed_iterations > 0
+                        && adaptive.frames_accumulated != problem.model.frame_count()
                 }
             })
         {

@@ -9,8 +9,9 @@ use fpm_rs::{
     Complex64, Error,
     algorithms::objective::LossType,
     algorithms::{
-        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, JointReconstruction,
-        JointReconstructionResult as CoreJointReconstructionResult, Mpie, ReconstructionAlgorithm,
+        AdaptiveAlternatingProjection, Admm, AlternatingProjection, Epry, Fpie, GradientDescent,
+        JointReconstruction, JointReconstructionResult as CoreJointReconstructionResult, Mpie,
+        ReconstructionAlgorithm,
     },
     callbacks::{
         Callback, CallbackAction, CallbackHook, CheckpointEvery, CsvLogger, ProgressLogger,
@@ -2279,6 +2280,102 @@ impl PyAlternatingProjection {
     }
 }
 
+/// Noise-robust alternating projection with a pass-adaptive object step.
+///
+/// The method uses the ordinary fixed-pupil amplitude-projection update, but
+/// shares one object step across each complete acquisition pass. It retains the
+/// step while the accumulated amplitude-MSE objective makes sufficient
+/// relative progress and otherwise reduces it to a positive floor. The
+/// controller adds no extra forward evaluation.
+///
+/// Parameters
+/// ----------
+/// iterations : int
+///     Number of complete passes through the acquisition schedule.
+/// initial_object_step : float
+///     Positive object relaxation used before the first reduction.
+/// progress_threshold : float
+///     Minimum relative pass-objective decrease required to retain the step.
+/// reduction_factor : float
+///     Factor in ``(0, 1)`` applied when progress is insufficient.
+/// minimum_object_step : float
+///     Positive step floor no greater than ``initial_object_step``.
+/// batch_size : int
+///     Number of measured frames supplied to each reconstruction step. It does
+///     not change adaptation cadence or the numerical path.
+/// epsilon : float
+///     Positive numerical floor used in projection and relative progress.
+///
+/// Notes
+/// -----
+/// Feedback always uses the frame-weighted, mask-aware amplitude MSE after
+/// applying configured gains and background. The cited convergence proof is
+/// for convex component objectives, whereas FPM phase retrieval is non-convex.
+/// The implementation uses the paper's inexpensive accumulated-objective
+/// approximation and keeps the pupil fixed.
+///
+/// References
+/// ----------
+/// [C. Zuo, J. Sun, and Q. Chen, "Adaptive step-size strategy for noise-robust
+/// Fourier ptychographic microscopy" (2016)](https://doi.org/10.1364/OE.24.020724),
+/// Optics Express 24(18), 20724-20744.
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "AdaptiveAlternatingProjection",
+    frozen
+)]
+pub(crate) struct PyAdaptiveAlternatingProjection {
+    inner: AdaptiveAlternatingProjection,
+}
+
+#[pymethods]
+impl PyAdaptiveAlternatingProjection {
+    #[new]
+    #[pyo3(signature = (*, iterations=50, initial_object_step=1.0, progress_threshold=0.01, reduction_factor=0.5, minimum_object_step=0.001, batch_size=1, epsilon=1e-10))]
+    fn new(
+        iterations: usize,
+        initial_object_step: f64,
+        progress_threshold: f64,
+        reduction_factor: f64,
+        minimum_object_step: f64,
+        batch_size: usize,
+        epsilon: f64,
+    ) -> PyResult<Self> {
+        let inner = AdaptiveAlternatingProjection {
+            iterations,
+            initial_object_step,
+            progress_threshold,
+            reduction_factor,
+            minimum_object_step,
+            batch_size,
+            epsilon,
+        };
+        inner.validate().map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (problem, *, callbacks=None, resume_from=None, schedule="sequential", schedule_seed=0))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        problem: PyRef<'_, PyReconstructionProblem>,
+        callbacks: Option<&Bound<'_, PyAny>>,
+        resume_from: Option<PyRef<'_, PyReconstructionCheckpoint>>,
+        schedule: &str,
+        schedule_seed: u64,
+    ) -> PyResult<PyReconstructionResult> {
+        run_algorithm(
+            py,
+            self.inner.clone(),
+            &problem,
+            callbacks,
+            resume_from.as_deref(),
+            schedule,
+            schedule_seed,
+        )
+    }
+}
+
 /// Regularized ptychographic iterative-engine reconstruction adapted to FPM.
 ///
 /// This method uses detector-amplitude projection but preconditions object
@@ -2820,6 +2917,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyJointReconstruction>()?;
     module.add_class::<PyJointReconstructionResult>()?;
     module.add_class::<PyAlternatingProjection>()?;
+    module.add_class::<PyAdaptiveAlternatingProjection>()?;
     module.add_class::<PyFpie>()?;
     module.add_class::<PyMpie>()?;
     module.add_class::<PyEpry>()?;

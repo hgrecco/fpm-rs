@@ -81,13 +81,13 @@ directly instead of using an algorithm registry.
 
 | Profile | Command | Algorithms | Expected runtime | Output |
 |---|---|---|---|---|
-| `smoke` | `cargo run --example benchmark_algorithms -- smoke` | AP, Fpie, Mpie, Epry, ADMM, GradientDescent | Under 1 minute on a typical laptop CPU | `target/benchmark-results/smoke` |
-| `cpu` | `cargo run --example benchmark_algorithms -- cpu` | AP, Fpie, Mpie, Epry, ADMM, GradientDescent | 1-5 minutes on a typical laptop CPU | `target/benchmark-results/cpu` |
+| `smoke` | `cargo run --all-features --example benchmark_algorithms -- smoke` | AP, adaptive AP, Fpie, Mpie, Epry, ADMM, GradientDescent | Under 1 minute on a typical laptop CPU | `target/benchmark-results/smoke` |
+| `cpu` | `cargo run --all-features --example benchmark_algorithms -- cpu` | AP, adaptive AP, Fpie, Mpie, Epry, ADMM, GradientDescent | 1-5 minutes on a typical laptop CPU | `target/benchmark-results/cpu` |
 
 Run the default offline smoke profile with:
 
 ```sh
-cargo run --example benchmark_algorithms
+cargo run --all-features --example benchmark_algorithms
 ```
 
 Converted-dataset benchmarks use the same API. When ground truth is unavailable,

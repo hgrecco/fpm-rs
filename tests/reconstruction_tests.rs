@@ -4,7 +4,8 @@ use approx::assert_abs_diff_eq;
 use fpm_rs::{
     Complex64,
     algorithms::{
-        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, Mpie, ReconstructionAlgorithm,
+        AdaptiveAlternatingProjection, Admm, AlternatingProjection, Epry, Fpie, GradientDescent,
+        Mpie, ReconstructionAlgorithm,
         objective::{LossType, loss},
     },
     callbacks::CheckpointEvery,
@@ -31,6 +32,18 @@ fn admm_metric_values(
         .algorithm_metrics
         .iter()
         .filter(|record| record.namespace == "admm" && record.metric == metric)
+        .map(|record| record.value)
+        .collect()
+}
+
+fn adaptive_step_values(result: &fpm_rs::reconstruction::ReconstructionResult) -> Vec<f64> {
+    result
+        .trace
+        .algorithm_metrics
+        .iter()
+        .filter(|record| {
+            record.namespace == "adaptive_alternating_projection" && record.metric == "object_step"
+        })
         .map(|record| record.value)
         .collect()
 }
@@ -70,6 +83,378 @@ fn ap_reconstructs_and_reports_history() {
         .collect();
     assert_eq!(residuals.len(), problem.model.frame_count());
     assert!(residuals.iter().all(|value| value.is_finite()));
+}
+
+#[test]
+fn adaptive_projection_matches_fixed_step_until_feedback_has_two_objectives() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let fixed = AlternatingProjection::default()
+        .iterations(2)
+        .object_step(0.7)
+        .run(&problem)
+        .unwrap();
+    let adaptive = AdaptiveAlternatingProjection::default()
+        .iterations(2)
+        .initial_object_step(0.7)
+        .run(&problem)
+        .unwrap();
+
+    assert_eq!(adaptive.object_spectrum, fixed.object_spectrum);
+    assert_eq!(adaptive_step_values(&adaptive), vec![0.7, 0.7]);
+}
+
+#[test]
+fn adaptive_projection_reduces_the_step_to_its_floor() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let result = AdaptiveAlternatingProjection::default()
+        .iterations(6)
+        .progress_threshold(1.0 - f64::EPSILON)
+        .reduction_factor(0.5)
+        .minimum_object_step(0.2)
+        .run(&problem)
+        .unwrap();
+
+    assert_eq!(
+        adaptive_step_values(&result),
+        vec![1.0, 1.0, 0.5, 0.25, 0.2, 0.2]
+    );
+}
+
+#[test]
+fn adaptive_projection_is_batch_invariant_and_seeded_schedule_is_repeatable() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let base = AdaptiveAlternatingProjection::default()
+        .iterations(5)
+        .progress_threshold(0.2);
+    let single = Runner::new(
+        base.clone().batch_size(1),
+        RunOptions {
+            max_iterations: 5,
+            batch_size: 1,
+            schedule: FrameSchedule::RandomShuffle { seed: 73 },
+            ..RunOptions::default()
+        },
+    )
+    .run(&problem)
+    .unwrap();
+    let grouped_options = RunOptions {
+        max_iterations: 5,
+        batch_size: problem.model.frame_count(),
+        schedule: FrameSchedule::RandomShuffle { seed: 73 },
+        ..RunOptions::default()
+    };
+    let grouped = Runner::new(base.clone(), grouped_options.clone())
+        .run(&problem)
+        .unwrap();
+    let repeated = Runner::new(base, grouped_options).run(&problem).unwrap();
+
+    assert_eq!(single.object_spectrum, grouped.object_spectrum);
+    assert_eq!(
+        single
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>(),
+        grouped
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        adaptive_step_values(&single),
+        adaptive_step_values(&grouped)
+    );
+    assert_eq!(grouped.object_spectrum, repeated.object_spectrum);
+    assert_eq!(
+        grouped
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>(),
+        repeated
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn adaptive_projection_checkpoint_resume_preserves_feedback_state() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let algorithm = AdaptiveAlternatingProjection::default()
+        .progress_threshold(0.2)
+        .minimum_object_step(0.01);
+    algorithm
+        .clone()
+        .iterations(2)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(2, directory.path()))],
+        )
+        .unwrap();
+    let checkpoint = ReconstructionCheckpoint::load_for_problem(
+        directory.path().join("checkpoint_00002.json"),
+        &problem,
+    )
+    .unwrap();
+    let Some(AlgorithmAuxiliaryState::AdaptiveAlternatingProjection(auxiliary)) =
+        checkpoint.algorithm_auxiliary()
+    else {
+        panic!("expected adaptive-projection auxiliary state");
+    };
+    assert_eq!(auxiliary.active_iteration, 1);
+    assert_eq!(auxiliary.frames_accumulated, problem.model.frame_count());
+    assert!(auxiliary.previous_objective.is_some());
+
+    let resumed = algorithm
+        .clone()
+        .iterations(6)
+        .run_from_checkpoint(&problem, checkpoint.clone())
+        .unwrap();
+    let uninterrupted = algorithm.iterations(6).run(&problem).unwrap();
+    for (&resumed, &uninterrupted) in resumed
+        .object_spectrum
+        .iter()
+        .zip(uninterrupted.object_spectrum.iter())
+    {
+        assert_abs_diff_eq!(resumed.re, uninterrupted.re, epsilon = 1e-14);
+        assert_abs_diff_eq!(resumed.im, uninterrupted.im, epsilon = 1e-14);
+    }
+    for (resumed, uninterrupted) in resumed
+        .trace
+        .iterations
+        .iter()
+        .zip(&uninterrupted.trace.iterations)
+    {
+        assert_abs_diff_eq!(resumed.objective, uninterrupted.objective, epsilon = 1e-14);
+    }
+    assert_eq!(
+        adaptive_step_values(&resumed),
+        adaptive_step_values(&uninterrupted)
+    );
+
+    let error = AdaptiveAlternatingProjection::default()
+        .iterations(6)
+        .progress_threshold(0.3)
+        .minimum_object_step(0.01)
+        .run_from_checkpoint(&problem, checkpoint)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        fpm_rs::Error::InvalidParameter {
+            name: "progress_threshold",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn adaptive_projection_counts_zero_weight_frames_without_using_their_objective() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let mut measurements = simulation.measurements;
+    measurements.set_frame_weight(0, 0.0).unwrap();
+    measurements.set_frame_weight(1, 0.0).unwrap();
+    let problem =
+        ReconstructionProblem::new(measurements, simulation.reconstruction_model).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    AdaptiveAlternatingProjection::default()
+        .iterations(1)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(1, directory.path()))],
+        )
+        .unwrap();
+    let checkpoint =
+        ReconstructionCheckpoint::load(directory.path().join("checkpoint_00001.json")).unwrap();
+    let Some(AlgorithmAuxiliaryState::AdaptiveAlternatingProjection(auxiliary)) =
+        checkpoint.algorithm_auxiliary()
+    else {
+        panic!("expected adaptive-projection auxiliary state");
+    };
+    assert_eq!(auxiliary.frames_accumulated, problem.model.frame_count());
+    assert_eq!(
+        auxiliary.weight_sum,
+        (problem.model.frame_count() - 2) as f64
+    );
+}
+
+#[test]
+fn adaptive_projection_validation_uses_stable_parameter_names() {
+    for (algorithm, expected) in [
+        (
+            AdaptiveAlternatingProjection::default().iterations(0),
+            "iterations",
+        ),
+        (
+            AdaptiveAlternatingProjection::default().initial_object_step(0.0),
+            "initial_object_step",
+        ),
+        (
+            AdaptiveAlternatingProjection::default().progress_threshold(1.0),
+            "progress_threshold",
+        ),
+        (
+            AdaptiveAlternatingProjection::default().reduction_factor(0.0),
+            "reduction_factor",
+        ),
+        (
+            AdaptiveAlternatingProjection::default().minimum_object_step(0.0),
+            "minimum_object_step",
+        ),
+        (
+            AdaptiveAlternatingProjection::default()
+                .initial_object_step(0.5)
+                .minimum_object_step(0.6),
+            "minimum_object_step",
+        ),
+        (
+            AdaptiveAlternatingProjection::default().batch_size(0),
+            "batch_size",
+        ),
+        (
+            AdaptiveAlternatingProjection::default().epsilon(0.0),
+            "epsilon",
+        ),
+    ] {
+        let error = algorithm.validate().unwrap_err();
+        assert!(matches!(
+            error,
+            fpm_rs::Error::InvalidParameter { name, .. } if name == expected
+        ));
+    }
+}
+
+#[test]
+fn adaptive_projection_accepts_warm_starts_and_rejects_incompatible_state() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let warm_state = ReconstructionState::initialize(&problem).unwrap();
+    let warm_checkpoint =
+        ReconstructionCheckpoint::capture(0, &warm_state, &ReconstructionTrace::default());
+    assert!(
+        AdaptiveAlternatingProjection::default()
+            .iterations(1)
+            .run_from_checkpoint(&problem, warm_checkpoint)
+            .is_ok()
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    Admm::default()
+        .iterations(1)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(1, directory.path()))],
+        )
+        .unwrap();
+    let incompatible =
+        ReconstructionCheckpoint::load(directory.path().join("checkpoint_00001.json")).unwrap();
+    assert!(matches!(
+        AdaptiveAlternatingProjection::default()
+            .iterations(2)
+            .run_from_checkpoint(&problem, incompatible),
+        Err(fpm_rs::Error::InvalidModel(_))
+    ));
+
+    AdaptiveAlternatingProjection::default()
+        .iterations(1)
+        .run_with_callbacks(
+            &problem,
+            vec![Box::new(CheckpointEvery::new(1, directory.path()))],
+        )
+        .unwrap();
+    let path = directory.path().join("checkpoint_00001.json");
+    let mut malformed: serde_json::Value =
+        serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+    malformed["algorithm_auxiliary"]["AdaptiveAlternatingProjection"]["current_object_step"] =
+        serde_json::json!(2.0);
+    std::fs::write(&path, serde_json::to_vec(&malformed).unwrap()).unwrap();
+    assert!(ReconstructionCheckpoint::load(&path).is_err());
+}
+
+#[test]
+fn adaptive_projection_improves_object_error_on_deterministic_noisy_fpm_data() {
+    let model = noiseless_mixed_fpm(2026).unwrap().true_model;
+    let camera = CameraModel::new()
+        .photons_per_pixel(50.0)
+        .read_noise_electrons(3.0)
+        .shot_noise(true)
+        .quantize(true);
+    let simulation = Simulator::new(model)
+        .object(SyntheticObject::mixed_test_pattern((64, 64)).unwrap())
+        .camera(camera)
+        .seed(2026)
+        .simulate()
+        .unwrap();
+    let truth = simulation.ground_truth_object.clone();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let fixed = AlternatingProjection::default()
+        .iterations(40)
+        .object_step(1.0)
+        .run(&problem)
+        .unwrap();
+    let adaptive = AdaptiveAlternatingProjection::default()
+        .iterations(40)
+        .run(&problem)
+        .unwrap();
+    let fixed_error = evaluate_reconstruction(&fixed, truth.view(), None, None)
+        .unwrap()
+        .object
+        .complex_nrmse;
+    let adaptive_error = evaluate_reconstruction(&adaptive, truth.view(), None, None)
+        .unwrap()
+        .object
+        .complex_nrmse;
+    assert!(
+        adaptive_error < 0.98 * fixed_error,
+        "expected adaptive projection to improve complex NRMSE, got {fixed_error} -> {adaptive_error}"
+    );
 }
 
 #[test]

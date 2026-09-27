@@ -1,13 +1,14 @@
 //! Iterative reconstruction algorithms for compiled image-plane models.
 //!
 //! Choose a concrete solver such as [`crate::algorithms::AlternatingProjection`],
-//! [`crate::algorithms::Fpie`], [`crate::algorithms::Mpie`],
-//! [`crate::algorithms::Epry`],
+//! [`crate::algorithms::AdaptiveAlternatingProjection`],
+//! [`crate::algorithms::Fpie`], [`crate::algorithms::Mpie`], [`crate::algorithms::Epry`],
 //! [`crate::algorithms::Admm`], or [`crate::algorithms::GradientDescent`]. All
 //! implement [`crate::algorithms::ReconstructionAlgorithm`] and consume a validated
 //! [`crate::reconstruction::ReconstructionProblem`]; illumination geometry is compiled
 //! beforehand into the problem's [`crate::model::ImagePlaneModel`].
 
+mod adaptive_alternating_projection;
 mod admm;
 mod alternating_projection;
 mod common;
@@ -21,6 +22,9 @@ mod mpie;
 pub mod objective;
 mod regularization;
 
+pub use adaptive_alternating_projection::{
+    AdaptiveAlternatingProjection, AdaptiveAlternatingProjectionIterationMetrics,
+};
 pub use admm::{Admm, AdmmIterationMetrics};
 pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;

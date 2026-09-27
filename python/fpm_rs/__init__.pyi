@@ -1840,6 +1840,65 @@ class AlternatingProjection(_Algorithm):
         loss_type: str = "amplitude_mse",
     ) -> None: ...
 
+class AdaptiveAlternatingProjection(_Algorithm):
+    """Noise-robust alternating projection with a pass-adaptive object step.
+
+    One object step is shared by every frame in a complete acquisition pass.
+    The method retains that step while the accumulated amplitude-MSE objective
+    makes sufficient relative progress and otherwise reduces it to a positive
+    floor. Feedback reuses the objective evaluated by the projections, so it
+    requires no extra forward pass. Batching does not change adaptation cadence
+    or the numerical path; changing the frame schedule intentionally can.
+
+    Parameters
+    ----------
+    iterations
+        Complete passes through the acquisition schedule.
+    initial_object_step
+        Positive object relaxation used before the first reduction.
+    progress_threshold
+        Relative pass-objective decrease required to retain the current step.
+    reduction_factor
+        Factor in ``(0, 1)`` applied when progress is insufficient.
+    minimum_object_step
+        Positive step floor no greater than ``initial_object_step``.
+    batch_size
+        Measured frames supplied to each reconstruction step.
+    epsilon
+        Positive numerical floor used in projection and relative progress.
+
+    Notes
+    -----
+    Feedback is the frame-weighted mean of per-frame, mask-aware amplitude MSE
+    after configured gains and background. The implementation uses the paper's
+    inexpensive accumulated-objective approximation, recovers only the object,
+    and keeps the compiled pupil fixed. The cited convergence proof assumes
+    convex component objectives; FPM phase retrieval is non-convex.
+
+    Checkpoints preserve the current step, preceding objective, active pass
+    sums, and controller parameters. Resume requires matching parameters. A
+    checkpoint without adaptive auxiliary state is treated as a warm start and
+    establishes a new feedback baseline. Physical ``JointReconstruction`` is
+    unsupported because model recompilation invalidates the objective history.
+
+    References
+    ----------
+    [Zuo, Sun, and Chen, *Adaptive step-size strategy for noise-robust Fourier
+    ptychographic microscopy*, Optics Express 24(18), 20724-20744
+    (2016)](https://doi.org/10.1364/OE.24.020724).
+    """
+    def __init__(
+        self,
+        *,
+        iterations: int = 50,
+        initial_object_step: float = 1.0,
+        progress_threshold: float = 0.01,
+        reduction_factor: float = 0.5,
+        minimum_object_step: float = 0.001,
+        batch_size: int = 1,
+        epsilon: float = 1e-10,
+    ) -> None: ...
+
 class Fpie(_Algorithm):
     """Regularized ptychographic iterative engine adapted to FPM.
 

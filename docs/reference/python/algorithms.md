@@ -6,6 +6,8 @@ rule, recoverable quantities, and algorithm-specific parameters.
 
 ::: fpm_rs.AlternatingProjection
 
+::: fpm_rs.AdaptiveAlternatingProjection
+
 ::: fpm_rs.Fpie
 
 ::: fpm_rs.Mpie

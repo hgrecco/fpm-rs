@@ -145,6 +145,7 @@ experiments.
 | Condition or priority | Reach for | Decision boundary |
 | --- | --- | --- |
 | Clean data and a trusted pupil, illumination, gain, and background model | `AlternatingProjection` | Use the smallest baseline first. It has few controls and exposes whether the acquisition and compiled model are internally consistent. |
+| Noisy data with a trusted fixed pupil and measurement-response model | `AdaptiveAlternatingProjection` | Retain AP's fast initial unit-step progress, then reduce the object step when pass-to-pass amplitude loss stops improving materially. Use fixed-step AP when exact manual control of every pass is preferable. |
 | Object-only recovery with weak pupil transfer or mild noise | `Fpie` | Prefer its stabilized object update when plain projection is too sensitive in weak-transfer regions. It does not estimate the pupil or source geometry. |
 | A fixed-pupil `Fpie` trajectory converges slowly or stagnates | `Mpie` | Add periodic object-spectrum momentum after establishing a stable rPIE baseline. It adds interval, friction, and feedback tuning and cannot be wrapped by `JointReconstruction`. |
 | Noise statistics, outliers, or an object prior must enter the update | `GradientDescent` | Select Poisson, Huber-amplitude, intensity, or amplitude loss as appropriate; use total variation only when that prior is defensible. This is the most configurable route, with more tuning and compute. |
@@ -162,12 +163,14 @@ assumptions and gauges are detailed below.
 
 ## Select and run an algorithm
 
-`AlternatingProjection` is the simplest starting point. `Fpie` adds regularized
-object updates, `Mpie` adds periodic object-spectrum momentum to that fixed-pupil
-update, `Epry` can recover the pupil and frame response, `Admm` separates data
-fitting from overlap consensus, and `GradientDescent` supports generic
-Fourier-grid source correction, pupil recovery, and regularization. Physical
-planar-array calibration is the separate `JointReconstruction` workflow below.
+`AlternatingProjection` is the simplest starting point.
+`AdaptiveAlternatingProjection` adds pass-level noise-robust step feedback,
+`Fpie` adds regularized object updates, `Mpie` adds periodic object-spectrum
+momentum to that fixed-pupil update, `Epry` can recover the pupil and frame
+response, `Admm` separates data fitting from overlap consensus, and
+`GradientDescent` supports generic Fourier-grid source correction, pupil
+recovery, and regularization. Physical planar-array calibration is the separate
+`JointReconstruction` workflow below.
 
 ```python
 algorithm = fpm.AlternatingProjection(iterations=20, object_step=1.0)
@@ -185,6 +188,35 @@ early stopping. See [Diagnostics and callbacks](../diagnostics.md) and the
 [results API](../reference/python/results-and-bundles.md).
 
 ## Algorithm options and calibration
+
+`AdaptiveAlternatingProjection` uses the same object-only, fixed-pupil
+amplitude projection as `AlternatingProjection`, with one step shared by a
+complete scheduled pass. The first pass establishes an objective baseline.
+After two pass objectives are available, the next pass retains the current step
+when the relative amplitude-MSE decrease is greater than `progress_threshold`
+(default `0.01`); otherwise it multiplies the step by `reduction_factor`
+(default `0.5`) down to `minimum_object_step` (default `0.001`). This is
+feedback, not backtracking: an unsuccessful pass is neither retried nor rolled
+back.
+
+The feedback objective is the existing frame-weighted mean of mask-aware,
+per-frame amplitude MSE after known gain and background. It is accumulated
+during projection, so the implementation uses the paper's inexpensive
+incremental approximation rather than an extra exact full-data evaluation.
+Batch boundaries do not affect the controller or numerical path. A different
+sequential, reverse, or seeded shuffled order can affect both intentionally.
+Zero-weight frames are visited but contribute neither an update nor feedback.
+The method keeps the pupil fixed and is rejected by `JointReconstruction`
+because physical model recompilation would invalidate its objective history.
+
+This rule follows C. Zuo, J. Sun, and Q. Chen,
+[“Adaptive step-size strategy for noise-robust Fourier ptychographic
+microscopy,”](https://doi.org/10.1364/OE.24.020724) *Optics Express* **24**(18),
+20724–20744 (2016). Their convergence proof assumes convex component
+objectives, whereas FPM phase retrieval is non-convex; fpm-rs therefore treats
+the rule as an empirically motivated noise-robustness strategy, not a global
+convergence guarantee. The paper also explores a pupil-recovery extension;
+this API implements only its main fixed-pupil, object-only method.
 
 `Admm` uses an amplitude proximal operator, a preconditioned linearized object
 consensus update, and scaled dual variables. It honors masks, frame weights,
@@ -555,9 +587,15 @@ callbacks and resumed work without changing the checkpoint format version.
 `Mpie` stores its centered velocity and anchor spectra, effective-frame counter,
 and defining update parameters in `algorithm_auxiliary`. A matching checkpoint
 continues a partial interval; an auxiliary-free checkpoint is a warm start, and
-a different solver's auxiliary variant is rejected. The format remains version
-2 because this field is the solver-state extension point, though readers that
-predate the `Mpie` enum variant cannot load a checkpoint containing it.
+a different solver's auxiliary variant is rejected.
+`AdaptiveAlternatingProjection` similarly stores its current step, preceding
+pass objective, active-pass sums and frame count, and defining controller
+parameters. A matching checkpoint continues the feedback sequence; an
+auxiliary-free checkpoint starts a new baseline, and other auxiliary variants
+are rejected. The format remains version 2 because `algorithm_auxiliary` is the
+existing solver-state extension point, though readers that predate the `Mpie`
+or `AdaptiveAlternatingProjection` enum variant cannot load checkpoints
+containing those variants.
 
 Every result owns a trace, even when no diagnostic callback is installed.
 Universal iteration rows are `(iteration, objective, elapsed_seconds)`.

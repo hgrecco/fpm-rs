@@ -32,13 +32,14 @@ def assert_canonical_blind_result(
     "algorithm",
     [
         fpm.AlternatingProjection(iterations=1),
+        fpm.AdaptiveAlternatingProjection(iterations=1),
         fpm.Fpie(iterations=1),
         fpm.Mpie(iterations=1),
         fpm.Epry(iterations=1),
         fpm.Admm(iterations=1, batch_size=1),
         fpm.GradientDescent(iterations=1, parallel_workers=1),
     ],
-    ids=["ap", "fpie", "mpie", "epry", "admm", "gradient"],
+    ids=["ap", "adaptive-ap", "fpie", "mpie", "epry", "admm", "gradient"],
 )
 def test_all_algorithms_return_numpy_results(
     problem: fpm.ReconstructionProblem,
@@ -69,6 +70,10 @@ def test_all_algorithms_return_numpy_results(
             ("admm", "dual_residual_rms"),
         }
         assert all(math.isfinite(value) and value >= 0.0 for value in values.values())
+    elif isinstance(algorithm, fpm.AdaptiveAlternatingProjection):
+        assert result.algorithm_metrics == [
+            (1, "adaptive_alternating_projection", "object_step", 1.0)
+        ]
     else:
         assert result.algorithm_metrics == []
 
@@ -95,6 +100,15 @@ def test_schedules_are_exposed(problem: fpm.ReconstructionProblem) -> None:
 def test_algorithm_parameter_errors_remain_typed() -> None:
     with pytest.raises(fpm.InvalidParameterError, match="object_step"):
         fpm.AlternatingProjection(object_step=0.0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="progress_threshold"):
+        fpm.AdaptiveAlternatingProjection(progress_threshold=1.0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="minimum_object_step"):
+        fpm.AdaptiveAlternatingProjection(
+            initial_object_step=0.5,
+            minimum_object_step=0.6,
+        )
 
     with pytest.raises(fpm.InvalidParameterError, match="momentum_interval"):
         fpm.Mpie(momentum_interval=0)
@@ -128,6 +142,15 @@ def test_pupil_recovery_results_use_the_canonical_gauge(
 
 def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
     expected = {
+        fpm.AdaptiveAlternatingProjection: [
+            "iterations",
+            "initial_object_step",
+            "progress_threshold",
+            "reduction_factor",
+            "minimum_object_step",
+            "batch_size",
+            "epsilon",
+        ],
         fpm.Mpie: [
             "iterations",
             "object_step",

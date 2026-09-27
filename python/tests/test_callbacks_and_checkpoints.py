@@ -112,6 +112,41 @@ def test_mpie_resume_preserves_partial_momentum_interval(
     )
 
 
+def test_adaptive_projection_resume_preserves_feedback_state(
+    problem: fpm.ReconstructionProblem,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "adaptive-projection-checkpoints"
+    parameters = {
+        "progress_threshold": 0.2,
+        "minimum_object_step": 0.01,
+    }
+    fpm.AdaptiveAlternatingProjection(iterations=2, **parameters).run(
+        problem,
+        callbacks=[fpm.CheckpointEvery(2, directory)],
+    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(
+        directory / "checkpoint_00002.json"
+    )
+
+    resumed = fpm.AdaptiveAlternatingProjection(iterations=6, **parameters).run(
+        problem,
+        resume_from=checkpoint,
+    )
+    uninterrupted = fpm.AdaptiveAlternatingProjection(
+        iterations=6,
+        **parameters,
+    ).run(problem)
+
+    np.testing.assert_allclose(
+        resumed.object_spectrum,
+        uninterrupted.object_spectrum,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
+
+
 def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> None:
     result = fpm.AlternatingProjection(iterations=10).run(
         problem,

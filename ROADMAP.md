@@ -123,12 +123,83 @@ material differences from its cited method.
     under the same schedule and update budget. Run `pixi run ci`, the Rust and
     Python API documentation checks, the MkDocs and notebook checks, citation
     checking, and the reconstruction benchmark/example.
-- [ ] **Design first:** Add an adaptive-step alternating-projection method only
+- [x] **Design first:** Add an adaptive-step alternating-projection method only
   after defining its line-search or feedback state, failure behavior, scheduling
   semantics, and benchmark advantage over fixed-step AP. Reference: C. Zuo,
   J. Sun, and Q. Chen, “Adaptive step-size strategy for noise-robust Fourier
   ptychographic microscopy,” *Optics Express* **24**(18), 20724–20744 (2016),
   [https://doi.org/10.1364/OE.24.020724](https://doi.org/10.1364/OE.24.020724).
+
+  **Accepted design:**
+
+  - Add a separate public `AdaptiveAlternatingProjection` algorithm, leaving
+    `AlternatingProjection` behavior and defaults unchanged. It is object-only
+    with a fixed pupil, matching the main method evaluated by Zuo et al. It
+    reuses the canonical amplitude-projection kernel and therefore supports
+    masks, frame weights, gains, backgrounds, and incoherent multiplexing.
+  - Use one object step for a complete acquisition-schedule pass. Start from
+    `initial_object_step = 1`, retain it when the relative decrease between the
+    two most recently completed pass objectives is greater than
+    `progress_threshold = 0.01`, and otherwise multiply it by
+    `reduction_factor = 0.5`, clamped to `minimum_object_step = 0.001`. The first
+    pass establishes a baseline and cannot reduce the step. This is the
+    feedback rule of Eq. (16), with an explicit positive floor as contemplated
+    by the paper; it is not a backtracking line search and never retries or
+    rolls back a pass.
+  - Use the runner's existing measurement-domain amplitude-MSE summary as the
+    feedback objective: the frame-weighted mean of per-frame, mask-aware pixel
+    means, including the current gains and background. Accumulate it during the
+    ordinary sequential projections, as suggested by Zuo et al., so adaptation
+    performs no extra forward pass. Keep the diagnostic `loss_type` fixed to
+    amplitude MSE for this algorithm so changing reporting cannot silently
+    change feedback semantics.
+  - Adapt only at complete pass boundaries. Carry partial objective sums across
+    batches, making `batch_size` a runner grouping that cannot change the
+    numerical path. Sequential, reverse, or seeded shuffled schedules remain
+    supported and intentionally can produce different paths; each scheduled
+    frame appears once per feedback cycle. Zero-weight frames contribute
+    neither objective nor update. Reject missing positive feedback weight,
+    non-finite objectives, skipped/repeated iteration indices, or non-finite
+    updated state instead of silently resetting the controller.
+  - Add public `AdaptiveAlternatingProjectionAuxiliaryState` and an
+    `AdaptiveAlternatingProjection` variant of `AlgorithmAuxiliaryState`.
+    Persist the active zero-based iteration, current step, previous completed
+    objective, in-progress weighted objective sum and weight, and every scalar
+    parameter that defines their interpretation. A matching checkpoint resumes
+    exactly at the next pass. A checkpoint with no auxiliary state is accepted
+    as an explicit warm start and establishes a new baseline; another
+    algorithm's auxiliary state, malformed state, or changed controller
+    parameter is rejected. Keep checkpoint format version 2 because the enum is
+    already its versioned extension point, while noting that older readers
+    cannot deserialize the new variant.
+  - Reject the adaptive method inside `JointReconstruction`: physical model
+    recompilation changes the feedback objective, and resetting or transporting
+    controller history requires a separate design. Keep pupil recovery outside
+    this milestone even though the paper's appendix explores applying the same
+    step to object and pupil updates.
+  - Expose builders for all controls in Rust and keyword-only constructor
+    parameters in Python. Validate finite positive initial/minimum steps with
+    the minimum no larger than the initial value, a finite progress threshold
+    in `[0, 1)`, a finite reduction factor in `(0, 1)`, and positive
+    `iterations`, `batch_size`, and `epsilon`, using stable parameter names.
+    Record the effective object step as a per-iteration algorithm metric.
+  - Add deterministic tests for the feedback recurrence and floor, validation,
+    fixed-step equivalence before the first reduction, batch-size invariance,
+    zero-weight frames, seeded scheduling, incompatible and malformed
+    auxiliary state, and uninterrupted versus checkpoint-resumed equality.
+    Add Python construction, validation, execution, metrics, and resume
+    coverage.
+  - Add the method and full reference to Rustdoc, the authoritative Python
+    stub, the algorithm-selection guide, benchmark profiles/example, and
+    `CHANGES.md`. State that the paper's convergence proof assumes convex
+    component objectives whereas FPM phase retrieval is non-convex, and that
+    this implementation uses the inexpensive accumulated objective
+    approximation rather than an exact extra full-data evaluation.
+  - Before marking this item complete, demonstrate on a deterministic noisy FPM
+    simulation that the adaptive method reaches a lower gauge-aligned object
+    error than fixed-step AP under the same schedule and update budget. Run
+    `pixi run ci`, Rust and Python API documentation checks, MkDocs and notebook
+    checks, citation checking, and the reconstruction benchmark/example.
 - [ ] **Design first:** Extend `GradientDescent` with the truncated-gradient or
   outlier-rejection rule of truncated Poisson Wirtinger reconstruction. Poisson
   negative log likelihood already exists; do not introduce a duplicate Poisson

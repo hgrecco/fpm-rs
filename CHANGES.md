@@ -41,6 +41,10 @@ first.
 
 ### Added
 
+- Added object-only adaptive-step alternating projection for noisy fixed-pupil
+  FPM, with cycle-level objective feedback, checkpointed controller state,
+  effective-step trace metrics, Rust and Python APIs, and a deterministic noisy
+  comparison against fixed-step AP.
 - Added object-only momentum-accelerated PIE (`Mpie`) for fixed-pupil FPM, with
   frame-cadence-independent batching, checkpointed velocity and partial
   intervals, Rust and Python APIs, and deterministic comparison against its

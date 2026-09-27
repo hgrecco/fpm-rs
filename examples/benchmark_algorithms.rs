@@ -3,7 +3,8 @@ use std::{env, path::Path};
 use fpm_rs::{
     Complex64, Error, Result,
     algorithms::{
-        Admm, AlternatingProjection, Epry, Fpie, GradientDescent, Mpie, ReconstructionAlgorithm,
+        AdaptiveAlternatingProjection, Admm, AlternatingProjection, Epry, Fpie, GradientDescent,
+        Mpie, ReconstructionAlgorithm,
     },
     benchmark::{
         BENCHMARK_PROFILES, BenchmarkProfile, BenchmarkRecord, CPU_BENCHMARK_PROFILE,
@@ -55,6 +56,14 @@ fn main() -> Result<()> {
         &case,
         format!("iterations={iterations},object_step=1.0"),
         AlternatingProjection::default().iterations(iterations),
+    )?;
+    run_synthetic_case(
+        &mut records,
+        &case,
+        format!(
+            "iterations={iterations},initial_object_step=1.0,progress_threshold=0.01,reduction_factor=0.5,minimum_object_step=0.001"
+        ),
+        AdaptiveAlternatingProjection::default().iterations(iterations),
     )?;
     run_synthetic_case(
         &mut records,

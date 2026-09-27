@@ -6,6 +6,7 @@ from . import evaluation
 from . import metrics
 from . import plot
 from ._core import (
+    AdaptiveAlternatingProjection,
     Admm,
     AlternatingProjection,
     AcquisitionPlan,

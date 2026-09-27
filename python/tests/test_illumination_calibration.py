@@ -181,6 +181,15 @@ def test_joint_reconstruction_rejects_mpie() -> None:
             outer_iterations=1,
         )
 
+    with pytest.raises(TypeError, match="Fpie or Epry"):
+        fpm.JointReconstruction(
+            fpm.AdaptiveAlternatingProjection(iterations=1),
+            optics,
+            nominal,
+            calibration,
+            outer_iterations=1,
+        )
+
 
 def test_unsupported_geometry_fails_clearly(optics: fpm.Optics) -> None:
     illumination = fpm.Illumination(
