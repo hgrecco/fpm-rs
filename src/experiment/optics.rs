@@ -4,6 +4,20 @@ use crate::error::{Error, Result};
 
 /// Physical microscope parameters in SI units.
 ///
+/// The sample-plane detector pitch must satisfy the coherent-field sampling
+/// invariant
+///
+/// `camera_pixel_size / magnification < wavelength_vacuum_m / (2 * objective_na)`.
+///
+/// Equality is rejected because the circular pupil cutoff would lie on the
+/// one-sided discrete Nyquist boundary.
+///
+/// # References
+///
+/// - [G. Zheng, R. Horstmeyer, and C. Yang, “Wide-field, high-resolution
+///   Fourier ptychographic microscopy,” *Nature Photonics* **7**, 739–745
+///   (2013).](https://doi.org/10.1038/nphoton.2013.187)
+///
 /// # Example
 ///
 /// ```
@@ -35,6 +49,9 @@ pub struct Optics {
     /// Lateral image magnification, as a positive dimensionless ratio.
     pub magnification: f64,
     /// Physical detector-pixel pitch in metres.
+    ///
+    /// After division by [`Self::magnification`], this must be strictly less
+    /// than `wavelength_vacuum_m / (2 * objective_na)`.
     pub camera_pixel_size: f64,
     /// Refractive index between illumination sources and the sample.
     pub illumination_refractive_index: f64,
@@ -100,8 +117,14 @@ impl PupilAberration {
 }
 
 impl Optics {
-    /// Validates positive finite physical parameters, objective-medium compatibility,
-    /// finite optional defocus, and the optional [`PupilAberration`].
+    /// Validates positive finite physical parameters, coherent-field sampling,
+    /// objective-medium compatibility, finite optional defocus, and the optional
+    /// [`PupilAberration`].
+    ///
+    /// Coherent-field sampling requires
+    /// `camera_pixel_size / magnification < wavelength_vacuum_m / (2 * objective_na)`.
+    /// Equality is invalid because it places the pupil cutoff on the discrete
+    /// Nyquist boundary.
     pub fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("wavelength_vacuum_m", self.wavelength_vacuum_m),
@@ -128,6 +151,26 @@ impl Optics {
             return Err(Error::InvalidParameter {
                 name: "objective_na",
                 reason: "cannot exceed the medium refractive index".into(),
+            });
+        }
+        let object_pixel_size = self.object_pixel_size();
+        let coherent_sampling_limit = self.wavelength_vacuum_m / (2.0 * self.objective_na);
+        if !object_pixel_size.is_finite()
+            || !coherent_sampling_limit.is_finite()
+            || coherent_sampling_limit <= 0.0
+        {
+            return Err(Error::InvalidParameter {
+                name: "camera_pixel_size",
+                reason: "camera_pixel_size / magnification and wavelength_vacuum_m / (2 * objective_na) must produce finite positive sampling scales"
+                    .into(),
+            });
+        }
+        if object_pixel_size >= coherent_sampling_limit {
+            return Err(Error::InvalidParameter {
+                name: "camera_pixel_size",
+                reason: format!(
+                    "object-plane pitch camera_pixel_size / magnification ({object_pixel_size:.6e} m) must be strictly less than wavelength_vacuum_m / (2 * objective_na) ({coherent_sampling_limit:.6e} m) for coherent-field sampling; use a smaller detector pixel, greater magnification, or lower objective NA"
+                ),
             });
         }
         if self

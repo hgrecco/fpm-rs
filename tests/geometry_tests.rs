@@ -1,5 +1,6 @@
 use approx::assert_abs_diff_eq;
 use fpm_rs::{
+    Error,
     experiment::{
         AcquisitionPlan, ArrayPose, DirectionList, Illumination, IlluminationFrame, KVector,
         KVectorList, Optics, PlanarLedArray, SourceCalibration, SourceContribution,
@@ -19,6 +20,125 @@ fn optics() -> Optics {
         defocus_distance: None,
         pupil_aberration: None,
     }
+}
+
+#[test]
+fn coherent_sampling_validation_is_strict_at_the_nyquist_boundary() {
+    let canonical = optics();
+    canonical.validate().unwrap();
+    assert_abs_diff_eq!(canonical.object_pixel_size(), 1.625e-6, epsilon = 1e-18);
+
+    let boundary = Optics {
+        wavelength_vacuum_m: 1.0,
+        objective_na: 0.25,
+        magnification: 2.0,
+        camera_pixel_size: 4.0,
+        illumination_refractive_index: 1.0,
+        objective_medium_refractive_index: 1.0,
+        defocus_distance: None,
+        pupil_aberration: None,
+    };
+    let error = boundary.validate().unwrap_err();
+    match error {
+        Error::InvalidParameter { name, reason } => {
+            assert_eq!(name, "camera_pixel_size");
+            assert!(reason.contains("strictly less"));
+            assert!(reason.contains("camera_pixel_size / magnification"));
+            assert!(reason.contains("wavelength_vacuum_m / (2 * objective_na)"));
+        }
+        other => panic!("expected InvalidParameter, got {other}"),
+    }
+
+    let mut below = boundary.clone();
+    below.camera_pixel_size = f64::from_bits(boundary.camera_pixel_size.to_bits() - 1);
+    below.validate().unwrap();
+
+    let mut above = boundary;
+    above.camera_pixel_size = f64::from_bits(above.camera_pixel_size.to_bits() + 1);
+    assert!(matches!(
+        above.validate(),
+        Err(Error::InvalidParameter {
+            name: "camera_pixel_size",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn representative_optics_and_planar_led_layouts_preserve_sampling_conventions() {
+    let cases = [
+        (470e-9, 0.10, 2.0, 2.4e-6, (3, 3), (4e-3, 4e-3), (1.0, 1.0)),
+        (532e-9, 0.10, 4.0, 6.5e-6, (1, 3), (3e-3, 4e-3), (1.0, 0.0)),
+        (632e-9, 0.08, 2.0, 5.5e-6, (2, 2), (5e-3, 3e-3), (0.5, 0.5)),
+    ];
+
+    for (wavelength, na, magnification, camera_pitch, shape, pitch, reference) in cases {
+        let optics = Optics {
+            wavelength_vacuum_m: wavelength,
+            objective_na: na,
+            magnification,
+            camera_pixel_size: camera_pitch,
+            illumination_refractive_index: 1.0,
+            objective_medium_refractive_index: 1.0,
+            defocus_distance: None,
+            pupil_aberration: None,
+        };
+        let illumination = Illumination::from_geometry(PlanarLedArray::new(
+            shape,
+            pitch,
+            reference,
+            ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+        ))
+        .unwrap();
+        let model = ImagePlaneModel::from_experiment(
+            &optics,
+            &illumination,
+            (16, 16),
+            ReconstructionShape::Exact((32, 32)),
+        )
+        .unwrap();
+        let object_pitch = camera_pitch / magnification;
+        assert_abs_diff_eq!(
+            model.sampling().low_res_pixel_size,
+            object_pitch,
+            epsilon = 1e-18
+        );
+        assert_abs_diff_eq!(
+            model.sampling().dkx,
+            std::f64::consts::TAU / (16.0 * object_pitch),
+            epsilon = 1e-6
+        );
+        assert_abs_diff_eq!(model.sampling().dky, model.sampling().dkx, epsilon = 1e-6);
+        assert_eq!(model.source_count(), shape.0 * shape.1);
+    }
+
+    let canonical = optics();
+    let illumination = Illumination::from_geometry(PlanarLedArray::new(
+        (3, 3),
+        (4e-3, 4e-3),
+        (1.0, 1.0),
+        ArrayPose::from_translation([0.0, 0.0, -90e-3]),
+    ))
+    .unwrap();
+    let model = ImagePlaneModel::from_experiment(
+        &canonical,
+        &illumination,
+        (16, 16),
+        ReconstructionShape::Exact((32, 32)),
+    )
+    .unwrap();
+    let central_start = 8;
+    let crops = model.crop_indices().as_slice();
+    let vectors = model.k_vectors();
+    assert_abs_diff_eq!(vectors[4].kx, 0.0, epsilon = 1e-12);
+    assert_abs_diff_eq!(vectors[4].ky, 0.0, epsilon = 1e-12);
+    assert_eq!(crops[4].start_col, central_start);
+    assert_eq!(crops[4].start_row, central_start);
+
+    assert!(vectors[3].kx > 0.0 && crops[3].start_col > central_start);
+    assert!(vectors[5].kx < 0.0 && crops[5].start_col < central_start);
+    assert!(vectors[1].ky > 0.0 && crops[1].start_row > central_start);
+    assert!(vectors[7].ky < 0.0 && crops[7].start_row < central_start);
 }
 
 fn position_after_pose(pose: ArrayPose, point: [f64; 3]) -> [f64; 3] {

@@ -205,6 +205,16 @@ fn configuration_rejects_unknown_versions_fields_and_model_drift() {
     wrong_version.format_version = 999;
     assert!(wrong_version.validate().is_err());
 
+    let mut undersampled = configuration.clone();
+    assert_eq!(undersampled.format_version, CONFIGURATION_FORMAT_VERSION);
+    undersampled.true_experiment.optics.camera_pixel_size = 20e-6;
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("undersampled.json");
+    std::fs::write(&path, serde_json::to_vec(&undersampled).unwrap()).unwrap();
+    let error = SimulationConfiguration::load(path).unwrap_err();
+    assert!(error.to_string().contains("camera_pixel_size"));
+    assert!(error.to_string().contains("coherent-field sampling"));
+
     let mut drifted = configuration.clone();
     let mut vectors = drifted.compiled_models.true_model.k_vectors().to_vec();
     vectors[0].kx = 1e5;
