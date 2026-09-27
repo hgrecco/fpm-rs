@@ -1403,7 +1403,12 @@ class ReconstructionProblem:
         """Return the high-resolution object shape."""
 
 class ReconstructionCheckpoint:
-    """Serializable algorithm state for resuming a compatible run."""
+    """Serializable algorithm state for resuming a compatible run.
+
+    Problem-aware restoration requires the stored pupil support to match the
+    compiled model support exactly. Pupil-recovering algorithms canonicalize a
+    restored object/pupil pair before start callbacks and continued work.
+    """
 
     @staticmethod
     def load(path: Path) -> ReconstructionCheckpoint:
@@ -1446,7 +1451,11 @@ class ReconstructionResult:
     object_spectrum: ComplexArray
     """Centered complex Fourier spectrum corresponding to ``object``."""
     recovered_pupil: ComplexArray
-    """Final sampled complex pupil on the low-resolution Fourier grid."""
+    """Final sampled pupil, canonicalized for built-in blind recovery.
+
+    Canonicalization matches the compiled pupil's supported energy and phase
+    reference. The returned object fields contain the reciprocal correction.
+    """
     pupil_support: MaskArray
     """Uint8 aperture-support mask for ``recovered_pupil``."""
     calibrated_illumination: FloatArray | None
@@ -1959,6 +1968,13 @@ class Epry(_Algorithm):
     complex pupil together, separating specimen structure from aberrations.
     Per-frame gain and background recovery are fpm-rs extensions.
 
+    With pupil recovery enabled, iteration-boundary results match the compiled
+    pupil's supported energy and phase reference and fix the remaining object
+    piston. Affine pupil phase is removed on axes with zero effective subpixel
+    offsets. It remains on fractional axes because bilinear crop interpolation
+    does not preserve that ambiguity exactly. Canonicalization precedes
+    iteration callbacks, checkpoints, final results, and resumed work.
+
     Parameters
     ----------
     iterations
@@ -1984,8 +2000,15 @@ class Epry(_Algorithm):
 
     References
     ----------
-    [Ou, Zheng, and Yang, *Embedded pupil function recovery for Fourier
-    ptychographic microscopy* (2014)](https://doi.org/10.1364/OE.22.004960).
+    [X. Ou, G. Zheng, and C. Yang, *Embedded pupil function recovery for Fourier
+    ptychographic microscopy* (2014), Optics Express 22(5),
+    4960-4972.](https://doi.org/10.1364/OE.22.004960)
+
+    [A. Fannjiang and P. Chen, *Blind ptychography: uniqueness and ambiguities*
+    (2020), Inverse Problems 36,
+    045005.](https://doi.org/10.1088/1361-6420/ab6504) fpm-rs uses a
+    Fourier-domain object and retains affine phase on fractionally interpolated
+    axes.
     """
     def __init__(
         self,
@@ -2052,6 +2075,13 @@ class GradientDescent(_Algorithm):
     preconditioned object update. Pupil and illumination recovery and object or
     pupil regularization are optional.
 
+    With pupil recovery enabled, iteration-boundary results match the compiled
+    pupil's supported energy and phase reference and fix the remaining object
+    piston. Affine pupil phase is removed on axes with zero effective subpixel
+    offsets. It remains on fractional axes because bilinear crop interpolation
+    does not preserve that ambiguity exactly. Canonicalization precedes
+    iteration callbacks, checkpoints, final results, and resumed work.
+
     Parameters
     ----------
     iterations
@@ -2081,8 +2111,15 @@ class GradientDescent(_Algorithm):
 
     References
     ----------
-    [Bian et al., *Fourier ptychographic reconstruction using Wirtinger flow
-    optimization* (2015)](https://doi.org/10.1364/OE.23.004856).
+    [L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, *Fourier
+    ptychographic reconstruction using Wirtinger flow optimization* (2015),
+    Optics Express 23(4), 4856-4866.](https://doi.org/10.1364/OE.23.004856)
+
+    [A. Fannjiang and P. Chen, *Blind ptychography: uniqueness and ambiguities*
+    (2020), Inverse Problems 36,
+    045005.](https://doi.org/10.1088/1361-6420/ab6504) fpm-rs uses a
+    Fourier-domain object and retains affine phase on fractionally interpolated
+    axes.
     """
     def __init__(
         self,

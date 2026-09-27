@@ -47,6 +47,10 @@ pub struct ReconstructionResult {
     /// Centered Fourier spectrum corresponding to [`Self::object`].
     pub object_spectrum: Array2<Complex64>,
     /// Recovered low-resolution complex pupil and binary aperture support.
+    ///
+    /// Built-in blind-pupil algorithms report this field in the compiled
+    /// pupil's canonical scale and phase gauge. The corresponding object fields
+    /// carry the reciprocal correction.
     pub recovered_pupil: Pupil,
     /// Per-source `(row, column)` corrections in Fourier-grid pixels.
     pub calibrated_illumination: Option<Vec<(f64, f64)>>,

@@ -140,6 +140,51 @@ Fourier-domain ptychography for high-throughput bio-imaging”
 `CoordinateConvention::CenteredPositiveK` records these choices in compiled
 models.
 
+### Blind object/pupil gauge
+
+Joint object and pupil recovery does not determine a unique pair of complex
+arrays. For an integer source displacement `d_s`, the exit spectrum is
+
+```text
+E_s(u) = O(u + d_s) P(u).
+```
+
+Reciprocal object/pupil scale, independent constant phase factors, and coupled
+affine phase ramps can therefore describe the same measured intensities. These
+blind-ptychography ambiguities are characterized by [A. Fannjiang and P. Chen,
+“Blind ptychography: uniqueness and ambiguities” (2020), *Inverse Problems*
+**36**, 045005](https://doi.org/10.1088/1361-6420/ab6504). The paper treats the
+real-space blind-ptychography model; fpm-rs adapts the ambiguity to its centered
+Fourier-domain object and common sampled pupil.
+
+Built-in EPRY and gradient descent use the immutable compiled pupil as their
+gauge reference whenever pupil recovery is enabled. At initialization or
+checkpoint restoration and after every complete iteration, they:
+
+1. remove a relative pupil phase ramp on each axis whose effective subpixel
+   offsets are all zero within `1e-12` Fourier-grid pixels;
+2. match the recovered pupil's supported energy to the compiled pupil and make
+   their supported complex overlap positive real, applying the reciprocal
+   constant to the object spectrum; and
+3. rotate the object spectrum so its centered DC coefficient is non-negative
+   real, using its strongest coefficient if DC is numerically zero.
+
+These transformations preserve the modeled intensities. They run after pupil
+support projection and regularization, and before iteration diagnostics,
+iteration callbacks, checkpoints, and final result construction. A restored
+checkpoint is canonicalized before its start callback. Checkpoint compatibility
+also requires its binary pupil support to match the compiled support exactly.
+
+Fractional crop offsets use bilinear interpolation, which does not commute
+exactly with a discrete affine phase ramp. The affine correction is therefore
+skipped independently on each axis containing any fractional effective source
+offset; that axis's slope remains in the reported pupil. Reciprocal scale and
+constant-phase normalization remain exact and are always applied. A collapsed
+or non-finite supported pupil cannot be normalized and ends the reconstruction
+with a numerical error. Corrections within `64 * machine epsilon * |S|`, where
+`|S|` is the supported-sample count, are treated as the identity so repeated
+canonicalization does not perturb an already canonical state.
+
 ## Low-resolution frames and the reconstruction grid
 
 Each measured intensity frame is a low-resolution image with `image_shape`.

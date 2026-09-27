@@ -396,6 +396,17 @@ fn checkpoint_io_rejects_corruption_and_problem_mismatch_early() {
     checkpoint.save(&valid_path).unwrap();
     ReconstructionCheckpoint::load_for_problem(&valid_path, &problem).unwrap();
 
+    let support_mismatch_path = directory.path().join("support_mismatch.json");
+    let mut support_mismatch = serde_json::to_value(&checkpoint).unwrap();
+    support_mismatch["pupil"]["support"]["data"][0] = serde_json::json!(0);
+    std::fs::write(
+        &support_mismatch_path,
+        serde_json::to_vec(&support_mismatch).unwrap(),
+    )
+    .unwrap();
+    let support_mismatch = ReconstructionCheckpoint::load(&support_mismatch_path).unwrap();
+    assert!(support_mismatch.validate_for_problem(&problem).is_err());
+
     let corrupted_path = directory.path().join("corrupted.json");
     let mut serialized = serde_json::to_value(&checkpoint).unwrap();
     serialized["format_version"] = serde_json::json!(999);

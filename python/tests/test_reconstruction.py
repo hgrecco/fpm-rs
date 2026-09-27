@@ -9,6 +9,25 @@ import pytest
 import fpm_rs as fpm
 
 
+def assert_canonical_blind_result(
+    result: fpm.ReconstructionResult,
+    model: fpm.ImagePlaneModel,
+) -> None:
+    support = model.pupil_support.astype(bool)
+    reference = model.pupil[support]
+    recovered = result.recovered_pupil[support]
+    assert np.sum(np.abs(recovered) ** 2) == pytest.approx(
+        np.sum(np.abs(reference) ** 2), rel=1e-12, abs=1e-12
+    )
+    overlap = np.vdot(reference, recovered)
+    assert overlap.real > 0.0
+    assert abs(overlap.imag) <= 1e-11 * max(overlap.real, 1.0)
+    center = tuple(length // 2 for length in result.object_spectrum.shape)
+    dc = result.object_spectrum[center]
+    assert dc.real >= 0.0
+    assert abs(dc.imag) <= 1e-11 * max(abs(dc), 1.0)
+
+
 @pytest.mark.parametrize(
     "algorithm",
     [
@@ -78,6 +97,26 @@ def test_algorithm_parameter_errors_remain_typed() -> None:
 
     with pytest.raises(ValueError, match="loss_type"):
         fpm.GradientDescent(loss_type="unknown")
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        fpm.Epry(iterations=1),
+        fpm.GradientDescent(
+            iterations=1,
+            recover_pupil=True,
+            parallel_workers=1,
+        ),
+    ],
+    ids=["epry", "gradient"],
+)
+def test_pupil_recovery_results_use_the_canonical_gauge(
+    problem: fpm.ReconstructionProblem,
+    model: fpm.ImagePlaneModel,
+    algorithm: object,
+) -> None:
+    assert_canonical_blind_result(algorithm.run(problem), model)
 
 
 def test_complex_algorithm_constructor_signatures_are_explicit() -> None:

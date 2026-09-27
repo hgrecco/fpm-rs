@@ -17,6 +17,7 @@ use crate::{
 
 use super::{
     ReconstructionAlgorithm,
+    gauge::canonicalize_object_pupil,
     regularization::{apply_complex_tv_step, apply_quadratic_smoothing_step},
 };
 
@@ -38,12 +39,28 @@ use super::{
 /// pupil. Incoherent multiplexing, these calibration updates, and the selectable
 /// losses extend the reference formulation.
 ///
-/// # Reference
+/// # Gauge convention
+///
+/// With pupil recovery enabled, the compiled pupil fixes the reported joint
+/// object/pupil gauge at iteration boundaries. The projection matches supported
+/// pupil energy and piston, fixes the remaining object piston, and removes an
+/// affine pupil phase ramp only on axes with zero effective subpixel offsets.
+/// Reciprocal object corrections preserve predicted intensities. Fractional
+/// axes retain their affine phase because bilinear crop interpolation does not
+/// commute exactly with a discrete phase ramp. Canonicalization runs before
+/// iteration callbacks, checkpoints, and final results, including after resume.
+///
+/// # References
 ///
 /// [L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, “Fourier
 /// ptychographic reconstruction using Wirtinger flow optimization”
 /// (2015)](https://doi.org/10.1364/OE.23.004856), *Optics Express* **23**(4),
 /// 4856–4866.
+///
+/// The blind object/pupil ambiguities follow [A. Fannjiang and P. Chen, “Blind
+/// ptychography: uniqueness and ambiguities” (2020)](https://doi.org/10.1088/1361-6420/ab6504),
+/// *Inverse Problems* **36**, 045005; this implementation uses a Fourier-domain
+/// object and retains affine phase on fractionally interpolated axes.
 #[derive(Clone, Debug)]
 pub struct GradientDescent {
     /// Number of complete passes through the acquisition schedule.
@@ -277,6 +294,17 @@ impl ReconstructionAlgorithm for GradientDescent {
                 name: "parallel_workers",
                 reason: "must be greater than zero".into(),
             });
+        }
+        Ok(())
+    }
+
+    fn canonicalize_state<M: MeasurementRead>(
+        &self,
+        problem: &ReconstructionProblem<M>,
+        state: &mut ReconstructionState,
+    ) -> Result<()> {
+        if self.recover_pupil {
+            canonicalize_object_pupil(problem, state)?;
         }
         Ok(())
     }

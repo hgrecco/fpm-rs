@@ -218,6 +218,24 @@ are scaled by the fraction of all frames in the batch. The universal trace
 reports the algorithm's data objective; recorder-only fields can separately
 report data and regularization components when an algorithm supplies them.
 
+### Blind pupil gauge
+
+Pupil-recovering EPRY and gradient descent return one stable representative of
+the coupled object/pupil solution. The compiled pupil supplies the reference
+support, energy, and phase. After each iteration, the solver applies reciprocal
+object/pupil corrections that preserve every modeled intensity, then fixes the
+remaining object global phase. This happens after regularization and before
+iteration callbacks, checkpoint capture, and result construction. A compatible
+checkpoint is canonicalized before resumed work, so saved and uninterrupted
+runs use the same convention.
+
+The solver removes affine pupil phase separately on axes whose effective
+subpixel offsets are zero. It retains the slope on an axis with any nonzero
+offset because the bilinear fractional-crop operator does not preserve that
+ambiguity exactly. The convention introduces no constructor option. See
+[Blind object/pupil gauge](../concepts/core-concepts.md#blind-objectpupil-gauge)
+for the transformations, failure behavior, and primary reference.
+
 Enable per-source position recovery with
 `GradientDescent::recover_illumination(true)`. Corrections are returned as
 `(row, column)` Fourier-grid offsets from the compiled model: `(dr, dc)` means
@@ -503,8 +521,11 @@ Load one with `ReconstructionCheckpoint::load` and pass it to
 total, not an additional number of iterations. Save/load validates format
 version, finite state, auxiliary consistency, one-based trace rows, and
 monotonic elapsed seconds;
-`load_for_problem` additionally validates dimensions and calibration against a
-specific problem before reconstruction begins.
+`load_for_problem` additionally validates dimensions, exact binary pupil
+support, and calibration against a specific problem before reconstruction
+begins. Pupil-recovering algorithms store iteration-boundary canonical arrays;
+an older valid checkpoint is projected into the current convention before start
+callbacks and resumed work without changing the checkpoint format version.
 
 Every result owns a trace, even when no diagnostic callback is installed.
 Universal iteration rows are `(iteration, objective, elapsed_seconds)`.

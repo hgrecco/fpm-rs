@@ -12,6 +12,7 @@ mod alternating_projection;
 mod common;
 mod epry;
 mod fpie;
+mod gauge;
 mod gradient_descent;
 mod joint_reconstruction;
 mod metrics;
@@ -78,6 +79,23 @@ pub trait ReconstructionAlgorithm {
         backend: Arc<dyn Backend>,
     ) -> Result<ReconstructionState> {
         ReconstructionState::initialize_with_backend(problem, backend)
+    }
+
+    /// Projects algorithm-owned ambiguities into a stable reported convention.
+    ///
+    /// [`Runner`] calls this after initialization or checkpoint restoration and
+    /// after every completed iteration, before iteration diagnostics and
+    /// callbacks, checkpoints, and final result construction. The default
+    /// implementation leaves state unchanged. Algorithms that jointly recover
+    /// coupled fields can override it without requiring external implementations
+    /// to add a lifecycle method. Implementations must preserve the represented
+    /// forward prediction and make repeated projection numerically idempotent.
+    fn canonicalize_state<M: MeasurementRead>(
+        &self,
+        _problem: &ReconstructionProblem<M>,
+        _state: &mut ReconstructionState,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Updates `state` for one scheduled batch in zero-based `iteration`.

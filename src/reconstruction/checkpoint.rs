@@ -25,6 +25,12 @@ use super::{
 pub const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
 /// Serializable algorithm state used to resume a reconstruction exactly.
+///
+/// Built-in pupil-recovering algorithms capture object and pupil arrays after
+/// their iteration-boundary gauge projection. Older valid checkpoints are
+/// projected immediately after restoration. Problem-aware validation requires
+/// the stored pupil support to equal the compiled model support, not only to
+/// have the same shape.
 #[derive(Clone, Debug)]
 pub struct ReconstructionCheckpoint {
     pub(crate) format_version: u32,
@@ -134,8 +140,8 @@ impl ReconstructionCheckpoint {
         Ok(checkpoint)
     }
 
-    /// Loads a checkpoint and verifies all dimensions and calibration counts
-    /// against the problem that will resume it.
+    /// Loads a checkpoint and verifies all dimensions, the exact pupil support,
+    /// and calibration counts against the problem that will resume it.
     pub fn load_for_problem<M: MeasurementRead>(
         path: impl AsRef<Path>,
         problem: &ReconstructionProblem<M>,
@@ -279,6 +285,11 @@ impl ReconstructionCheckpoint {
         if self.pupil.shape() != problem.model.image_shape {
             return Err(Error::InvalidShape(
                 "checkpoint pupil does not match the model image shape".into(),
+            ));
+        }
+        if self.pupil.support.as_slice() != problem.model.pupil().support.as_slice() {
+            return Err(Error::InvalidModel(
+                "checkpoint pupil support differs from the reconstruction problem".into(),
             ));
         }
         if self

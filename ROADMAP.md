@@ -21,7 +21,7 @@ material differences from its cited method.
   follows G. Zheng, R. Horstmeyer, and C. Yang, “Wide-field, high-resolution
   Fourier ptychographic microscopy,” *Nature Photonics* **7**, 739–745 (2013),
   [https://doi.org/10.1038/nphoton.2013.187](https://doi.org/10.1038/nphoton.2013.187).
-- [ ] **Design first:** Define a complete object/pupil gauge convention for
+- [x] Define and enforce a complete object/pupil gauge convention for
   pupil-recovering EPRY and gradient descent. Cover both magnitude scale and
   global or affine phase, choose a robust supported-pupil reference, compensate
   the object spectrum so the forward prediction is invariant, and specify how

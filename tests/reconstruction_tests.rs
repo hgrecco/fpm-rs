@@ -1725,6 +1725,45 @@ fn epry_runs_joint_object_pupil_updates() {
 }
 
 #[test]
+fn pupil_recovery_results_use_the_canonical_scale_and_phase_gauge() {
+    let model = common::direct_model().unwrap();
+    let reference_pupil = model.pupil().clone();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::phase_disk((16, 16), 4.5, 0.8).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let result = Epry::default().iterations(3).run(&problem).unwrap();
+
+    assert_eq!(result.recovered_pupil.support(), reference_pupil.support());
+    let mut reference_energy = 0.0;
+    let mut recovered_energy = 0.0;
+    let mut overlap = Complex64::default();
+    for ((&reference, &recovered), &inside) in reference_pupil
+        .values()
+        .iter()
+        .zip(result.recovered_pupil.values().iter())
+        .zip(reference_pupil.support().iter())
+    {
+        if inside != 0 {
+            reference_energy += reference.norm_sqr();
+            recovered_energy += recovered.norm_sqr();
+            overlap += reference.conj() * recovered;
+        }
+    }
+    assert_abs_diff_eq!(recovered_energy, reference_energy, epsilon = 1e-11);
+    assert!(overlap.re > 0.0);
+    assert!(overlap.im.abs() <= 1e-11 * overlap.re);
+
+    let shape = result.object_spectrum.dim();
+    let dc = result.object_spectrum[(shape.0 / 2, shape.1 / 2)];
+    assert!(dc.re >= 0.0);
+    assert!(dc.im.abs() <= 1e-11 * dc.norm().max(1.0));
+}
+
+#[test]
 fn initialization_undoes_known_frame_gain_and_background() {
     let model = common::direct_model()
         .unwrap()

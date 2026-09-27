@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import fpm_rs as fpm
@@ -52,6 +53,36 @@ def test_checkpoint_load_save_and_resume(
     assert checkpoint.completed_iterations == 1
     assert result.runtime.completed_iterations == 2
     assert len(result.trace) == 2
+
+
+def test_pupil_recovery_resume_preserves_canonical_arrays(
+    problem: fpm.ReconstructionProblem,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "pupil-checkpoints"
+    fpm.Epry(iterations=1).run(
+        problem,
+        callbacks=[fpm.CheckpointEvery(1, directory)],
+    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(
+        directory / "checkpoint_00001.json"
+    )
+
+    resumed = fpm.Epry(iterations=2).run(problem, resume_from=checkpoint)
+    uninterrupted = fpm.Epry(iterations=2).run(problem)
+
+    np.testing.assert_allclose(
+        resumed.object_spectrum,
+        uninterrupted.object_spectrum,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        resumed.recovered_pupil,
+        uninterrupted.recovered_pupil,
+        rtol=1e-12,
+        atol=1e-12,
+    )
 
 
 def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> None:

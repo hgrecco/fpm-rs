@@ -321,6 +321,8 @@ impl<A: ReconstructionAlgorithm> ReconstructionAlgorithm for JointReconstruction
             let output = self
                 .object_algorithm
                 .step(&local_problem, state, batch, iteration)?;
+            self.object_algorithm
+                .canonicalize_state(&local_problem, state)?;
             summary.merge(output.summary);
             let mut records = Vec::new();
             output.metrics.append_records(iteration + 1, &mut records);
@@ -384,6 +386,24 @@ impl<A: ReconstructionAlgorithm> ReconstructionAlgorithm for JointReconstruction
                 object_metrics,
             },
         })
+    }
+
+    fn canonicalize_state<M: MeasurementRead>(
+        &self,
+        problem: &ReconstructionProblem<M>,
+        state: &mut ReconstructionState,
+    ) -> Result<()> {
+        let model = state
+            .calibrated_model
+            .clone()
+            .unwrap_or_else(|| problem.model.clone());
+        let local_problem = ReconstructionProblem {
+            measurements: &problem.measurements,
+            model,
+            name: problem.name.clone(),
+        };
+        self.object_algorithm
+            .canonicalize_state(&local_problem, state)
     }
 
     fn iterations(&self) -> usize {

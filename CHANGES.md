@@ -11,6 +11,12 @@ first.
   `wavelength_vacuum_m / (2 * objective_na)`. This keeps the coherent pupil
   strictly inside the low-resolution FFT grid; configurations requiring a
   sub-sampled detector model are not supported.
+- Pupil-recovering EPRY and gradient descent now return object and pupil arrays
+  in a compiled-pupil gauge: supported pupil energy and piston, affine axes
+  without subpixel offsets, and object piston are canonicalized before callbacks,
+  checkpoints, and final results. Checkpoint compatibility now also requires an
+  exact pupil-support match. Public signatures and format versions are
+  unchanged.
 - Replaced the combined illumination variants with `SourceGeometry`,
   `SourceCalibration`, `AcquisitionPlan`, and atomic `Illumination::resolve`.
   Planar geometry is now `PlanarLedArray`/`PlanarLEDArray`; physical positions,

@@ -152,6 +152,12 @@ impl PyReconstructionProblem {
     }
 }
 
+/// Serializable state for resuming a compatible reconstruction.
+///
+/// Problem-aware restoration requires the checkpoint pupil support to match
+/// the compiled model support exactly. Pupil-recovering algorithms project a
+/// restored object/pupil pair into their canonical gauge before start callbacks
+/// and continued iterations.
 #[pyclass(
     module = "fpm_rs._core",
     name = "ReconstructionCheckpoint",
@@ -206,6 +212,10 @@ pub(crate) struct PyRuntimeInfo {
     pub(crate) algorithm: String,
 }
 
+/// Owned reconstruction products, histories, diagnostics, and metadata.
+///
+/// For built-in pupil-recovering algorithms, the object and pupil arrays use
+/// the compiled pupil's canonical scale and phase gauge.
 #[pyclass(module = "fpm_rs._core", name = "ReconstructionResult", frozen)]
 pub(crate) struct PyReconstructionResult {
     pub(crate) object: Py<PyArray2<Complex64>>,
@@ -527,6 +537,7 @@ impl PyReconstructionResult {
     }
 
     #[getter]
+    /// Return the canonical sampled complex pupil on the low-resolution grid.
     fn recovered_pupil(&self, py: Python<'_>) -> Py<PyArray2<Complex64>> {
         self.recovered_pupil.clone_ref(py)
     }
@@ -2352,6 +2363,14 @@ impl PyFpie {
 /// separates specimen structure from pupil aberrations. Optional per-frame
 /// gain and additive-background recovery are fpm-rs extensions.
 ///
+/// With pupil recovery enabled, iteration-boundary results use the compiled
+/// pupil as a gauge reference. Supported pupil energy is matched to the
+/// reference, pupil and object piston are fixed, and affine pupil phase is
+/// removed on axes with zero effective subpixel offsets. Fractional axes keep
+/// their affine phase because bilinear crop interpolation does not preserve
+/// that ambiguity exactly. This projection runs before iteration callbacks,
+/// checkpoints, final results, and continued work after checkpoint restoration.
+///
 /// Parameters
 /// ----------
 /// iterations : int
@@ -2381,11 +2400,16 @@ impl PyFpie {
 /// loss_type : str
 ///     Loss reported in diagnostics. The projection always enforces amplitude.
 ///
-/// Reference
-/// ---------
+/// References
+/// ----------
 /// [X. Ou, G. Zheng, and C. Yang, "Embedded pupil function recovery for Fourier
 /// ptychographic microscopy" (2014)](https://doi.org/10.1364/OE.22.004960),
 /// Optics Express 22(5), 4960-4972.
+///
+/// [A. Fannjiang and P. Chen, "Blind ptychography: uniqueness and ambiguities"
+/// (2020)](https://doi.org/10.1088/1361-6420/ab6504), Inverse Problems 36,
+/// 045005. fpm-rs uses a Fourier-domain object and retains affine phase on
+/// fractionally interpolated axes.
 #[pyclass(module = "fpm_rs._core", name = "Epry", frozen)]
 pub(crate) struct PyEpry {
     inner: Epry,
@@ -2540,6 +2564,14 @@ impl PyAdmm {
 /// preconditioned object update. It can also recover the pupil and illumination
 /// offsets and regularize the complex object or pupil.
 ///
+/// With pupil recovery enabled, iteration-boundary results use the compiled
+/// pupil as a gauge reference. Supported pupil energy is matched to the
+/// reference, pupil and object piston are fixed, and affine pupil phase is
+/// removed on axes with zero effective subpixel offsets. Fractional axes keep
+/// their affine phase because bilinear crop interpolation does not preserve
+/// that ambiguity exactly. This projection runs before iteration callbacks,
+/// checkpoints, final results, and continued work after checkpoint restoration.
+///
 /// Parameters
 /// ----------
 /// iterations : int
@@ -2575,12 +2607,17 @@ impl PyAdmm {
 /// parallel_workers : int
 ///     Maximum frame-gradient workers; 0 selects available CPU parallelism.
 ///
-/// Reference
-/// ---------
+/// References
+/// ----------
 /// [L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai, "Fourier
 /// ptychographic reconstruction using Wirtinger flow optimization"
 /// (2015)](https://doi.org/10.1364/OE.23.004856), Optics Express 23(4),
 /// 4856-4866.
+///
+/// [A. Fannjiang and P. Chen, "Blind ptychography: uniqueness and ambiguities"
+/// (2020)](https://doi.org/10.1088/1361-6420/ab6504), Inverse Problems 36,
+/// 045005. fpm-rs uses a Fourier-domain object and retains affine phase on
+/// fractionally interpolated axes.
 #[pyclass(module = "fpm_rs._core", name = "GradientDescent", frozen)]
 pub(crate) struct PyGradientDescent {
     inner: GradientDescent,

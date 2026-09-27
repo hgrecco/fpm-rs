@@ -119,6 +119,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                     0,
                 )
             };
+        self.algorithm.canonicalize_state(problem, &mut state)?;
+        state.object_real_space_cache = None;
         let previous_elapsed = trace
             .iterations
             .last()
@@ -215,6 +217,8 @@ impl<A: ReconstructionAlgorithm> Runner<A> {
                         break;
                     }
                 }
+                self.algorithm.canonicalize_state(problem, &mut state)?;
+                state.object_real_space_cache = None;
                 let objective = iteration_step.summary.mean_objective().unwrap_or(f64::NAN);
                 trace.iterations.push(super::IterationRecord {
                     iteration: current_iteration,

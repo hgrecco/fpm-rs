@@ -9,6 +9,7 @@ use crate::{
 use super::{
     ReconstructionAlgorithm,
     common::{ObjectDenominator, UpdateConfiguration, projection_update},
+    gauge::canonicalize_object_pupil,
 };
 
 /// Embedded pupil-recovery reconstruction for Fourier ptychographic microscopy.
@@ -27,11 +28,29 @@ use super::{
 /// updates and incoherent multiplexing support are crate extensions to the
 /// reference EPRY method.
 ///
-/// # Reference
+/// # Gauge convention
+///
+/// When pupil recovery is enabled, iteration-boundary results use the compiled
+/// pupil as a fixed gauge reference. The supported pupil energy is matched to
+/// that reference, its supported overlap is made positive real, and the
+/// centered object-spectrum coefficient is made non-negative real. Reciprocal
+/// object/pupil factors preserve the forward prediction. Affine pupil phase is
+/// removed independently on axes whose effective subpixel offsets are zero;
+/// it is retained on axes with fractional offsets because the model's bilinear
+/// crop interpolation does not preserve that ambiguity exactly. The runner
+/// applies this projection before iteration callbacks, checkpoints, and final
+/// result construction, including after checkpoint restoration.
+///
+/// # References
 ///
 /// [X. Ou, G. Zheng, and C. Yang, “Embedded pupil function recovery for Fourier
 /// ptychographic microscopy” (2014)](https://doi.org/10.1364/OE.22.004960),
 /// *Optics Express* **22**(5), 4960–4972.
+///
+/// The blind object/pupil ambiguities follow [A. Fannjiang and P. Chen, “Blind
+/// ptychography: uniqueness and ambiguities” (2020)](https://doi.org/10.1088/1361-6420/ab6504),
+/// *Inverse Problems* **36**, 045005; this implementation uses a Fourier-domain
+/// object and retains affine phase on fractionally interpolated axes.
 #[derive(Clone, Debug)]
 pub struct Epry {
     /// Number of complete passes through the acquisition schedule.
@@ -214,6 +233,17 @@ impl ReconstructionAlgorithm for Epry {
                 name: "background_bounds",
                 reason: "must be finite and strictly increasing".into(),
             });
+        }
+        Ok(())
+    }
+
+    fn canonicalize_state<M: MeasurementRead>(
+        &self,
+        problem: &ReconstructionProblem<M>,
+        state: &mut ReconstructionState,
+    ) -> Result<()> {
+        if self.recover_pupil {
+            canonicalize_object_pupil(problem, state)?;
         }
         Ok(())
     }
