@@ -266,7 +266,10 @@ class Optics:
     magnification
         Positive, dimensionless microscope magnification.
     camera_pixel_size
-        Positive detector-plane pixel pitch in metres.
+        Positive detector-plane pixel pitch in metres. The object-plane pitch
+        ``camera_pixel_size / magnification`` must be strictly less than
+        ``wavelength_vacuum_m / (2 * objective_na)`` for coherent-field
+        sampling; equality is rejected.
     illumination_refractive_index
         Positive refractive index between the sources and sample.
     objective_medium_refractive_index
@@ -275,6 +278,13 @@ class Optics:
         Optional signed propagation distance in metres.
     pupil_aberration
         Optional sampled pupil-aberration coefficients.
+
+    Raises
+    ------
+    InvalidParameterError
+        If a parameter is non-finite or outside its physical domain, or if the
+        object-plane detector pitch does not satisfy the coherent-field
+        sampling condition.
     """
     def __init__(
         self,
@@ -311,7 +321,7 @@ class Optics:
         """Return the optional signed propagation distance in metres."""
     @property
     def object_pixel_size(self) -> float:
-        """Return ``camera_pixel_size / magnification`` in metres."""
+        """Return the validated sample-plane detector pitch in metres."""
 
 class ArrayPose:
     """Rigid array-local to sample-coordinate transform.

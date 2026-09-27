@@ -71,6 +71,10 @@ configuration.
 `wavelength_vacuum_m` is the vacuum wavelength. Source propagation uses
 `illumination_refractive_index`; pupil propagation uses
 `objective_medium_refractive_index`. No geometry carries wavelength state.
+The sample-plane detector pitch must satisfy
+`camera_pixel_size / magnification < wavelength_vacuum_m / (2 * objective_na)`.
+Equality is rejected because the coherent pupil cutoff would lie on the
+one-sided discrete Nyquist boundary.
 
 Use `ExperimentDescription::compile` for one model or
 `SimulationConfiguration::new` for a validated true/reconstruction pair. Use

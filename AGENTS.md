@@ -106,11 +106,8 @@ GPU execution are not implemented today.
   docstrings and document scientific array shape, dtype, axis order, copying,
   mutability, units, optional values, failures, and blocking behavior where
   relevant. Do not expose private `_core` implementation details as public API.
-- Cite publication-derived methods and scientific claims near their use with
-  complete, verified bibliographic metadata and a clickable canonical
-  `https://doi.org/...` link when available. Prefer primary sources, document
-  material implementation differences, and never leave bare DOI strings or
-  guess citation metadata.
+- Follow the citation policy below for publication-derived methods and
+  scientific claims.
 - Evaluate API changes in generated Rustdoc and MkDocs pages. Keep Python API
   domains split by purpose, source implementations collapsed, stable symbol
   links discoverable, and generated `site/` or `target/` output uncommitted.
@@ -121,6 +118,78 @@ changes; `pixi run ci` is the canonical complete source suite. Report public
 items and examples changed, semantic convention changes, citations and their
 verification sources, checks run, and any unresolved API or attribution
 inconsistency.
+
+## Citation policy
+
+- Cite a source at the closest durable explanation of every
+  publication-derived algorithm, formula, threshold, convention, dataset, or
+  scientific claim. A citation does not replace an explanation of what this
+  implementation does, its assumptions, or its material differences from the
+  cited work.
+- Use the primary source when available. Verify the bibliographic metadata
+  against the canonical DOI resolver and an authoritative publisher or archive;
+  never infer or invent authors, titles, venues, dates, pages, or article
+  numbers.
+- Give a complete reference: authors, linked title, venue, volume and issue when
+  applicable, page range or article number, and year. Link the title or an
+  author-year label to the canonical `https://doi.org/...` URL. Do not use a
+  bare DOI, a DOI as the link label, or a noncanonical DOI resolver.
+- In Rust, put the full reference in the Rustdoc for the public item that exposes
+  the method or behavior, normally under `# References`. Use an implementation
+  comment only when a formula, sign, constant, or translation from the paper is
+  otherwise hard to audit; identify the source there by author and year and
+  keep the full reference in the enclosing item's Rustdoc.
+- In Python, put the full reference in the authoritative checked-in stub
+  docstring under a NumPy-style `References` section. Keep any corresponding
+  public wrapper docstring and PyO3 runtime docstring semantically synchronized
+  when they expose the same method or claim.
+- In Markdown and notebooks, place the full reference in the paragraph that
+  makes the claim or in a clearly linked `References` section on the same page.
+  Do not rely on a bibliography on another page to identify the source.
+- In tests, examples, and fixtures, cite a publication only when an expected
+  value, convention, or dataset comes from it. Explain the derivation or
+  transformation in a nearby comment and point to the public documentation that
+  contains the full reference.
+- `CITATION.cff` describes how to cite `fpm-rs`; it is not the bibliography for
+  scientific methods used by the code. Update it for software authorship,
+  release version, title, repository, or preferred software-citation changes.
+  Do not add a paper to it solely because Rustdoc, a docstring, or narrative
+  documentation cites that paper.
+- Run `pixi run citation-check` after adding or changing citations, then render
+  the affected Rustdoc, Python API documentation, or MkDocs pages to verify that
+  the reference is readable and its link is clickable.
+
+## Narrative documentation and onboarding policy
+
+- Keep `README.md`, `docs/getting-started/quickstart.md`, and
+  `docs/tutorials/notebooks/quickstart.ipynb` on the same calling convention,
+  using keyword arguments for multi-parameter constructors. Update all three
+  together whenever a constructor signature or recommended idiom changes; do
+  not let them drift.
+- Keep `docs/getting-started/quickstart.md` to the shortest path to one
+  successful reconstruction. Put sizing strategies, batching, regularization,
+  calibration, and other secondary configuration in the relevant page under
+  `docs/guides/`, and cross-link it instead of inlining it in the quickstart.
+- Give every reconstruction algorithm an entry in the algorithm-selection
+  guidance in `docs/guides/reconstruction.md`, in addition to its rustdoc and
+  citation. Describe when to prefer it over the alternatives in the same
+  change that adds the algorithm.
+- Decompose every end-user one-call convenience or demo entry point into the
+  primitives it wraps immediately in the same document. Present it as an
+  installation sanity check and a worked example to modify, never as an
+  unexplained replacement for the underlying walkthrough.
+- Define domain terms introduced for non-specialists in
+  `docs/concepts/glossary.md`, including numerical aperture, synthetic NA,
+  pupil, k-vector, dark-field and bright-field illumination, pitch, defocus,
+  and similar terms. Add a glossary entry when a guide or tutorial introduces
+  a term not already defined there.
+- Keep `CITATION.cff` synchronized with the version in `Cargo.toml` and
+  `pyproject.toml` at every release. Treat it as part of the release checklist
+  alongside `CHANGES.md`.
+- Keep root `CONTRIBUTING.md`, `SECURITY.md`, and `CODE_OF_CONDUCT.md` as thin,
+  current pointers to canonical documentation such as
+  `docs/development/index.md`. Do not duplicate canonical prose; improve the
+  existing document instead.
 
 ## Useful commands
 

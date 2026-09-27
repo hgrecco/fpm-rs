@@ -293,7 +293,7 @@ frame order.
 | `wavelength_vacuum_m` | Finite positive vacuum wavelength in metres. |
 | `objective_na` | Finite positive number no greater than `objective_medium_refractive_index`. |
 | `magnification` | Finite positive number. |
-| `camera_pixel_size` | Finite positive number in metres. |
+| `camera_pixel_size` | Finite positive number in metres. Its object-plane value `camera_pixel_size / magnification` must be strictly less than `wavelength_vacuum_m / (2 * objective_na)`. |
 | `illumination_refractive_index` | Finite positive source-to-sample refractive index. |
 | `objective_medium_refractive_index` | Finite positive objective-side refractive index. |
 | `defocus_distance` | `null` or finite axial displacement in metres. |
@@ -414,6 +414,12 @@ optics be the selected experiment's optics. Require `hr >= h`, `wr >= w`, and
    `max(...)` ranges over every source vector. Store these values in
    `sampling`, with `wavelength` equal to `wavelength_vacuum_m` and
    `coordinate_convention` equal to `"CenteredPositiveK"`.
+
+   Before compiling the pupil, require
+   `low_res_pixel_size < wavelength_vacuum_m / (2 * objective_na)`.
+   Equality is invalid because the pupil cutoff would lie on the one-sided
+   discrete Nyquist boundary. Implementations that need coarser acquisitions
+   require a sub-sampled detector model outside this specification.
 
 2. Build the pupil with shape `[h, w]`. For every zero-based `(row, column)`,
    calculate:

@@ -236,5 +236,30 @@ def test_typed_configuration_errors() -> None:
     with pytest.raises(fpm.InvalidParameterError, match="objective_na"):
         fpm.Optics(532e-9, -0.1, 4.0, 6.5e-6)
 
+    boundary = 4.0
+    with pytest.raises(
+        fpm.InvalidParameterError,
+        match="camera_pixel_size.*strictly less.*coherent-field sampling",
+    ):
+        fpm.Optics(
+            wavelength_vacuum_m=1.0,
+            objective_na=0.25,
+            magnification=2.0,
+            camera_pixel_size=boundary,
+        )
+    fpm.Optics(
+        wavelength_vacuum_m=1.0,
+        objective_na=0.25,
+        magnification=2.0,
+        camera_pixel_size=np.nextafter(boundary, 0.0),
+    )
+    with pytest.raises(fpm.InvalidParameterError, match="camera_pixel_size"):
+        fpm.Optics(
+            wavelength_vacuum_m=1.0,
+            objective_na=0.25,
+            magnification=2.0,
+            camera_pixel_size=np.nextafter(boundary, np.inf),
+        )
+
     with pytest.raises(ValueError, match="shape"):
         fpm.DirectionList(np.zeros((2, 2), dtype=np.float64))

@@ -7,6 +7,10 @@ first.
 
 ### Breaking changes
 
+- `Optics` now rejects a sample-plane detector pitch greater than or equal to
+  `wavelength_vacuum_m / (2 * objective_na)`. This keeps the coherent pupil
+  strictly inside the low-resolution FFT grid; configurations requiring a
+  sub-sampled detector model are not supported.
 - Replaced the combined illumination variants with `SourceGeometry`,
   `SourceCalibration`, `AcquisitionPlan`, and atomic `Illumination::resolve`.
   Planar geometry is now `PlanarLedArray`/`PlanarLEDArray`; physical positions,

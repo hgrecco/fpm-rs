@@ -105,6 +105,38 @@ weights for the documented sampled radial-polynomial terms, not normalized
 Zernike coefficients. A `defocus_distance` of `d` metres adds the paraxial
 pupil phase `-d * (kx² + ky²) / (2 * k_medium)` inside the support.
 
+The low-resolution FFT grid must contain that coherent pupil. With object-plane
+detector pitch `Δx = camera_pixel_size / magnification`, pupil cutoff
+`k_cutoff = 2π objective_na / wavelength_vacuum`, and Nyquist angular frequency
+`k_Nyquist = π / Δx`, model validation requires
+
+```text
+k_cutoff < k_Nyquist
+Δx < wavelength_vacuum / (2 * objective_na)
+```
+
+Equality is rejected because an even discrete grid represents only one side of
+the Nyquist boundary. The objective numerical aperture already includes the
+objective medium, so the expression uses the vacuum wavelength without another
+refractive-index factor.
+
+The continuous intensity `|field|²` can have twice the coherent-field
+bandwidth. Strict point sampling of every such intensity component would use
+the stronger condition `Δx < wavelength_vacuum / (4 * objective_na)`. The
+current forward model instead evaluates `|field|²` at the coherent field's
+sample locations; it does not integrate intensity over detector-pixel area or
+implement a sub-sampled sensor model. The stronger condition is therefore
+acquisition guidance, not a second validation error.
+
+These conventions follow [G. Zheng, R. Horstmeyer, and C. Yang, “Wide-field,
+high-resolution Fourier ptychographic microscopy”
+(2013)](https://doi.org/10.1038/nphoton.2013.187), *Nature Photonics* **7**,
+739–745, and the practical sampling discussion in [S. Jiang, P. Song, T. Wang,
+L. Yang, R. Wang, C. Guo, B. Feng, A. Maiden, and G. Zheng, “Spatial- and
+Fourier-domain ptychography for high-throughput bio-imaging”
+(2023)](https://doi.org/10.1038/s41596-023-00829-4), *Nature Protocols* **18**,
+2051–2083.
+
 `CoordinateConvention::CenteredPositiveK` records these choices in compiled
 models.
 
