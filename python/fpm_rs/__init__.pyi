@@ -2210,6 +2210,11 @@ class GradientDescent(_Algorithm):
         Positive floor used by losses and preconditioners.
     loss_type
         Data loss to optimize and report.
+    poisson_truncation_threshold
+        Positive signal-dependent Poisson outlier coefficient. ``None`` keeps
+        the ordinary untruncated gradient; the cited TPWFP work used 25. The
+        gate uses intrinsic intensities and mini-batch residual statistics,
+        and one decision is shared by all modes of a multiplexed pixel.
     recover_illumination
         Whether to estimate source offsets on the Fourier grid.
     illumination_step, illumination_finite_difference, illumination_bounds
@@ -2231,6 +2236,13 @@ class GradientDescent(_Algorithm):
     ptychographic reconstruction using Wirtinger flow optimization* (2015),
     Optics Express 23(4), 4856-4866.](https://doi.org/10.1364/OE.23.004856)
 
+    [L. Bian, J. Suo, J. Chung, X. Ou, C. Yang, F. Chen, and Q. Dai, *Fourier
+    ptychographic reconstruction using Poisson maximum likelihood and truncated
+    Wirtinger gradient* (2016), Scientific Reports 6,
+    27384.](https://doi.org/10.1038/srep27384) fpm-rs uses a mini-batch
+    statistic and fixed object step; optional pupil and illumination recovery
+    extend the paper's object-only presentation.
+
     [A. Fannjiang and P. Chen, *Blind ptychography: uniqueness and ambiguities*
     (2020), Inverse Problems 36,
     045005.](https://doi.org/10.1088/1361-6420/ab6504) fpm-rs uses a
@@ -2245,6 +2257,7 @@ class GradientDescent(_Algorithm):
         batch_size: int = 1,
         epsilon: float = 1e-10,
         loss_type: str = "amplitude_mse",
+        poisson_truncation_threshold: float | None = None,
         recover_illumination: bool = False,
         illumination_step: float = 0.1,
         illumination_finite_difference: float = 0.05,

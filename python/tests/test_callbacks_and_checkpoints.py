@@ -147,6 +147,40 @@ def test_adaptive_projection_resume_preserves_feedback_state(
     assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
 
 
+def test_truncated_poisson_gradient_resumes_without_auxiliary_state(
+    problem: fpm.ReconstructionProblem,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "truncated-poisson-checkpoints"
+    parameters = {
+        "batch_size": 5,
+        "loss_type": "poisson_nll",
+        "poisson_truncation_threshold": 25.0,
+        "parallel_workers": 1,
+    }
+    fpm.GradientDescent(iterations=1, **parameters).run(
+        problem,
+        callbacks=[fpm.CheckpointEvery(1, directory)],
+    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(
+        directory / "checkpoint_00001.json"
+    )
+
+    resumed = fpm.GradientDescent(iterations=3, **parameters).run(
+        problem,
+        resume_from=checkpoint,
+    )
+    uninterrupted = fpm.GradientDescent(iterations=3, **parameters).run(problem)
+
+    np.testing.assert_allclose(
+        resumed.object_spectrum,
+        uninterrupted.object_spectrum,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
+
+
 def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> None:
     result = fpm.AlternatingProjection(iterations=10).run(
         problem,

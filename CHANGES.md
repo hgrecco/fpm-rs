@@ -41,6 +41,10 @@ first.
 
 ### Added
 
+- Added optional signal-dependent truncated Poisson gradients to
+  `GradientDescent`, including calibrated mini-batch statistics, shared
+  multiplexed-pixel gates, deterministic parallel reduction, retained-pixel
+  trace metrics, and Rust and Python APIs.
 - Added object-only adaptive-step alternating projection for noisy fixed-pupil
   FPM, with cycle-level objective feedback, checkpointed controller state,
   effective-step trace metrics, Rust and Python APIs, and a deterministic noisy

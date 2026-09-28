@@ -148,7 +148,7 @@ experiments.
 | Noisy data with a trusted fixed pupil and measurement-response model | `AdaptiveAlternatingProjection` | Retain AP's fast initial unit-step progress, then reduce the object step when pass-to-pass amplitude loss stops improving materially. Use fixed-step AP when exact manual control of every pass is preferable. |
 | Object-only recovery with weak pupil transfer or mild noise | `Fpie` | Prefer its stabilized object update when plain projection is too sensitive in weak-transfer regions. It does not estimate the pupil or source geometry. |
 | A fixed-pupil `Fpie` trajectory converges slowly or stagnates | `Mpie` | Add periodic object-spectrum momentum after establishing a stable rPIE baseline. It adds interval, friction, and feedback tuning and cannot be wrapped by `JointReconstruction`. |
-| Noise statistics, outliers, or an object prior must enter the update | `GradientDescent` | Select Poisson, Huber-amplitude, intensity, or amplitude loss as appropriate; use total variation only when that prior is defensible. This is the most configurable route, with more tuning and compute. |
+| Noise statistics, outliers, or an object prior must enter the update | `GradientDescent` | Select Poisson, Huber-amplitude, intensity, or amplitude loss as appropriate. For sparse gross outliers with a Poisson model, enable `poisson_truncation_threshold`; use total variation only when that prior is defensible. This is the most configurable route, with more tuning and compute. |
 | Pupil aberration or defocus is suspected | `Epry` | Recover the complex pupil with the object. It can also estimate per-frame gain or uniform background. If a selectable data loss or pupil regularization is essential, use pupil-recovering `GradientDescent` instead. |
 | Updates need full- or multi-frame consensus rather than sequential frame corrections | `Admm` | Its auxiliary fields and dual variables make cross-frame agreement explicit. The default full-frame batch costs more memory and introduces penalty and relaxation controls. |
 | Independent illumination vectors may be wrong | `GradientDescent(recover_illumination=True)` | Use this for generic per-source Fourier-grid corrections. The result is not necessarily a realizable apparatus geometry. |
@@ -256,12 +256,35 @@ of camera-count scaling. It supports masks, frame weights, schedules, and true
 mini-batches: frame gradients accumulate in reusable storage and one averaged
 object update is applied per batch. `object_step` controls that update.
 
+With `loss_type="poisson_nll"`, setting
+`poisson_truncation_threshold=25.0` enables the signal-dependent rejection rule
+of L. Bian, J. Suo, J. Chung, X. Ou, C. Yang, F. Chen, and Q. Dai, [“Fourier
+ptychographic reconstruction using Poisson maximum likelihood and truncated
+Wirtinger gradient,” *Scientific Reports* **6**, 27384
+(2016)](https://doi.org/10.1038/srep27384). For each mini-batch, fpm-rs forms a
+frame-weighted mean absolute residual from positive-weight, unmasked pixels in
+intrinsic intensity units after removing known gain and background. A pixel's
+residual is retained according to that statistic, its predicted amplitude, and
+the object's RMS amplitude. One decision applies to every mode of an
+incoherently multiplexed detector pixel and to object, pupil, and illumination
+updates. The trace still reports the full untruncated Poisson objective, while
+`gradient_descent/retained_pixel_fraction` reports the selected fraction.
+
+The cited method uses a full-data statistic, object-only recovery, and a
+scheduled step. This implementation deliberately uses the current mini-batch,
+the existing fixed `object_step`, and supports the solver's optional pupil and
+illumination extensions. Batch size and schedule can therefore change both the
+gate and the trajectory. Leave the threshold as `None` for the existing
+untruncated Poisson gradient; values much below 25 can discard useful data,
+while very large values approach the untruncated path.
+
 The gradient implementation evaluates independent frame chunks on up to the
-available CPU workers; `parallel_workers` limits the count. Each worker reuses
-local state, and the main thread reduces chunks in deterministic batch order,
-including multiplexed shared-source curvature. Memory therefore grows with
-active workers rather than batch length. TV and pupil smoothing run once after
-the reduction for each batch.
+available CPU workers; `parallel_workers` limits the count. A truncating run
+computes its batch statistic once before workers split the frames. Each worker
+reuses local state, and the main thread reduces chunks in deterministic batch
+order, including multiplexed shared-source curvature. Memory therefore grows
+with active workers rather than batch length. TV and pupil smoothing run once
+after the reduction for each batch.
 
 `recover_pupil(true)` enables mini-batch pupil updates for ordinary and
 multiplexed frames. `pupil_step` controls the normalized update and

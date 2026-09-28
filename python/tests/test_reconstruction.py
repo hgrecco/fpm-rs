@@ -119,6 +119,35 @@ def test_algorithm_parameter_errors_remain_typed() -> None:
     with pytest.raises(ValueError, match="loss_type"):
         fpm.GradientDescent(loss_type="unknown")
 
+    with pytest.raises(fpm.InvalidParameterError, match="poisson_truncation_threshold"):
+        fpm.GradientDescent(poisson_truncation_threshold=25.0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="poisson_truncation_threshold"):
+        fpm.GradientDescent(
+            loss_type="poisson_nll",
+            poisson_truncation_threshold=0.0,
+        )
+
+
+def test_truncated_poisson_gradient_reports_retained_fraction(
+    problem: fpm.ReconstructionProblem,
+) -> None:
+    result = fpm.GradientDescent(
+        iterations=2,
+        batch_size=5,
+        loss_type="poisson_nll",
+        poisson_truncation_threshold=25.0,
+        parallel_workers=1,
+    ).run(problem)
+
+    assert len(result.trace) == 2
+    assert len(result.algorithm_metrics) == 2
+    for iteration, namespace, metric, value in result.algorithm_metrics:
+        assert iteration in (1, 2)
+        assert namespace == "gradient_descent"
+        assert metric == "retained_pixel_fraction"
+        assert 0.0 <= value <= 1.0
+
 
 @pytest.mark.parametrize(
     "algorithm",
@@ -184,6 +213,7 @@ def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
             "batch_size",
             "epsilon",
             "loss_type",
+            "poisson_truncation_threshold",
             "recover_illumination",
             "illumination_step",
             "illumination_finite_difference",

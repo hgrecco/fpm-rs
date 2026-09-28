@@ -29,7 +29,7 @@ pub use admm::{Admm, AdmmIterationMetrics};
 pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;
 pub use fpie::Fpie;
-pub use gradient_descent::GradientDescent;
+pub use gradient_descent::{GradientDescent, GradientDescentIterationMetrics};
 pub use joint_reconstruction::{
     JointIterationMetrics, JointReconstruction, JointReconstructionResult,
 };

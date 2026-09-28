@@ -200,7 +200,7 @@ material differences from its cited method.
     error than fixed-step AP under the same schedule and update budget. Run
     `pixi run ci`, Rust and Python API documentation checks, MkDocs and notebook
     checks, citation checking, and the reconstruction benchmark/example.
-- [ ] **Design first:** Extend `GradientDescent` with the truncated-gradient or
+- [x] **Design first:** Extend `GradientDescent` with the truncated-gradient or
   outlier-rejection rule of truncated Poisson Wirtinger reconstruction. Poisson
   negative log likelihood already exists; do not introduce a duplicate Poisson
   objective. Define truncation statistics for masks, gains, backgrounds,
@@ -210,6 +210,64 @@ material differences from its cited method.
   Poisson maximum likelihood and truncated Wirtinger gradient,” *Scientific
   Reports* **6**, 27384 (2016),
   [https://doi.org/10.1038/srep27384](https://doi.org/10.1038/srep27384).
+
+  **Accepted design:**
+
+  - Extend the existing public `GradientDescent` rather than adding another
+    Poisson objective or algorithm type. Add an optional finite positive
+    `poisson_truncation_threshold`; `None` remains the default and preserves the
+    existing untruncated path exactly, while `25` reproduces the threshold
+    coefficient selected by Bian et al. Exposing truncation with any other loss
+    is a parameter error.
+  - For one runner mini-batch and its pre-update state, predict the intrinsic
+    detector intensity `p` and form the intrinsic target
+    `y = max((measurement - background) / gain, 0)`. Exclude masked pixels and
+    zero-weight frames. Define the batch statistic as the frame-weighted mean
+    absolute residual over the remaining pixels,
+    `R = sum(w * |y - p|) / sum(w)`, where each pixel carries its frame weight.
+    Compute it once before any gradient in that batch is applied.
+  - Let `z_rms = ||Z||_2`, where `Z` is the centered reconstruction spectrum.
+    Under the library's normalized-forward FFT this is the RMS object-domain
+    amplitude; it corresponds to the authors' `||fft2(z)||_2 / N` under
+    MATLAB's unnormalized forward transform. Retain a detector pixel exactly when
+    `|y - p| <= alpha * R * sqrt(p) / max(z_rms, sqrt(epsilon))`. This adapts
+    the paper's global full-stack statistic to the solver's true mini-batches;
+    consequently batch size and schedule may change the selected pixels, just
+    as they already change the gradient trajectory.
+  - For incoherent multiplexing, compute `p` from the sum of all weighted mode
+    intensities and apply one detector-pixel gate to every contributing mode.
+    Apply the same gate to object, pupil, and illumination-offset gradient and
+    curvature contributions. Frame weights still scale accepted gradients.
+    Continue to report the full, untruncated Poisson negative log likelihood so
+    truncated and untruncated runs remain directly comparable.
+  - Perform the statistic pass once for the whole batch before splitting
+    parallel frame workers. Workers share that immutable statistic, and their
+    accepted gradients are reduced in deterministic schedule order. Record the
+    frame-weighted retained-pixel fraction as a `gradient_descent` iteration
+    metric when truncation is enabled. Reject non-finite statistics rather than
+    silently disabling the gate; accepting no pixels is a valid zero data step.
+  - Truncation adds no evolving solver state: every gate is derived from the
+    checkpointed reconstruction state and current batch. Checkpoint format and
+    serialization therefore remain unchanged, and an uninterrupted run must
+    match a resumed run when algorithm parameters and schedule match. The
+    method remains usable inside `JointReconstruction`; a recompiled physical
+    model simply defines the next batch's fresh statistic.
+  - Expose the option in Rust builders, the Python keyword-only constructor,
+    authoritative stubs, and reconstruction guidance. Add the complete Bian et
+    al. reference to Rustdoc and the Python stub, and explicitly document the
+    implementation's mini-batch statistic, calibrated intrinsic units,
+    multiplexed-mode gate, fixed-step update, and optional pupil/calibration
+    extensions relative to the paper's full-data, object-only presentation and
+    scheduled step size.
+  - Add deterministic tests for validation, disabled-path equivalence, the
+    scalar gate boundary, masks, gains, backgrounds, multiplexing, batch and
+    parallel semantics, retained-fraction metrics, checkpoint resume, and
+    Python construction and execution. Before marking this item complete,
+    demonstrate on a deterministic corrupted FPM simulation that truncation
+    improves gauge-aligned object error over the identically configured
+    untruncated Poisson path. Run `pixi run ci`, Rust and Python API
+    documentation checks, MkDocs and notebook checks, citation checking, and
+    the reconstruction benchmark/example.
 - [ ] **Design first:** Evaluate a global Newton, Gauss–Newton, or practical
   quasi-Newton object solver against the existing sequential and mini-batch
   methods. Specify Hessian approximation, memory scaling, preconditioning,

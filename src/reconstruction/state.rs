@@ -107,6 +107,10 @@ pub(crate) struct ReconstructionScratch {
     pub(crate) regularization_field: Vec<Complex64>,
     pub(crate) pupil_gradient: Vec<Complex64>,
     pub(crate) calibration_reference: Vec<f64>,
+    /// Per-pixel inclusion flags for masked and robust data-gradient updates.
+    pub(crate) data_gradient_mask: Vec<u8>,
+    /// Shared precomputed truncation scale passed to parallel frame workers.
+    pub(crate) poisson_truncation_scale: Option<f64>,
     pub(crate) illumination_gradient: Vec<(f64, f64)>,
     pub(crate) illumination_curvature: Vec<(f64, f64)>,
     pub(crate) illumination_weight: Vec<f64>,
@@ -133,6 +137,8 @@ impl ReconstructionScratch {
             regularization_field: Vec::new(),
             pupil_gradient: vec![Complex64::default(); low_len],
             calibration_reference: vec![0.0; low_len],
+            data_gradient_mask: vec![1; low_len],
+            poisson_truncation_scale: None,
             illumination_gradient: Vec::new(),
             illumination_curvature: Vec::new(),
             illumination_weight: Vec::new(),

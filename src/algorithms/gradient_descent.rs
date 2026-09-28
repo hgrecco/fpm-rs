@@ -4,7 +4,7 @@ use std::thread;
 use crate::{
     Result,
     algorithms::{
-        NoIterationMetrics, StepOutput, StepSummary,
+        AlgorithmIterationMetrics, StepOutput, StepSummary,
         objective::{LossType, point_loss},
     },
     array_layout::checked_len_2d,
@@ -21,6 +21,49 @@ use super::{
     regularization::{apply_complex_tv_step, apply_quadratic_smoothing_step},
 };
 
+/// Truncation statistics emitted by one gradient-descent iteration.
+///
+/// The retained fraction is frame-weighted and includes only unmasked pixels
+/// from positive-weight frames. It is absent when Poisson truncation is
+/// disabled or when an iteration has no eligible pixels.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GradientDescentIterationMetrics {
+    retained_weight: f64,
+    eligible_weight: f64,
+    truncation_enabled: bool,
+}
+
+impl GradientDescentIterationMetrics {
+    /// Returns the frame-weighted fraction of eligible pixels retained by truncation.
+    pub fn retained_pixel_fraction(&self) -> Option<f64> {
+        (self.truncation_enabled && self.eligible_weight > 0.0)
+            .then(|| self.retained_weight / self.eligible_weight)
+    }
+}
+
+impl AlgorithmIterationMetrics for GradientDescentIterationMetrics {
+    fn merge(&mut self, other: Self) {
+        self.retained_weight += other.retained_weight;
+        self.eligible_weight += other.eligible_weight;
+        self.truncation_enabled |= other.truncation_enabled;
+    }
+
+    fn append_records(
+        &self,
+        iteration: usize,
+        output: &mut Vec<crate::reconstruction::AlgorithmMetricRecord>,
+    ) {
+        if let Some(value) = self.retained_pixel_fraction() {
+            output.push(crate::reconstruction::AlgorithmMetricRecord {
+                iteration,
+                namespace: "gradient_descent".into(),
+                metric: "retained_pixel_fraction".into(),
+                value,
+            });
+        }
+    }
+}
+
 /// Wirtinger-style loss-gradient reconstruction for Fourier ptychography.
 ///
 /// # Method
@@ -32,12 +75,28 @@ use super::{
 /// is treated as direct optimization rather than alternating hard projections.
 /// Losses are evaluated after accounting for known linear gain and background,
 /// so detector count scaling does not change the intrinsic update scale.
+/// With `poisson_truncation_threshold` enabled, a pre-update mini-batch pass
+/// rejects signal-dependent intensity outliers from the gradient while the
+/// reported Poisson objective continues to include every valid pixel.
 ///
 /// Optional extensions recover the pupil with an analogous normalized
 /// gradient, estimate illumination offsets with finite-difference derivatives
 /// and diagonal Gauss–Newton scaling, and regularize the complex object or
 /// pupil. Incoherent multiplexing, these calibration updates, and the selectable
 /// losses extend the reference formulation.
+///
+/// # Poisson truncation
+///
+/// For each mini-batch, the implementation computes the frame-weighted mean
+/// absolute residual `R` over unmasked pixels in positive-weight frames. A
+/// pixel with intrinsic target `y`, total predicted intensity `p`, and object
+/// RMS amplitude `z_rms` contributes exactly when
+/// `|y - p| <= alpha * R * sqrt(p) / max(z_rms, sqrt(epsilon))`. Known gain and
+/// background are removed before this test. One gate is shared by every mode
+/// of an incoherently multiplexed pixel and by object, pupil, and illumination
+/// gradients. The statistic is mini-batch-local rather than full-data, the
+/// object step is fixed rather than scheduled, and pupil and illumination
+/// recovery are implementation extensions beyond the cited object-only method.
 ///
 /// # Gauge convention
 ///
@@ -57,6 +116,11 @@ use super::{
 /// (2015)](https://doi.org/10.1364/OE.23.004856), *Optics Express* **23**(4),
 /// 4856–4866.
 ///
+/// [L. Bian, J. Suo, J. Chung, X. Ou, C. Yang, F. Chen, and Q. Dai, “Fourier
+/// ptychographic reconstruction using Poisson maximum likelihood and truncated
+/// Wirtinger gradient” (2016)](https://doi.org/10.1038/srep27384), *Scientific
+/// Reports* **6**, 27384.
+///
 /// The blind object/pupil ambiguities follow [A. Fannjiang and P. Chen, “Blind
 /// ptychography: uniqueness and ambiguities” (2020)](https://doi.org/10.1088/1361-6420/ab6504),
 /// *Inverse Problems* **36**, 045005; this implementation uses a Fourier-domain
@@ -73,6 +137,11 @@ pub struct GradientDescent {
     pub epsilon: f64,
     /// Data-fidelity objective to differentiate and report.
     pub loss_type: LossType,
+    /// Optional positive signal-dependent Poisson truncation coefficient.
+    ///
+    /// `None` uses the ordinary untruncated gradient. The cited TPWFP work used
+    /// `25`; truncation requires [`LossType::PoissonNegativeLogLikelihood`].
+    pub poisson_truncation_threshold: Option<f64>,
     /// Whether to estimate a Fourier-grid offset for every illumination source.
     pub recover_illumination: bool,
     /// Step size of the diagonally scaled illumination-offset update.
@@ -107,6 +176,7 @@ impl Default for GradientDescent {
             batch_size: 1,
             epsilon: 1e-10,
             loss_type: LossType::AmplitudeMse,
+            poisson_truncation_threshold: None,
             recover_illumination: false,
             illumination_step: 0.1,
             illumination_finite_difference: 0.05,
@@ -144,6 +214,15 @@ impl GradientDescent {
     /// Selects the differentiable data-fidelity objective used for updates and reporting.
     pub fn loss_type(mut self, loss_type: LossType) -> Self {
         self.loss_type = loss_type;
+        self
+    }
+
+    /// Enables signal-dependent Poisson-gradient truncation with `threshold`.
+    ///
+    /// The cited TPWFP experiments selected `25`. Validation requires a finite
+    /// positive value and Poisson negative log likelihood.
+    pub fn poisson_truncation_threshold(mut self, threshold: f64) -> Self {
+        self.poisson_truncation_threshold = Some(threshold);
         self
     }
 
@@ -216,7 +295,7 @@ impl GradientDescent {
 }
 
 impl ReconstructionAlgorithm for GradientDescent {
-    type IterationMetrics = NoIterationMetrics;
+    type IterationMetrics = GradientDescentIterationMetrics;
 
     fn validate(&self) -> Result<()> {
         if !self.object_step.is_finite() || self.object_step <= 0.0 {
@@ -236,6 +315,20 @@ impl ReconstructionAlgorithm for GradientDescent {
                 name: "batch_size",
                 reason: "must be greater than zero".into(),
             });
+        }
+        if let Some(threshold) = self.poisson_truncation_threshold {
+            if !threshold.is_finite() || threshold <= 0.0 {
+                return Err(Error::InvalidParameter {
+                    name: "poisson_truncation_threshold",
+                    reason: "must be finite and positive when provided".into(),
+                });
+            }
+            if self.loss_type != LossType::PoissonNegativeLogLikelihood {
+                return Err(Error::InvalidParameter {
+                    name: "poisson_truncation_threshold",
+                    reason: "requires Poisson negative log likelihood".into(),
+                });
+            }
         }
         if !self.illumination_step.is_finite() || self.illumination_step <= 0.0 {
             return Err(Error::InvalidParameter {
@@ -316,8 +409,13 @@ impl ReconstructionAlgorithm for GradientDescent {
         batch: &Batch,
         iteration: usize,
     ) -> Result<StepOutput<Self::IterationMetrics>> {
+        let truncation = if let Some(scale) = state.scratch.poisson_truncation_scale.take() {
+            Some(TruncationStatistics { scale })
+        } else {
+            self.compute_truncation_statistics(problem, state, batch)?
+        };
         if self.parallel_workers > 1 && batch.indices.len() > 1 {
-            return self.parallel_step(problem, state, batch, iteration);
+            return self.parallel_step(problem, state, batch, iteration, truncation);
         }
         let model = &problem.model;
         let shape = model.image_shape;
@@ -331,6 +429,10 @@ impl ReconstructionAlgorithm for GradientDescent {
             .fold(0.0, f64::max)
             .max(self.epsilon);
         let mut diagnostics = StepSummary::default();
+        let mut metrics = GradientDescentIterationMetrics {
+            truncation_enabled: truncation.is_some(),
+            ..GradientDescentIterationMetrics::default()
+        };
         let mut active_frames = 0;
         if self.recover_illumination {
             prepare_illumination_accumulators(model, state)?;
@@ -387,6 +489,7 @@ impl ReconstructionAlgorithm for GradientDescent {
             for pixel in 0..image_len {
                 if mask.is_some_and(|values| values[pixel] == 0) {
                     state.scratch.projected_field[pixel] = Complex64::default();
+                    state.scratch.data_gradient_mask[pixel] = 0;
                     continue;
                 }
                 valid_pixels += 1;
@@ -394,13 +497,27 @@ impl ReconstructionAlgorithm for GradientDescent {
                 let intrinsic_prediction = state.scratch.projected_field[pixel].re.max(0.0);
                 let target_intensity = ((measured[pixel] - background) / gain).max(0.0);
                 frame_loss += point_loss(intrinsic_prediction, target_intensity, self.loss_type);
+                let retained = truncation.is_none_or(|statistics| {
+                    truncation_accepts(intrinsic_prediction, target_intensity, statistics.scale)
+                });
+                state.scratch.data_gradient_mask[pixel] = u8::from(retained);
+                if truncation.is_some() {
+                    metrics.eligible_weight += frame_weight;
+                    if retained {
+                        metrics.retained_weight += frame_weight;
+                    }
+                }
                 state.scratch.projected_field[pixel] = Complex64::new(
-                    descent_factor(
-                        intrinsic_prediction,
-                        target_intensity,
-                        self.loss_type,
-                        self.epsilon,
-                    ),
+                    if retained {
+                        descent_factor(
+                            intrinsic_prediction,
+                            target_intensity,
+                            self.loss_type,
+                            self.epsilon,
+                        )
+                    } else {
+                        0.0
+                    },
                     intrinsic_prediction,
                 );
             }
@@ -547,7 +664,10 @@ impl ReconstructionAlgorithm for GradientDescent {
         if self.recover_illumination {
             self.apply_illumination_update(model, state)?;
         }
-        Ok(diagnostics.into())
+        Ok(StepOutput {
+            summary: diagnostics,
+            metrics,
+        })
     }
 
     fn iterations(&self) -> usize {
@@ -567,22 +687,125 @@ struct ParallelWorkerResult {
     illumination_curvature: Vec<(f64, f64)>,
     illumination_weight: Vec<f64>,
     diagnostics: StepSummary,
+    metrics: GradientDescentIterationMetrics,
     active_frames: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct TruncationStatistics {
+    /// Multiplying `sqrt(predicted)` yields the accepted residual bound.
+    scale: f64,
+}
+
 impl GradientDescent {
+    fn compute_truncation_statistics<M: MeasurementRead>(
+        &self,
+        problem: &ReconstructionProblem<M>,
+        state: &mut ReconstructionState,
+        batch: &Batch,
+    ) -> Result<Option<TruncationStatistics>> {
+        let Some(threshold) = self.poisson_truncation_threshold else {
+            return Ok(None);
+        };
+        let model = &problem.model;
+        let image_len = checked_len_2d(model.image_shape)?;
+        let mut weighted_residual_sum = 0.0;
+        let mut pixel_weight_sum = 0.0;
+
+        for &frame in &batch.indices {
+            let frame_weight = problem.measurements.frame_weight(frame)?;
+            if frame_weight == 0.0 {
+                continue;
+            }
+            let single_source = [(frame, 1.0)];
+            let sources = model
+                .multiplexing_matrix
+                .as_ref()
+                .map_or(single_source.as_slice(), |matrix| matrix[frame].as_slice());
+            state.scratch.projected_field.fill(Complex64::default());
+            for &(source, source_weight) in sources {
+                let offset = state.effective_source_offset(model, source)?;
+                compute_source_field(problem, state, source, offset)?;
+                for (predicted, field) in state
+                    .scratch
+                    .projected_field
+                    .iter_mut()
+                    .zip(&state.scratch.field)
+                {
+                    predicted.re += source_weight * field.norm_sqr();
+                }
+            }
+
+            let measured = problem.measurements.frame(frame)?;
+            let mask = problem.measurements.frame_mask(frame)?;
+            let gain = state
+                .frame_gains
+                .as_ref()
+                .map_or(1.0, |values| values[frame]);
+            if !gain.is_finite() || gain <= 0.0 {
+                return Err(Error::InvalidModel(format!(
+                    "state frame {frame} has invalid gain {gain}"
+                )));
+            }
+            let mut valid_pixels = 0;
+            for pixel in 0..image_len {
+                if mask.is_some_and(|values| values[pixel] == 0) {
+                    continue;
+                }
+                valid_pixels += 1;
+                let background = background_value(state, frame, pixel, image_len);
+                let predicted = state.scratch.projected_field[pixel].re.max(0.0);
+                let target = ((measured[pixel] - background) / gain).max(0.0);
+                weighted_residual_sum += frame_weight * (target - predicted).abs();
+                pixel_weight_sum += frame_weight;
+            }
+            if valid_pixels == 0 {
+                return Err(Error::InvalidMeasurements(format!(
+                    "frame {frame} has no unmasked pixels"
+                )));
+            }
+        }
+
+        let object_norm = state
+            .object_spectrum
+            .as_slice()
+            .iter()
+            .map(|value| value.norm_sqr())
+            .sum::<f64>()
+            .sqrt();
+        // The backend normalizes the forward transform by 1/N, so Parseval's
+        // identity makes the spectrum L2 norm equal the object-domain RMS.
+        // Bian et al.'s MATLAB reference divides its unnormalized fft2 norm by N.
+        let object_rms = object_norm.max(self.epsilon.sqrt());
+        let mean_residual = if pixel_weight_sum > 0.0 {
+            weighted_residual_sum / pixel_weight_sum
+        } else {
+            0.0
+        };
+        let scale = threshold * mean_residual / object_rms;
+        if !scale.is_finite() || scale < 0.0 {
+            return Err(Error::Numerical(
+                "Poisson truncation statistic is non-finite".into(),
+            ));
+        }
+        Ok(Some(TruncationStatistics { scale }))
+    }
+
     fn parallel_step<M: MeasurementRead>(
         &self,
         problem: &ReconstructionProblem<M>,
         state: &mut ReconstructionState,
         batch: &Batch,
         iteration: usize,
-    ) -> Result<StepOutput<NoIterationMetrics>> {
+        truncation: Option<TruncationStatistics>,
+    ) -> Result<StepOutput<GradientDescentIterationMetrics>> {
         let worker_count = self.parallel_workers.min(batch.indices.len());
         if self.recover_illumination {
             prepare_illumination_accumulators(&problem.model, state)?;
         }
+        state.scratch.poisson_truncation_scale = truncation.map(|statistics| statistics.scale);
         let base_state = state.clone();
+        state.scratch.poisson_truncation_scale = None;
         let mut results = thread::scope(|scope| -> Result<Vec<ParallelWorkerResult>> {
             let base_chunk_len = batch.indices.len() / worker_count;
             let remainder = batch.indices.len() % worker_count;
@@ -626,9 +849,12 @@ impl GradientDescent {
                                 Vec::new()
                             },
                             diagnostics: StepSummary::default(),
+                            metrics: GradientDescentIterationMetrics::default(),
                             active_frames: 0,
                         };
                         for &frame in frames {
+                            local_state.scratch.poisson_truncation_scale =
+                                truncation.map(|statistics| statistics.scale);
                             local_state
                                 .object_spectrum
                                 .as_slice_mut()
@@ -687,6 +913,7 @@ impl GradientDescent {
                                 }
                             }
                             output.diagnostics.merge(diagnostics.summary);
+                            output.metrics.merge(diagnostics.metrics);
                         }
                         Ok(output)
                     })
@@ -718,6 +945,7 @@ impl GradientDescent {
             state.scratch.illumination_weight.fill(0.0);
         }
         let mut diagnostics = StepSummary::default();
+        let mut metrics = GradientDescentIterationMetrics::default();
         let mut active_frames = 0;
         for result in results {
             active_frames += result.active_frames;
@@ -753,6 +981,7 @@ impl GradientDescent {
                 }
             }
             diagnostics.merge(result.diagnostics);
+            metrics.merge(result.metrics);
         }
         if active_frames > 0 {
             let normalization = active_frames as f64;
@@ -806,7 +1035,10 @@ impl GradientDescent {
         if self.recover_illumination {
             self.apply_illumination_update(model, state)?;
         }
-        Ok(diagnostics.into())
+        Ok(StepOutput {
+            summary: diagnostics,
+            metrics,
+        })
     }
 
     fn apply_illumination_update(
@@ -945,6 +1177,10 @@ fn descent_factor(predicted: f64, measured: f64, loss_type: LossType, epsilon: f
     }
 }
 
+fn truncation_accepts(predicted: f64, measured: f64, scale: f64) -> bool {
+    (measured - predicted).abs() <= scale * predicted.max(0.0).sqrt()
+}
+
 fn compute_source_field<M: MeasurementRead>(
     problem: &ReconstructionProblem<M>,
     state: &mut ReconstructionState,
@@ -1073,6 +1309,9 @@ fn illumination_axis_gradient<M: MeasurementRead>(
     let mut gradient = 0.0;
     let mut curvature = 0.0;
     for pixel in 0..state.scratch.field.len() {
+        if state.scratch.data_gradient_mask[pixel] == 0 {
+            continue;
+        }
         let derivative = match (plus_valid, minus_valid) {
             (true, true) => {
                 (state.scratch.difference[pixel].re - state.scratch.field[pixel].norm_sqr())
@@ -1141,4 +1380,17 @@ fn background_value(
             frame * image_len + pixel
         }]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncation_accepts;
+
+    #[test]
+    fn poisson_truncation_gate_includes_its_boundary() {
+        assert!(truncation_accepts(4.0, 10.0, 3.0));
+        assert!(!truncation_accepts(4.0, 10.000_001, 3.0));
+        assert!(truncation_accepts(0.0, 0.0, 1.0));
+        assert!(!truncation_accepts(0.0, 1.0, 1.0));
+    }
 }

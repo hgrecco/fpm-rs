@@ -48,6 +48,20 @@ fn adaptive_step_values(result: &fpm_rs::reconstruction::ReconstructionResult) -
         .collect()
 }
 
+fn gradient_retained_fraction_values(
+    result: &fpm_rs::reconstruction::ReconstructionResult,
+) -> Vec<f64> {
+    result
+        .trace
+        .algorithm_metrics
+        .iter()
+        .filter(|record| {
+            record.namespace == "gradient_descent" && record.metric == "retained_pixel_fraction"
+        })
+        .map(|record| record.value)
+        .collect()
+}
+
 #[test]
 fn ap_reconstructs_and_reports_history() {
     let model = common::direct_model().unwrap();
@@ -1657,6 +1671,8 @@ fn illumination_calibration_resumes_exactly_from_checkpoint() {
         .iterations(2)
         .object_step(0.3)
         .batch_size(problem.model.frame_count())
+        .loss_type(LossType::PoissonNegativeLogLikelihood)
+        .poisson_truncation_threshold(25.0)
         .recover_illumination(true)
         .illumination_step(0.05)
         .recover_pupil(true)
@@ -1672,6 +1688,8 @@ fn illumination_calibration_resumes_exactly_from_checkpoint() {
         .iterations(4)
         .object_step(0.3)
         .batch_size(problem.model.frame_count())
+        .loss_type(LossType::PoissonNegativeLogLikelihood)
+        .poisson_truncation_threshold(25.0)
         .recover_illumination(true)
         .illumination_step(0.05)
         .recover_pupil(true)
@@ -1682,6 +1700,8 @@ fn illumination_calibration_resumes_exactly_from_checkpoint() {
         .iterations(4)
         .object_step(0.3)
         .batch_size(problem.model.frame_count())
+        .loss_type(LossType::PoissonNegativeLogLikelihood)
+        .poisson_truncation_threshold(25.0)
         .recover_illumination(true)
         .illumination_step(0.05)
         .recover_pupil(true)
@@ -1855,6 +1875,8 @@ fn parallel_gradient_reduction_matches_sequential_for_multiplexed_pupil_updates(
     let mut sequential = initial.clone();
     let mut sequential_algorithm = GradientDescent::default()
         .object_step(0.3)
+        .loss_type(LossType::PoissonNegativeLogLikelihood)
+        .poisson_truncation_threshold(25.0)
         .recover_pupil(true)
         .pupil_step(0.02)
         .parallel_workers(1);
@@ -1865,6 +1887,8 @@ fn parallel_gradient_reduction_matches_sequential_for_multiplexed_pupil_updates(
     let mut parallel = initial;
     let mut parallel_algorithm = GradientDescent::default()
         .object_step(0.3)
+        .loss_type(LossType::PoissonNegativeLogLikelihood)
+        .poisson_truncation_threshold(25.0)
         .recover_pupil(true)
         .pupil_step(0.02)
         .parallel_workers(3);
@@ -1875,6 +1899,17 @@ fn parallel_gradient_reduction_matches_sequential_for_multiplexed_pupil_updates(
     assert_abs_diff_eq!(
         parallel_diagnostics.summary.mean_objective().unwrap(),
         sequential_diagnostics.summary.mean_objective().unwrap(),
+        epsilon = 1e-14
+    );
+    assert_abs_diff_eq!(
+        parallel_diagnostics
+            .metrics
+            .retained_pixel_fraction()
+            .unwrap(),
+        sequential_diagnostics
+            .metrics
+            .retained_pixel_fraction()
+            .unwrap(),
         epsilon = 1e-14
     );
     for (&parallel, &sequential) in parallel
@@ -2020,6 +2055,134 @@ fn gradient_solver_supports_configurable_losses() {
             "expected {loss_type:?} loss to decrease, got {first} -> {last}"
         );
     }
+}
+
+#[test]
+fn truncated_poisson_gradient_rejects_outliers_and_improves_object_error() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let truth = simulation.ground_truth_object.clone();
+    let mut measurements = simulation.measurements;
+    for frame in 0..measurements.frame_count() {
+        let frame_values = measurements.frame_mut(frame).unwrap();
+        let outlier = frame_values
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(index, _)| index)
+            .unwrap();
+        frame_values[outlier] *= 100.0;
+    }
+    let problem =
+        ReconstructionProblem::new(measurements, simulation.reconstruction_model).unwrap();
+    let mut initial_object = truth.clone();
+    for (index, value) in initial_object.iter_mut().enumerate() {
+        *value *= Complex64::from_polar(0.82, 0.12 * (index % 13) as f64 / 13.0);
+    }
+    let initial_state = ReconstructionState::from_object(&problem, initial_object).unwrap();
+    let checkpoint =
+        ReconstructionCheckpoint::capture(0, &initial_state, &ReconstructionTrace::default());
+    let configure = || {
+        GradientDescent::default()
+            .iterations(8)
+            .object_step(0.08)
+            .batch_size(problem.model.frame_count())
+            .loss_type(LossType::PoissonNegativeLogLikelihood)
+            .parallel_workers(1)
+    };
+    let untruncated = configure()
+        .run_from_checkpoint(&problem, checkpoint.clone())
+        .unwrap();
+    let truncated = configure()
+        .poisson_truncation_threshold(25.0)
+        .run_from_checkpoint(&problem, checkpoint)
+        .unwrap();
+    let untruncated_error = evaluate_reconstruction(&untruncated, truth.view(), None, None)
+        .unwrap()
+        .object
+        .complex_nrmse;
+    let truncated_error = evaluate_reconstruction(&truncated, truth.view(), None, None)
+        .unwrap()
+        .object
+        .complex_nrmse;
+    let retained = gradient_retained_fraction_values(&truncated);
+    assert!(
+        truncated_error < untruncated_error,
+        "truncation did not improve object error: {untruncated_error} -> {truncated_error}; retained={retained:?}; objectives={:?} -> {:?}",
+        untruncated
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>(),
+        truncated
+            .trace
+            .iterations
+            .iter()
+            .map(|record| record.objective)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(retained.len(), 8);
+    assert!(
+        retained
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0)
+    );
+    assert!(retained.iter().any(|&value| value < 1.0));
+    assert!(gradient_retained_fraction_values(&untruncated).is_empty());
+}
+
+#[test]
+fn truncated_poisson_statistics_honor_masks_gain_and_background() {
+    let model = common::direct_model()
+        .unwrap()
+        .with_frame_gains(Some(vec![3.0; 5]))
+        .unwrap()
+        .with_background(Some(vec![7.0; 64]))
+        .unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let mut clean = simulation.measurements.clone();
+    let mut corrupted = simulation.measurements;
+    for frame in 0..corrupted.frame_count() {
+        corrupted.frame_mut(frame).unwrap()[0] = 1e12;
+    }
+    let zero_weight_frame = corrupted.frame_count() - 1;
+    clean.set_frame_weight(zero_weight_frame, 0.0).unwrap();
+    corrupted.set_frame_weight(zero_weight_frame, 0.0).unwrap();
+    corrupted.frame_mut(zero_weight_frame).unwrap().fill(1e12);
+    let mut mask = Array2::from_elem(corrupted.image_shape(), 1_u8);
+    mask[(0, 0)] = 0;
+    let clean = clean.with_masks(mask.clone()).unwrap();
+    let corrupted = corrupted.with_masks(mask).unwrap();
+    let clean_problem =
+        ReconstructionProblem::new(clean, simulation.reconstruction_model.clone()).unwrap();
+    let corrupted_problem =
+        ReconstructionProblem::new(corrupted, simulation.reconstruction_model).unwrap();
+    let algorithm = || {
+        GradientDescent::default()
+            .iterations(3)
+            .object_step(0.1)
+            .batch_size(5)
+            .loss_type(LossType::PoissonNegativeLogLikelihood)
+            .poisson_truncation_threshold(25.0)
+            .parallel_workers(1)
+    };
+    let clean_result = algorithm().run(&clean_problem).unwrap();
+    let corrupted_result = algorithm().run(&corrupted_problem).unwrap();
+    assert_eq!(
+        clean_result.object_spectrum,
+        corrupted_result.object_spectrum
+    );
+    assert_eq!(
+        gradient_retained_fraction_values(&clean_result),
+        gradient_retained_fraction_values(&corrupted_result)
+    );
 }
 
 #[test]
@@ -2737,6 +2900,19 @@ fn invalid_algorithm_options_fail_before_iteration() {
     assert!(
         GradientDescent::default()
             .pupil_smoothing(0.1)
+            .run(&problem)
+            .is_err()
+    );
+    assert!(
+        GradientDescent::default()
+            .poisson_truncation_threshold(25.0)
+            .run(&problem)
+            .is_err()
+    );
+    assert!(
+        GradientDescent::default()
+            .loss_type(LossType::PoissonNegativeLogLikelihood)
+            .poisson_truncation_threshold(0.0)
             .run(&problem)
             .is_err()
     );

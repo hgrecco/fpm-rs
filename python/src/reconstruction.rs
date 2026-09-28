@@ -2779,6 +2779,9 @@ impl PyAdmm {
 ///     Positive numerical floor used by losses and preconditioners.
 /// loss_type : str
 ///     Data loss to optimize and report.
+/// poisson_truncation_threshold : float or None
+///     Positive signal-dependent Poisson outlier coefficient. ``None`` keeps
+///     the ordinary untruncated gradient; the cited TPWFP work used 25.
 /// recover_illumination : bool
 ///     Estimate Fourier-grid offsets for illumination sources.
 /// illumination_step : float
@@ -2809,6 +2812,14 @@ impl PyAdmm {
 /// (2015)](https://doi.org/10.1364/OE.23.004856), Optics Express 23(4),
 /// 4856-4866.
 ///
+/// [L. Bian, J. Suo, J. Chung, X. Ou, C. Yang, F. Chen, and Q. Dai, "Fourier
+/// ptychographic reconstruction using Poisson maximum likelihood and truncated
+/// Wirtinger gradient" (2016)](https://doi.org/10.1038/srep27384), Scientific
+/// Reports 6, 27384. fpm-rs uses an intrinsic-intensity mini-batch statistic,
+/// one gate for all modes of a multiplexed pixel, and a fixed object step; its
+/// optional pupil and illumination updates extend the paper's object-only
+/// presentation.
+///
 /// [A. Fannjiang and P. Chen, "Blind ptychography: uniqueness and ambiguities"
 /// (2020)](https://doi.org/10.1088/1361-6420/ab6504), Inverse Problems 36,
 /// 045005. fpm-rs uses a Fourier-domain object and retains affine phase on
@@ -2821,7 +2832,7 @@ pub(crate) struct PyGradientDescent {
 #[pymethods]
 impl PyGradientDescent {
     #[new]
-    #[pyo3(signature = (*, iterations=100, object_step=0.5, batch_size=1, epsilon=1e-10, loss_type="amplitude_mse", recover_illumination=false, illumination_step=0.1, illumination_finite_difference=0.05, illumination_bounds=1.0, recover_pupil=false, pupil_step=0.05, constrain_pupil_support=true, object_tv=0.0, object_tv_epsilon=1e-6, pupil_smoothing=0.0, parallel_workers=0))]
+    #[pyo3(signature = (*, iterations=100, object_step=0.5, batch_size=1, epsilon=1e-10, loss_type="amplitude_mse", poisson_truncation_threshold=None, recover_illumination=false, illumination_step=0.1, illumination_finite_difference=0.05, illumination_bounds=1.0, recover_pupil=false, pupil_step=0.05, constrain_pupil_support=true, object_tv=0.0, object_tv_epsilon=1e-6, pupil_smoothing=0.0, parallel_workers=0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         iterations: usize,
@@ -2829,6 +2840,7 @@ impl PyGradientDescent {
         batch_size: usize,
         epsilon: f64,
         loss_type: &str,
+        poisson_truncation_threshold: Option<f64>,
         recover_illumination: bool,
         illumination_step: f64,
         illumination_finite_difference: f64,
@@ -2848,6 +2860,7 @@ impl PyGradientDescent {
             batch_size,
             epsilon,
             loss_type: parse_loss_type(loss_type)?,
+            poisson_truncation_threshold,
             recover_illumination,
             illumination_step,
             illumination_finite_difference,
