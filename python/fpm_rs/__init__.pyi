@@ -1208,9 +1208,7 @@ class PlanarArrayCalibrationParameters:
         CalibrationParameterSpec | None,
     ]
     """Inspectable per-component ``(rx, ry, rz)`` numerical specifications."""
-    pitch_specs: tuple[
-        CalibrationParameterSpec | None, CalibrationParameterSpec | None
-    ]
+    pitch_specs: tuple[CalibrationParameterSpec | None, CalibrationParameterSpec | None]
     """Inspectable per-component ``(pitch_x, pitch_y)`` specifications."""
     reference_index_specs: tuple[
         CalibrationParameterSpec | None, CalibrationParameterSpec | None
@@ -1274,6 +1272,7 @@ class IlluminationCalibration:
 
 class PlanarArrayParameterValues:
     """Absolute inspectable planar-array, power, and frame-gain values."""
+
     translation_m: tuple[float, float, float]
     """Absolute array-pose translation ``(tx, ty, tz)`` in metres."""
     rotation_rad: tuple[float, float, float]
@@ -1289,8 +1288,346 @@ class PlanarArrayParameterValues:
     frame_gains: list[float]
     """Mean-one intensity gain for every acquisition frame."""
 
+class BrightfieldCircleOptions:
+    """Controls for bright-field circle detection and bounded physical fitting.
+
+    All center and pupil-radius quantities use dimensionless numerical-aperture
+    units. Pixel quantities refer to the low-resolution Fourier grid. An
+    explicit ``frame_indices`` sequence contains acquisition-frame indices, not
+    physical source indices.
+    """
+    def __init__(
+        self,
+        *,
+        frame_indices: Sequence[int] | None = None,
+        center_search_radius_na: float = 0.02,
+        brightfield_margin_na: float = 0.002,
+        pupil_radius_search_na: float = 0.01,
+        gaussian_sigma_pixels: float = 2.0,
+        angular_samples: int = 180,
+        radial_derivative_step_pixels: float = 1.0,
+        minimum_arc_fraction: float = 0.2,
+        minimum_edge_contrast: float = 0.01,
+        mean_spectrum_floor: float = 1e-8,
+        robust_residual_scale_na: float = 0.002,
+        maximum_fit_steps: int = 100,
+        fit_relative_tolerance: float = 1e-8,
+        fit_initial_step_size: float = 0.5,
+        fit_minimum_step_size: float = 1e-6,
+        fit_step_reduction: float = 0.5,
+        rank_tolerance: float = 1e-8,
+        pupil_radius_tolerance_na: float = 0.02,
+    ) -> None: ...
+    frame_indices: list[int] | None
+    """Explicit acquisition-frame subset, or ``None`` for safe automatic selection."""
+    center_search_radius_na: float
+    """Maximum center displacement from each nominal source in NA."""
+    brightfield_margin_na: float
+    """Positive margin retained inside the objective-NA boundary."""
+    pupil_radius_search_na: float
+    """Half-width of the pupil-radius search in NA."""
+    gaussian_sigma_pixels: float
+    """Fourier-magnitude smoothing standard deviation in pixels."""
+    angular_samples: int
+    """Uniform angular samples used for every circular score."""
+    radial_derivative_step_pixels: float
+    """Radial finite-difference displacement in Fourier-grid pixels."""
+    minimum_arc_fraction: float
+    """Minimum usable fraction of the requested circumference."""
+    minimum_edge_contrast: float
+    """Minimum normalized first-derivative score for acceptance."""
+    mean_spectrum_floor: float
+    """Relative positive floor applied during mean-spectrum division."""
+    robust_residual_scale_na: float
+    """Huber transition scale for physical-fit residual components in NA."""
+    maximum_fit_steps: int
+    """Maximum bounded physical-fit steps."""
+    fit_relative_tolerance: float
+    """Relative objective improvement required to continue fitting."""
+    fit_initial_step_size: float
+    """Initial line-search step in normalized parameter coordinates."""
+    fit_minimum_step_size: float
+    """Smallest normalized line-search step attempted."""
+    fit_step_reduction: float
+    """Multiplicative backtracking factor in ``(0, 1)``."""
+    rank_tolerance: float
+    """Relative pivot threshold for the data-Jacobian rank test."""
+    pupil_radius_tolerance_na: float
+    """Maximum accepted pupil-radius mismatch from configured objective NA."""
+
+class BrightfieldCircleObservation:
+    """Circle-localization diagnostics for one acquisition frame.
+
+    Fourier-grid coordinates are ``(row, column)`` floating-point indices.
+    Wave-vector coordinates are ``(kx, ky)`` in radians per metre, while NA
+    coordinates are the corresponding dimensionless transverse components.
+    """
+
+    frame_index: int
+    """Zero-based acquisition-frame index."""
+    source_index: int
+    """Stable row-major physical source index."""
+    nominal_k_rad_per_m: FloatArray
+    """Owned float64 ``(2,)`` nominal ``(kx, ky)`` in radians per metre."""
+    detected_k_rad_per_m: FloatArray | None
+    """Owned float64 ``(2,)`` detected ``(kx, ky)``, if accepted."""
+    detected_na: FloatArray | None
+    """Owned float64 ``(2,)`` dimensionless ``(NA_x, NA_y)``, if accepted."""
+    fourier_grid_position: FloatArray | None
+    """Owned float64 ``(2,)`` centered ``(row, column)`` position."""
+    fitted_pupil_radius_na: float
+    """Best pupil radius for this frame in NA."""
+    first_derivative_score: float
+    """Normalized first-radial-derivative score."""
+    second_derivative_score: float
+    """Normalized second-radial-derivative score."""
+    combined_score: float
+    """Combined deterministic circle score."""
+    conjugate_score: float
+    """Score at the centrosymmetric branch corresponding to ``-k``."""
+    usable_arc_fraction: float
+    """Fraction of angular samples used by the score."""
+    confidence: float
+    """Fixed confidence weight supplied to the physical fit."""
+    negative_sample_fraction: float
+    """Fraction of background-corrected spatial samples below zero."""
+    rejection_reason: str | None
+    """Human-readable rejection reason, or ``None`` when accepted."""
+    accepted: bool
+    """Whether this center contributes to the physical fit."""
+
+class PlanarArrayInitializationFitRecord:
+    """One accepted or rejected bounded physical-fit step."""
+
+    step: int
+    """One-based optimizer step."""
+    accepted: bool
+    """Whether a bounded line-search candidate reduced the objective."""
+    step_size: float
+    """Accepted normalized step size, or zero after exhaustion."""
+    data_loss: float
+    """Confidence-weighted robust Huber loss over accepted NA-center residuals."""
+    regularization_loss: float
+    """Sum of configured quadratic physical-parameter prior contributions."""
+    total_loss: float
+    """Sum of data and regularization losses."""
+    normalized_values: list[float]
+    """Current normalized values in result ``parameter_names`` order."""
+
+class PlanarArrayInitializationDiagnostics:
+    """Detection, rank, and residual summary for one initialization."""
+
+    candidate_frames: int
+    """Number of acquisition frames considered."""
+    accepted_observations: int
+    """Number of centers used by the physical fit."""
+    rejected_observations: int
+    """Number of rejected center observations."""
+    configured_pupil_radius_na: float
+    """Objective pupil radius configured in ``Optics``."""
+    fitted_pupil_radius_na: float
+    """Confidence-weighted detected pupil radius in NA."""
+    jacobian_rank: int
+    """Rank of the observation Jacobian before priors."""
+    active_parameter_count: int
+    """Number of active scalar physical parameters."""
+    jacobian_condition_estimate: float | None
+    """Pivot-based squared condition estimate when defined."""
+    initial_residual_rms_na: float
+    """Initial confidence-weighted center residual RMS in NA."""
+    final_residual_rms_na: float
+    """Final confidence-weighted center residual RMS in NA."""
+    warnings: list[str]
+    """Nonfatal data-quality and conditioning warnings."""
+
+class PlanarArrayInitializationRuntime:
+    """Timing and evaluation counts for one initialization."""
+
+    elapsed_seconds: float
+    """Wall-clock duration in seconds."""
+    measurement_passes: int
+    """Number of complete measurement passes; currently two."""
+    physical_objective_evaluations: int
+    """Number of bounded physical-objective evaluations."""
+
+class PlanarArrayInitializationCallback:
+    """Wrap a callable receiving initializer-specific progress dictionaries.
+
+    The callable receives ``stage``, ``completed``, ``total``, and optional
+    ``frame_index`` entries. Return ``False`` to cancel or ``None``/``True`` to
+    continue. The initializer releases the GIL while working and reacquires it
+    only for these callbacks.
+    """
+    def __init__(
+        self, callable: Callable[[dict[str, object]], bool | None]
+    ) -> None: ...
+
+class PlanarArrayInitializationResult:
+    """Versioned, fully serializable physical initialization result."""
+
+    format_version: int
+    """Version of the complete initialization-result JSON representation."""
+    nominal_illumination: Illumination
+    """Nominal illumination supplied to the initializer."""
+    initialized_illumination: Illumination
+    """Reusable illumination containing the fitted physical geometry."""
+    initialized_model: ImagePlaneModel
+    """Reusable model atomically refreshed from the initialized illumination."""
+    parameters: PlanarArrayCalibrationParameters
+    """Physical parameter selection and bounds used by the fit."""
+    options: BrightfieldCircleOptions
+    """Detector and optimizer controls used by this run."""
+    initial_parameters: PlanarArrayParameterValues
+    """Absolute nominal physical and multiplicative values."""
+    initialized_parameters: PlanarArrayParameterValues
+    """Absolute initialized physical and unchanged multiplicative values."""
+    parameter_names: list[str]
+    """Stable active physical parameter names."""
+    observations: list[BrightfieldCircleObservation]
+    """Detector result for every considered acquisition frame."""
+    fit_history: list[PlanarArrayInitializationFitRecord]
+    """Accepted and rejected bounded physical-fit records."""
+    diagnostics: PlanarArrayInitializationDiagnostics
+    """Detection, rank, and residual summary."""
+    runtime: PlanarArrayInitializationRuntime
+    """Timing and evaluation counts."""
+    def save_json(self, path: Path) -> None:
+        """Validate and write the complete result as UTF-8 JSON."""
+    def write_bundle(self, path: Path) -> InitializationBundle:
+        """Atomically write and reopen a verified initialization bundle."""
+    @staticmethod
+    def load_json(path: Path) -> PlanarArrayInitializationResult:
+        """Load and validate a complete initialization result."""
+
+class InitializationBundleArtifact:
+    """Manifest-verified file inside an initialization bundle."""
+
+    role: str
+    """Stable semantic artifact role."""
+    path: Path
+    """Resolved local artifact path."""
+    media_type: str
+    """Declared MIME media type."""
+    byte_size: int
+    """Exact artifact size in bytes."""
+    sha256: str
+    """Lowercase hexadecimal SHA-256 digest."""
+
+class InitializationBundleVerificationResult:
+    """Aggregate result of verifying every bundle artifact."""
+
+    artifact_count: int
+    """Number of artifacts verified."""
+    total_bytes: int
+    """Sum of verified artifact sizes in bytes."""
+
+class InitializationBundle:
+    """Verified initialization result plus normalized CSV table handles."""
+
+    path: Path
+    """Root directory containing the verified initialization artifacts."""
+    manifest_path: Path
+    """Bundle manifest JSON path."""
+    result_artifact: InitializationBundleArtifact
+    """Authoritative complete-result JSON artifact."""
+    observations_artifact: InitializationBundleArtifact
+    """Per-frame circle-observation CSV artifact."""
+    fit_history_artifact: InitializationBundleArtifact
+    """Bounded physical-fit history CSV artifact."""
+    result: PlanarArrayInitializationResult
+    """Validated authoritative physical initialization result."""
+    def verify(self) -> InitializationBundleVerificationResult:
+        """Recompute every artifact size and SHA-256 digest."""
+
+def read_initialization_bundle(path: Path) -> InitializationBundle:
+    """Open and verify a planar-array initialization bundle."""
+
+class BrightfieldCircleInitializer:
+    """Detect bright-field pupil circles and fit a physical planar-array warm start.
+
+    The method assumes monochromatic coherent image-plane measurements, a thin
+    specimen with enough texture/reference interference, and a shift-invariant
+    circular pupil. It accepts only single-source, all-valid, strictly
+    bright-field frames. It does not reconstruct an object, alter ``Optics``,
+    or estimate independent source shifts, powers, gains, or backgrounds.
+
+    Use the returned illumination/model directly or pass them to
+    [``JointReconstruction``][fpm_rs.JointReconstruction] for canonical
+    measurement-loss refinement. The call blocks, releases the GIL during both
+    streaming measurement passes and physical fitting, and reacquires it only
+    for an optional progress callback.
+
+    References
+    ----------
+    J. Sun, Q. Chen, Y. Zhang, and C. Zuo, [“Efficient positional
+    misalignment correction method for Fourier ptychographic microscopy,”](https://doi.org/10.1364/BOE.7.001336)
+    *Biomedical Optics Express*
+    **7**(4), 1336–1350 (2016). Unlike that reconstruction-time independent
+    aperture search, this initializer directly fits detected centers to the
+    bounded physical geometry.
+
+    R. Eckert, Z. F. Phillips, and L. Waller, [“Efficient illumination angle
+    self-calibration in Fourier ptychography,”](https://doi.org/10.1364/AO.57.005434)
+    *Applied Optics* **57**(19),
+    5434–5442 (2018). This implementation adopts the bright-field circular-edge
+    initialization concept, not the iterative spectral-correlation stage or
+    three-dimensional variants.
+    """
+    def __init__(
+        self,
+        parameters: PlanarArrayCalibrationParameters,
+        *,
+        options: BrightfieldCircleOptions | None = None,
+    ) -> None: ...
+    parameters: PlanarArrayCalibrationParameters
+    """Selected global translation, rotation, pitch, or reference-index variables."""
+    options: BrightfieldCircleOptions
+    """Circle-detection and bounded-fit controls."""
+    def initialize(
+        self,
+        measurements: FloatArray | MeasurementStack,
+        optics: Optics,
+        nominal_illumination: Illumination,
+        model: ImagePlaneModel,
+        *,
+        frame_weights: Sequence[float] | None = None,
+        masks: MaskArray | None = None,
+        callback: PlanarArrayInitializationCallback | None = None,
+    ) -> PlanarArrayInitializationResult:
+        """Run two streaming spectral passes and a bounded physical fit.
+
+        Parameters
+        ----------
+        measurements
+            Float64 ``(frames, height, width)`` intensities or an existing
+            ``MeasurementStack``. Inputs are copied when constructing a stack.
+        optics
+            Physical optics used to compile ``model``.
+        nominal_illumination
+            Physical planar-array illumination used to compile ``model``.
+        model
+            Matching image-plane model. Updated complex pupil values and known
+            background are retained unchanged.
+        frame_weights, masks
+            Optional metadata for raw NumPy input. Masks must be uint8 with the
+            same shape; selected frames must be all-valid.
+        callback
+            Optional initializer progress callback.
+
+        Raises
+        ------
+        InvalidMeasurementsError
+            If candidate frames, spectra, or detected circles are unusable.
+        InvalidParameterError
+            If the selected physical variables are unidentifiable or violate
+            the calibration gauge constraints.
+        UnsupportedError
+            If geometry or selected variables are outside the supported scope.
+        """
+
 class CalibrationParameterHistoryEntry:
     """One accepted or rejected bounded parameter trial."""
+
     outer_iteration: int
     """One-based alternating-reconstruction iteration."""
     optimizer_step: int
@@ -1304,6 +1641,7 @@ class CalibrationParameterHistoryEntry:
 
 class CalibrationLossHistoryEntry:
     """Data, regularization, and total loss for one physical trial."""
+
     outer_iteration: int
     """One-based alternating-reconstruction iteration."""
     optimizer_step: int
@@ -1319,6 +1657,7 @@ class CalibrationLossHistoryEntry:
 
 class CalibrationConditioning:
     """Practical scaled sensitivity and curvature diagnostics, not uncertainty."""
+
     parameter_names: list[str]
     """Stable names corresponding to every diagnostic vector entry."""
     scaled_sensitivities: list[float]
@@ -1336,6 +1675,7 @@ class CalibrationConditioning:
 
 class IlluminationCalibrationState:
     """Checkpointable physical values, gauges, histories, and update counters."""
+
     initial_illumination: Illumination
     """Serializable illumination supplied before gauge normalization."""
     current_illumination: Illumination
@@ -2045,6 +2385,7 @@ class JointReconstruction:
 
 class JointReconstructionResult:
     """Structured reconstruction, reusable illumination/model, and calibration history."""
+
     reconstruction: ReconstructionResult
     """Canonical reconstruction result including physical calibration state."""
     initial_illumination: Illumination

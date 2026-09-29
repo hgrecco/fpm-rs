@@ -1213,7 +1213,7 @@ impl PyCalibrationParameterSpec {
 )]
 #[derive(Clone)]
 pub(crate) struct PyPlanarArrayCalibrationParameters {
-    inner: PlanarArrayCalibrationParameters,
+    pub(crate) inner: PlanarArrayCalibrationParameters,
 }
 
 #[pymethods]
@@ -1626,7 +1626,7 @@ fn loss_type_name(loss_type: LossType) -> &'static str {
 )]
 #[derive(Clone)]
 pub(crate) struct PyPlanarArrayParameterValues {
-    inner: PlanarArrayParameterValues,
+    pub(crate) inner: PlanarArrayParameterValues,
 }
 
 #[pymethods]

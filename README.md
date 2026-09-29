@@ -24,6 +24,9 @@ ptychography, multislice propagation, and GPU execution are not implemented.
   object/pupil updates with bounded pose, pitch, reference-index,
   selected-offset, source-power, or frame-gain updates and reuse the returned
   `Illumination`.
+- **Initialize a planar array from bright-field circles.** Detect pupil edges
+  before reconstruction, fit bounded global physical geometry, and reuse the
+  returned `Illumination` and refreshed `ImagePlaneModel`.
 - **Keep a run inspectable.** Record diagnostics, write checkpoints, and
   compare simulations with known ground truth. Optional Parquet support writes
   self-describing result and benchmark bundles for downstream analysis.

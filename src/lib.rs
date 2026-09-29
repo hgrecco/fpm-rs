@@ -91,6 +91,8 @@ pub mod evaluation;
 pub mod experiment;
 /// Bounded physical planar-array calibration configuration, state, and diagnostics.
 pub mod illumination_calibration;
+/// Bright-field circle initialization for bounded physical planar arrays.
+pub mod illumination_initialization;
 mod image_io;
 /// Resident and lazy low-resolution intensity measurement stacks.
 pub mod measurements;

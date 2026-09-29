@@ -41,6 +41,11 @@ first.
 
 ### Added
 
+- Added deterministic bright-field circle initialization for physical planar
+  LED arrays, including two-pass streaming preprocessing, bounded robust
+  geometry fitting with rank checks, progress callbacks, JSON persistence,
+  verified directory bundles, matching Rust/Python APIs, diagnostics, and
+  synthetic recovery coverage.
 - Added `GlobalGaussNewton`, a fixed-pupil, full-stack amplitude-MSE solver with
   analytic matrix-free Jacobian products, coverage-damped preconditioned
   conjugate gradients, Armijo backtracking, stable iteration metrics, Rust and

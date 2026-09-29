@@ -5,6 +5,7 @@ mod config;
 mod datasets;
 mod diagnostics;
 mod errors;
+mod illumination_initialization;
 mod measurements;
 mod metrics;
 mod model;
@@ -22,6 +23,7 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     config::register(module)?;
     datasets::register(module)?;
     diagnostics::register(module)?;
+    illumination_initialization::register(module)?;
     metrics::register(module)?;
     model::register(module)?;
     measurements::register(module)?;

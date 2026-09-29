@@ -39,6 +39,15 @@ Bright-field and dark-field illumination
   carry specimen-scattered information. See
   [Object, pupil, and Fourier sampling](core-concepts.md#object-pupil-and-fourier-sampling).
 
+Bright-field circle initialization
+: A pre-reconstruction estimate of planar-array geometry from the circular
+  pupil edges visible in Fourier transforms of suitable bright-field intensity
+  images. In fpm-rs, detected centers are fitted to physical pose, pitch, or
+  reference-index variables; they are not stored as arbitrary per-source
+  shifts. The method needs textured, single-source, all-valid frames and is not
+  interchangeable with measurement-loss calibration. See
+  [Bright-field planar-array initialization](../guides/reconstruction.md#bright-field-planar-array-initialization).
+
 LED pitch
 : The centre-to-centre spacing of neighboring LEDs in a planar array. fpm-rs
   stores `pitch_m` in metres as `(pitch_x, pitch_y)` after accepting either a

@@ -22,6 +22,16 @@ rule, recoverable quantities, and algorithm-specific parameters.
 
 ## Physical planar-array calibration
 
+### Bright-field initialization
+
+::: fpm_rs.BrightfieldCircleOptions
+
+::: fpm_rs.PlanarArrayInitializationCallback
+
+::: fpm_rs.BrightfieldCircleInitializer
+
+### Measurement-loss calibration
+
 ::: fpm_rs.CalibrationParameterSpec
 
 ::: fpm_rs.PlanarArrayCalibrationParameters

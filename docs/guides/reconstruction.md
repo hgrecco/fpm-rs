@@ -383,6 +383,92 @@ It preserves supplied spatial background maps, but a common absolute background
 is ambiguous with DC object intensity and should be referenced to a frame or
 dark measurement.
 
+## Bright-field planar-array initialization
+
+`BrightfieldCircleInitializer` is an optional physical warm start for a
+`PlanarLEDArray`. It is separate from reconstruction: the initializer makes two
+streaming passes over eligible bright-field frames, detects circular pupil
+edges in their centered intensity spectra, fits the accepted `(NA_x, NA_y)`
+centers directly to the canonical planar-array geometry, and returns both a
+normal `Illumination` and an atomically refreshed `ImagePlaneModel`. Use that
+model for reconstruction as-is or pass the returned physical illumination to
+`JointReconstruction` for measurement-loss refinement.
+
+The method assumes monochromatic coherent image-plane imaging, a thin specimen,
+a shift-invariant circular pupil, and enough specimen texture and unscattered
+reference interference to expose the pupil edges. Automatic selection keeps
+the complete center-search region strictly inside `objective_na`. Explicitly
+selected frames must meet the same rule. A usable frame has one positive source
+contribution, positive gain, source power and measurement weight, and no masked
+pixels. The implementation subtracts only the model's known background and
+uses its known multiplicative factors; it never estimates or silently clamps
+them.
+
+Only global translation, rotation, pitch, and reference-index components may
+be selected. Per-source offsets, source powers, and frame gains are rejected
+because circle centers do not identify them. The initializer applies the same
+translation/reference-index gauge checks as physical calibration and requires
+the accepted-center data Jacobian to have full column rank before priors are
+considered. Pitch and axial distance often form a scale gauge and must not be
+fitted together unless the selected observations actually make the requested
+combination full rank.
+
+```python
+parameters = fpm.PlanarArrayCalibrationParameters(
+    translation=(True, True, False),
+    translation_spec=fpm.CalibrationParameterSpec(
+        -1e-3, 1e-3, scale=0.2e-3, finite_difference_step=1e-6
+    ),
+)
+initializer = fpm.BrightfieldCircleInitializer(
+    parameters,
+    options=fpm.BrightfieldCircleOptions(
+        center_search_radius_na=0.012,
+        pupil_radius_search_na=0.012,
+    ),
+)
+initialized = initializer.initialize(
+    measurements,
+    optics,
+    nominal_illumination,
+    nominal_model,
+)
+initialized.save_json("planar-array-initialization.json")
+
+problem = fpm.ReconstructionProblem(measurements, initialized.initialized_model)
+result = fpm.Fpie(iterations=20).run(problem)
+```
+
+`observations` retains the acquisition frame and stable source index, nominal
+and detected wave vectors, dimensionless NA center, floating-point
+`(row, column)` Fourier-grid position, fitted radius, both derivative scores,
+conjugate score, confidence, negative corrected-sample fraction, and rejection
+reason. `diagnostics` records acceptance counts, pupil-radius agreement,
+data-Jacobian rank and conditioning, and initial/final center residuals. JSON
+round trips preserve the complete physical result, options, model, and fit
+history. `write_bundle` adds a hash-verified manifest plus normalized
+observation and fit-history CSV tables; `read_initialization_bundle` verifies
+all three artifacts before loading the authoritative result. The call blocks in
+Python; native processing releases the GIL and reacquires it only for a
+`PlanarArrayInitializationCallback`.
+
+J. Sun, Q. Chen, Y. Zhang, and C. Zuo, [“Efficient positional misalignment
+correction method for Fourier ptychographic microscopy,” *Biomedical Optics
+Express* **7**(4), 1336–1350
+(2016)](https://doi.org/10.1364/BOE.7.001336), search independent apertures with
+simulated annealing during reconstruction and then regress a four-parameter
+planar model. fpm-rs instead performs no reconstructed-object search here and
+fits detected centers directly to bounded physical geometry. R. Eckert,
+Z. F. Phillips, and L. Waller, [“Efficient illumination angle self-calibration
+in Fourier ptychography,” *Applied Optics* **57**(19), 5434–5442
+(2018)](https://doi.org/10.1364/AO.57.005434), combine bright-field
+preprocessing with iterative spectral correlation and cover additional
+illuminator and three-dimensional settings. This implementation adopts only
+their circular-edge initialization concept for two-dimensional planar arrays;
+iterative physical refinement remains the existing calibrator's job. It does
+not implement spectral correlation or label independent Fourier shifts as
+apparatus calibration.
+
 ## Physical planar LED-array calibration
 
 Physical calibration and generic k-vector correction solve different problems.
@@ -634,11 +720,11 @@ Fourier ptychographic microscopy,” *Biomedical Optics Express* **7**(4),
 self-calibration context of [R. Eckert, Z. F. Phillips, and L. Waller,
 “Efficient illumination angle self-calibration in Fourier ptychography,”
 *Applied Optics* **57**(19), 5434–5442
-(2018)](https://doi.org/10.1364/AO.57.005434). Unlike Sun et al., fpm-rs uses
-deterministic bounded, scaled finite differences rather than simulated
-annealing and nonlinear regression; unlike Eckert et al., it does not perform
-brightfield circle detection or spectral correlation. The shared thin-sample
-FPM forward model originates with [G. Zheng, R. Horstmeyer, and C. Yang,
+(2018)](https://doi.org/10.1364/AO.57.005434). The joint calibrator uses
+deterministic bounded, scaled finite differences on the canonical measurement
+loss rather than simulated annealing or spectral correlation; the separate
+initializer above provides circle-based warm starts. The shared thin-sample FPM
+forward model originates with [G. Zheng, R. Horstmeyer, and C. Yang,
 “Wide-field, high-resolution Fourier ptychographic microscopy,” *Nature
 Photonics* **7**, 739–745
 (2013)](https://doi.org/10.1038/nphoton.2013.187).

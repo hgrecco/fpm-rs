@@ -3,6 +3,9 @@
 Reconstruction results live in memory. Result bundles persist numerical arrays
 as NPY files, structured records as Parquet, and provenance in a JSON manifest.
 Opened bundles load large arrays on first access and cache them until cleared.
+Planar-array initialization bundles are smaller verified directories: their
+authoritative result is JSON and their per-frame observations and physical-fit
+history are normalized CSV tables.
 
 ## Results and checkpoints
 
@@ -22,6 +25,16 @@ Opened bundles load large arrays on first access and cache them until cleared.
 
 ::: fpm_rs.IlluminationCalibrationState
 
+::: fpm_rs.BrightfieldCircleObservation
+
+::: fpm_rs.PlanarArrayInitializationFitRecord
+
+::: fpm_rs.PlanarArrayInitializationDiagnostics
+
+::: fpm_rs.PlanarArrayInitializationRuntime
+
+::: fpm_rs.PlanarArrayInitializationResult
+
 ::: fpm_rs.JointReconstructionResult
 
 ## Result bundles
@@ -39,6 +52,14 @@ Opened bundles load large arrays on first access and cache them until cleared.
 ::: fpm_rs.BundleVerificationResult
 
 ::: fpm_rs.ResultBundle
+
+::: fpm_rs.InitializationBundleArtifact
+
+::: fpm_rs.InitializationBundleVerificationResult
+
+::: fpm_rs.InitializationBundle
+
+::: fpm_rs.read_initialization_bundle
 
 ::: fpm_rs.read_bundle
 
