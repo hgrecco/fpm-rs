@@ -41,6 +41,10 @@ first.
 
 ### Added
 
+- Added `GlobalGaussNewton`, a fixed-pupil, full-stack amplitude-MSE solver with
+  analytic matrix-free Jacobian products, coverage-damped preconditioned
+  conjugate gradients, Armijo backtracking, stable iteration metrics, Rust and
+  Python APIs, physical `JointReconstruction` support, and benchmark coverage.
 - Added optional signal-dependent truncated Poisson gradients to
   `GradientDescent`, including calibrated mini-batch statistics, shared
   multiplexed-pixel gates, deterministic parallel reduction, retained-pixel

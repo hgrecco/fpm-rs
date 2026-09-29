@@ -64,6 +64,7 @@ fn benchmark_profiles_have_stable_names_and_metadata() {
     assert!(smoke.algorithms.contains(&"AlternatingProjection"));
     assert!(smoke.algorithms.contains(&"AdaptiveAlternatingProjection"));
     assert!(smoke.algorithms.contains(&"Mpie"));
+    assert!(smoke.algorithms.contains(&"GlobalGaussNewton"));
     assert!(smoke.algorithms.contains(&"GradientDescent"));
     assert!(benchmark_profile("unknown").is_none());
 }

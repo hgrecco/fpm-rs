@@ -151,8 +151,9 @@ experiments.
 | Noise statistics, outliers, or an object prior must enter the update | `GradientDescent` | Select Poisson, Huber-amplitude, intensity, or amplitude loss as appropriate. For sparse gross outliers with a Poisson model, enable `poisson_truncation_threshold`; use total variation only when that prior is defensible. This is the most configurable route, with more tuning and compute. |
 | Pupil aberration or defocus is suspected | `Epry` | Recover the complex pupil with the object. It can also estimate per-frame gain or uniform background. If a selectable data loss or pupil regularization is essential, use pupil-recovering `GradientDescent` instead. |
 | Updates need full- or multi-frame consensus rather than sequential frame corrections | `Admm` | Its auxiliary fields and dual variables make cross-frame agreement explicit. The default full-frame batch costs more memory and introduces penalty and relaxation controls. |
+| A trusted fixed-pupil model needs globally coupled curvature rather than sequential or mini-batch updates | `GlobalGaussNewton` | Use the matrix-free damped normal-equation solve when fewer, stronger outer updates justify many complete data passes. It supports only amplitude MSE and keeps the pupil and calibration fixed; compare elapsed time, not iteration count. |
 | Independent illumination vectors may be wrong | `GradientDescent(recover_illumination=True)` | Use this for generic per-source Fourier-grid corrections. The result is not necessarily a realizable apparatus geometry. |
-| A planar LED array's pose, pitch, reference index, selected offsets, source powers, or frame gains must be self-calibrated | `JointReconstruction` around `Fpie` or `Epry` | Use the physical workflow when the desired result must remain a bounded, serializable `PlanarLEDArray`. Its identifiability constraints are part of the model, not optional tuning. |
+| A planar LED array's pose, pitch, reference index, selected offsets, source powers, or frame gains must be self-calibrated | `JointReconstruction` around `Fpie`, `Epry`, or `GlobalGaussNewton` | Use the physical workflow when the desired result must remain a bounded, serializable `PlanarLEDArray`. Its identifiability constraints are part of the model, not optional tuning. |
 
 When several rows apply, establish an object-only baseline before enabling the
 smallest set of recovery variables that explains the residuals. In particular,
@@ -167,7 +168,8 @@ assumptions and gauges are detailed below.
 `AdaptiveAlternatingProjection` adds pass-level noise-robust step feedback,
 `Fpie` adds regularized object updates, `Mpie` adds periodic object-spectrum
 momentum to that fixed-pupil update, `Epry` can recover the pupil and frame
-response, `Admm` separates data fitting from overlap consensus, and
+response, `Admm` separates data fitting from overlap consensus,
+`GlobalGaussNewton` computes globally coupled fixed-pupil object steps, and
 `GradientDescent` supports generic Fourier-grid source correction, pupil
 recovery, and regularization. Physical planar-array calibration is the separate
 `JointReconstruction` workflow below.
@@ -225,6 +227,53 @@ and `dual_relaxation` control those updates. The default batch spans all frames.
 For multiplexed data, its joint amplitude proximal operates across all source
 modes, so checkpointed auxiliary and dual fields contain two complex values per
 frame-source-mode pixel.
+
+`GlobalGaussNewton` minimizes the full-stack, frame-weighted amplitude MSE in
+intrinsic intensity units. Each outer iteration forms an analytic object
+gradient, solves a damped Gauss–Newton normal equation with matrix-free
+preconditioned conjugate gradients, and accepts the direction with full-data
+Armijo backtracking. Masks, zero-weight frames, known gain and background,
+fractional Fourier crops, and incoherent multiplexing enter both the residual
+and the Jacobian products. Schedule order has no numerical effect because the
+solver requires one batch containing every frame and accumulates it in canonical
+index order.
+
+The solver stores a fixed number of object-sized vectors plus the coherent modes
+of the current multiplexed frame: for `N` object pixels, `P` detector pixels,
+and at most `q` simultaneous sources, working storage is `O(N + qP)`. It does
+not form the quadratic-size Hessian, but every conjugate-gradient product and
+line-search trial processes the complete frame stack. The practical cost of
+one outer iteration is therefore one global gradient pass, up to
+`maximum_cg_iterations` normal-operator passes, and up to
+`maximum_line_search_steps` trial-objective passes. Start with the defaults and
+tune `damping` first; a larger value makes the step more conservative. The
+`global_gauss_newton` trace namespace reports the conjugate-gradient iteration
+count and residual ratio, line-search evaluations and accepted scale, and the
+pre-update gradient norm.
+
+This first implementation deliberately exposes only amplitude MSE and an
+object-only step. The checkpoint pupil, gains, background, and source
+corrections are honored but not updated, and no curvature state survives an
+iteration. An iteration-boundary checkpoint is therefore an exact resume with
+the same parameters, while a checkpoint containing another solver's auxiliary
+state is rejected. The stateless linearization also permits use inside
+`JointReconstruction`, where each refreshed physical model is linearized from
+scratch.
+
+L.-H. Yeh, J. Dong, J. Zhong, L. Tian, M. Chen, G. Tang,
+M. Soltanolkotabi, and L. Waller, [“Experimental robustness of Fourier
+ptychography phase retrieval algorithms,” *Optics Express* **23**(26),
+33214–33240 (2015)](https://doi.org/10.1364/OE.23.033214), evaluate explicitly
+formed exact CR-calculus Newton systems for amplitude, intensity, and Poisson
+objectives. fpm-rs instead retains only the positive-semidefinite Gauss–Newton
+part of the amplitude residual, adds coverage-scaled damping, and applies it
+without a matrix. Matrix-free second-order ptychographic optimization is also
+demonstrated by S. Kandel, S. Maddali, Y. S. G. Nashed, S. O. Hruszkewycz,
+C. Jacobsen, and M. Allain, [“Efficient ptychographic phase retrieval via a
+matrix-free Levenberg–Marquardt algorithm,” *Optics Express* **29**(15),
+23019–23055 (2021)](https://doi.org/10.1364/OE.422768); that work concerns
+diffraction-plane ptychography and automatic differentiation, while this
+implementation uses analytic products for the image-plane FPM model.
 
 `Mpie` starts from the `Fpie` rPIE update and applies momentum after a configured
 number of positive-weight measured frames. If `O_rpie` is the spectrum after
@@ -349,9 +398,10 @@ The forward model is the same `ImagePlaneModel`/`ForwardModel` implementation
 used by simulation and reconstruction. Each outer iteration performs complete
 passes of the wrapped analytic object algorithm, bounded physical updates, and
 an illumination-only model refresh. Rust accepts compatible reconstruction
-algorithms; Python accepts `Fpie` or pupil-recovering `Epry`. `Mpie` is rejected
-because its velocity has no defined reset or transport across physical model
-recompilation. The default
+algorithms; Python accepts `Fpie`, pupil-recovering `Epry`, or
+`GlobalGaussNewton`. The global solver starts a fresh linearization after every
+refresh; `Mpie` is rejected because its velocity has no defined reset or
+transport across physical model recompilation. The default
 calibration objective is amplitude MSE. Intensity MSE,
 Poisson negative log likelihood, and Huber amplitude loss are also available;
 all honor measurement masks and frame weights. A parameter prior contributes
@@ -619,6 +669,10 @@ are rejected. The format remains version 2 because `algorithm_auxiliary` is the
 existing solver-state extension point, though readers that predate the `Mpie`
 or `AdaptiveAlternatingProjection` enum variant cannot load checkpoints
 containing those variants.
+`GlobalGaussNewton` has no auxiliary state: each accepted global update is
+atomic, so a same-parameter iteration-boundary resume is exact and an
+auxiliary-free checkpoint is also a valid warm start. It rejects checkpoints
+that carry another algorithm's auxiliary state.
 
 Every result owns a trace, even when no diagnostic callback is installed.
 Universal iteration rows are `(iteration, objective, elapsed_seconds)`.

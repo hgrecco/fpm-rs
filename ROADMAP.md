@@ -277,6 +277,128 @@ material differences from its cited method.
   robustness of Fourier ptychography phase retrieval algorithms,” *Optics
   Express* **23**(26), 33214–33240 (2015),
   [https://doi.org/10.1364/OE.23.033214](https://doi.org/10.1364/OE.23.033214).
+
+  **Implemented design; verification and promotion benchmark pending:**
+
+  - Use a separate object-only `GlobalGaussNewton` solver. Do not form or
+    store the exact augmented complex Hessian proposed by Yeh et al.: it has
+    quadratic object-size storage, can be indefinite away from a solution, and
+    the paper's own comparison found that its lower iteration count did not
+    offset its runtime. Also defer L-BFGS: its `O(history * object_pixels)`
+    storage is practical, but its curvature history introduces checkpoint and
+    physical-model transport semantics without exploiting the least-squares
+    structure. Select a matrix-free, damped Gauss–Newton system because it is
+    positive definite after damping, can use conjugate gradients, and retains
+    global frame coupling with linear object-size memory.
+  - Fix the data objective to the crate's canonical intrinsic-unit amplitude
+    MSE. For frame `f`, remove known background and gain to obtain
+    `y = max((measurement - background) / gain, 0)`, predict
+    `p = sum_s(source_weight_s * |A_s O|^2)`, and use the masked amplitude
+    residual `sqrt(p) - sqrt(y)`. Scale each valid pixel by the square root of
+    `frame_weight / (valid_pixels_in_frame * positive_frame_weight_sum)` so
+    `||r(O)||^2` is exactly the runner's frame-weighted, mask-aware mean
+    amplitude MSE. Zero-weight frames contribute neither residuals nor
+    derivatives. `A_s` is the canonical compiled crop, fixed pupil, and inverse
+    FFT operator, including subpixel offsets; an incoherently multiplexed frame
+    has one detector residual whose derivative includes every source mode.
+  - Implement analytic real-linear products `J v` and `J^T u` for the complex
+    object under the real inner product `Re(a^H b)`. Stabilize the amplitude
+    derivative with `max(sqrt(p), sqrt(epsilon))`, matching the existing
+    gradient path's dark-pixel convention. Solve
+    `(J^T J + damping * diag(C)) d = -J^T r` from zero with preconditioned
+    conjugate gradients. `C` is a positive pupil-power Fourier-coverage
+    approximation accumulated with frame and multiplexing weights, normalized
+    and floored by `epsilon`; use `(1 + damping) * C` as the Jacobi
+    preconditioner. The approximation deliberately omits field phase and the
+    spatial pattern of masks, which remain present in the exact matrix-free
+    `J` and `J^T` products.
+  - Stream frames and, for multiplexing, retain only the modes of the current
+    frame. Do not cache the measurement stack, all predicted fields, a
+    Jacobian, or a Hessian. With `N` complex object pixels, `P` detector pixels,
+    and at most `q` simultaneous source modes, storage is `O(N + qP)` with a
+    fixed number of object-sized conjugate-gradient vectors, rather than
+    `O(N^2)` for the full Hessian or `O(history * N)` for L-BFGS. This preserves
+    lazy measurements but processes all frames for each normal-operator and
+    line-search evaluation; the expected cost of one outer iteration is one
+    global gradient pass, up to `maximum_cg_iterations` global `J^T J` passes,
+    and the trial-objective passes required by line search.
+  - Make one solver step atomic and global. `batch_size()` returns `usize::MAX`,
+    and `step` rejects a batch that is not an exact permutation of every frame.
+    Accumulate frames in canonical index order so sequential, reverse, and
+    seeded schedules give the same numerical path. Initially keep reductions
+    single-threaded and deterministic; use the state's backend for FFTs without
+    adding a CPU-only public contract.
+  - Globalize the inexact direction with Armijo backtracking on the same full
+    amplitude-MSE objective. Start with step one and multiply by
+    `line_search_reduction` until sufficient decrease is reached. Reaching the
+    conjugate-gradient iteration limit is allowed when the finite direction is
+    a descent direction; non-positive or non-finite conjugate-gradient
+    curvature, a non-descent direction, or exhausting the line search returns
+    `Error::Numerical` without modifying the object. A zero gradient is a
+    successful no-op. Commit only an accepted trial, invalidate the object
+    cache, and return post-update per-frame losses so trace and callback
+    objectives describe the accepted state.
+  - Limit the first milestone to a fixed pupil and fixed compiled calibration
+    variables. Honor a checkpoint's pupil, gains, background, and generic
+    source corrections, but do not update them; do not offer TV or pupil
+    regularization. Because no curvature survives an outer step,
+    `GlobalGaussNewton` may be used by Rust and Python `JointReconstruction`:
+    each physical model refresh is followed by a fresh linearization. Joint
+    object/pupil or object/calibration Gauss–Newton blocks remain out of scope.
+    The fixed-pupil global object-phase ambiguity is left in the initialization
+    convention and handled by the existing gauge-aligned evaluation metrics.
+  - Add Rust fields and builders, and matching keyword-only Python parameters,
+    for `iterations`, `damping`, `maximum_cg_iterations`,
+    `cg_relative_tolerance`, `maximum_line_search_steps`,
+    `line_search_reduction`, `line_search_sufficient_decrease`, and `epsilon`.
+    Proposed starting defaults are `20`, `1e-3`, `12`, `1e-3`, `8`, `0.5`,
+    `1e-4`, and `1e-10`, respectively; they are implementation starting points
+    to validate, not claimed universal optima. Validate positive finite damping
+    and epsilon, positive iteration limits, tolerances in `(0, 1)`, and a
+    line-search reduction in `(0, 1)`, using stable parameter names. Do not
+    expose `batch_size`, `loss_type`, pupil recovery, illumination recovery, or
+    regularization controls on this initial API.
+  - Emit `global_gauss_newton` iteration metrics for conjugate-gradient
+    iterations, final linear residual ratio, line-search evaluations, accepted
+    step scale, and gradient norm. The solver carries no
+    `AlgorithmAuxiliaryState`: checkpoints occur only after the atomic outer
+    step, same-configuration resume is exact, and checkpoint format version 2
+    remains unchanged. Reject unrelated stateful algorithm auxiliary data;
+    changing solver parameters on resume is an explicit stateless warm start,
+    consistent with the existing stateless algorithms.
+  - Before marking this item complete, compare the public candidate from the
+    same initialization with fixed-pupil `Fpie` and amplitude-MSE
+    `GradientDescent` on `noiseless_mixed_v1`, `poisson_gaussian_v1`, and the
+    fixed-pupil model-mismatch case `aberrated_pupil_v1`. Report outer
+    iterations, forward/adjoint or normal-operator passes, peak resident memory,
+    median CPU runtime over repeated runs, final objective, and globally aligned
+    complex-object error. Promotion requires a predeclared objective or object
+    error threshold to be reached faster on at least one difficult case, or a
+    lower aligned object error at the same runtime budget, without a noiseless
+    regression. If neither condition holds, document the negative result,
+    remove the public candidate, and close this roadmap item rather than
+    keeping a maintenance-heavy algorithm on iteration-count evidence alone.
+  - Before marking this item complete, add finite-difference `J v`, real-adjoint
+    dot-product, and dense tiny-problem `J^T J` checks; deterministic tests for
+    masks, weights, gains, backgrounds, fractional crops, multiplexing,
+    coverage floors, conjugate-gradient stopping, line-search rejection without
+    mutation, schedule invariance, joint-model refresh, validation, and
+    uninterrupted versus checkpoint-resumed equality; and Python construction,
+    validation, execution, metrics, joint reconstruction, and resume coverage.
+    Add the algorithm to Rustdoc, the authoritative Python stub, algorithm
+    selection guidance, benchmark profiles/example, and `CHANGES.md`.
+  - Document that Yeh et al. use exact CR-calculus Hessians and report global
+    Newton results for amplitude, intensity, and Poisson objectives, whereas
+    this proposal uses only the positive-semidefinite Gauss–Newton part of the
+    amplitude residual with explicit damping, matrix-free products, and a fixed
+    pupil. Matrix-free Levenberg–Marquardt is supported as a ptychographic
+    implementation precedent by S. Kandel, S. Maddali, Y. S. G. Nashed,
+    S. O. Hruszkewycz, C. Jacobsen, and M. Allain, “Efficient ptychographic
+    phase retrieval via a matrix-free Levenberg–Marquardt algorithm,” *Optics
+    Express* **29**(15), 23019–23055 (2021),
+    [https://doi.org/10.1364/OE.422768](https://doi.org/10.1364/OE.422768), but
+    that work studies diffraction-plane ptychography and automatic
+    differentiation rather than this crate's analytic image-plane FPM model.
 - [ ] **Design first:** Evaluate bright-field circle detection or spectral
   correlation as an initialization or alternative calibration path for planar
   arrays. The existing `JointReconstruction` already performs bounded global

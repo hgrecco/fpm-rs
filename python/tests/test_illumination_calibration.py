@@ -167,12 +167,38 @@ def test_joint_reconstruction_accepts_pupil_recovery_algorithm() -> None:
     assert result.calibrated_model.source_count == 9
 
 
+def test_joint_reconstruction_accepts_global_gauss_newton() -> None:
+    optics, nominal, problem = calibration_problem()
+    parameters = fpm.PlanarArrayCalibrationParameters(
+        translation=(True, False, False),
+        translation_spec=fpm.CalibrationParameterSpec(
+            -1e-3,
+            1e-3,
+            scale=2.5e-4,
+            finite_difference_step=2e-5,
+        ),
+    )
+    result = fpm.JointReconstruction(
+        fpm.GlobalGaussNewton(iterations=1, maximum_cg_iterations=2),
+        optics,
+        nominal,
+        fpm.IlluminationCalibration(parameters),
+        outer_iterations=1,
+    ).run(problem)
+    assert result.reconstruction.runtime.completed_iterations == 1
+    assert result.calibrated_model.source_count == 9
+    assert any(
+        namespace == "object_update.global_gauss_newton"
+        for _, namespace, _, _ in result.reconstruction.algorithm_metrics
+    )
+
+
 def test_joint_reconstruction_rejects_mpie() -> None:
     optics, nominal, _problem = calibration_problem()
     calibration = fpm.IlluminationCalibration(
         fpm.PlanarArrayCalibrationParameters(translation=(True, False, False))
     )
-    with pytest.raises(TypeError, match="Fpie or Epry"):
+    with pytest.raises(TypeError, match="Fpie, Epry, or GlobalGaussNewton"):
         fpm.JointReconstruction(
             fpm.Mpie(iterations=1),
             optics,
@@ -181,7 +207,7 @@ def test_joint_reconstruction_rejects_mpie() -> None:
             outer_iterations=1,
         )
 
-    with pytest.raises(TypeError, match="Fpie or Epry"):
+    with pytest.raises(TypeError, match="Fpie, Epry, or GlobalGaussNewton"):
         fpm.JointReconstruction(
             fpm.AdaptiveAlternatingProjection(iterations=1),
             optics,

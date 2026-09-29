@@ -10,7 +10,8 @@ use fpm_rs::{
     algorithms::objective::LossType,
     algorithms::{
         AdaptiveAlternatingProjection, Admm, AlternatingProjection, Epry, Fpie, GradientDescent,
-        JointReconstruction, JointReconstructionResult as CoreJointReconstructionResult, Mpie,
+        GlobalGaussNewton, JointReconstruction,
+        JointReconstructionResult as CoreJointReconstructionResult, Mpie,
         ReconstructionAlgorithm,
     },
     callbacks::{
@@ -1915,6 +1916,12 @@ fn convergence_reason_name(reason: CalibrationConvergenceReason) -> &'static str
     }
 }
 
+/// Alternate analytic object updates with bounded physical LED calibration.
+///
+/// ``object_algorithm`` accepts ``Fpie``, ``Epry``, or
+/// ``GlobalGaussNewton``. Global Gauss–Newton keeps the pupil fixed and starts
+/// a fresh matrix-free linearization after each calibrated-model refresh;
+/// EPRY may update the pupil between physical phases.
 #[pyclass(module = "fpm_rs._core", name = "JointReconstruction", frozen)]
 pub(crate) struct PyJointReconstruction {
     inner: PyJointObjectAlgorithm,
@@ -1924,6 +1931,7 @@ pub(crate) struct PyJointReconstruction {
 enum PyJointObjectAlgorithm {
     Fpie(JointReconstruction<Fpie>),
     Epry(JointReconstruction<Epry>),
+    GlobalGaussNewton(JointReconstruction<GlobalGaussNewton>),
 }
 
 impl PyJointObjectAlgorithm {
@@ -1931,6 +1939,7 @@ impl PyJointObjectAlgorithm {
         match self {
             Self::Fpie(value) => value.outer_iterations,
             Self::Epry(value) => value.outer_iterations,
+            Self::GlobalGaussNewton(value) => value.outer_iterations,
         }
     }
 
@@ -1938,6 +1947,7 @@ impl PyJointObjectAlgorithm {
         match self {
             Self::Fpie(value) => value.validate(),
             Self::Epry(value) => value.validate(),
+            Self::GlobalGaussNewton(value) => value.validate(),
         }
     }
 }
@@ -1979,9 +1989,23 @@ impl PyJointReconstruction {
                 .object_iterations_per_outer(object_iterations_per_outer)
                 .illumination_steps_per_outer(illumination_steps_per_outer),
             )
+        } else if let Ok(algorithm) =
+            object_algorithm.extract::<PyRef<'_, PyGlobalGaussNewton>>()
+        {
+            PyJointObjectAlgorithm::GlobalGaussNewton(
+                JointReconstruction::new(
+                    algorithm.inner.clone(),
+                    optics.inner.clone(),
+                    initial_illumination.inner.clone(),
+                    illumination_calibration.inner.clone(),
+                    outer_iterations,
+                )
+                .object_iterations_per_outer(object_iterations_per_outer)
+                .illumination_steps_per_outer(illumination_steps_per_outer),
+            )
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "object_algorithm must be Fpie or Epry",
+                "object_algorithm must be Fpie, Epry, or GlobalGaussNewton",
             ));
         };
         inner.validate().map_err(to_py_err)?;
@@ -2018,6 +2042,13 @@ impl PyJointReconstruction {
                     runner.run(&problem)
                 }
                 PyJointObjectAlgorithm::Epry(algorithm) => {
+                    let mut runner = Runner::new(algorithm, options).with_callbacks(callbacks);
+                    if let Some(checkpoint) = checkpoint {
+                        runner = runner.resume_from(checkpoint);
+                    }
+                    runner.run(&problem)
+                }
+                PyJointObjectAlgorithm::GlobalGaussNewton(algorithm) => {
                     let mut runner = Runner::new(algorithm, options).with_callbacks(callbacks);
                     if let Some(checkpoint) = checkpoint {
                         runner = runner.resume_from(checkpoint);
@@ -2752,6 +2783,124 @@ impl PyAdmm {
     }
 }
 
+/// Matrix-free damped Gauss–Newton reconstruction for a fixed-pupil FPM object.
+///
+/// The solver minimizes the full-stack, frame-weighted amplitude-MSE objective
+/// in intrinsic intensity units. It applies analytic Jacobian and adjoint
+/// products through the compiled crop, pupil, and FFT model, then solves a
+/// coverage-damped normal equation with preconditioned conjugate gradients.
+/// One outer update always consumes every frame and is accepted through
+/// full-data Armijo backtracking. Masks, frame weights, known gains and
+/// backgrounds, fractional crops, and incoherent multiplexing are honored.
+///
+/// Parameters
+/// ----------
+/// iterations : int
+///     Number of complete global object updates.
+/// damping : float
+///     Positive coefficient multiplying the coverage-scaled diagonal damping.
+/// maximum_cg_iterations : int
+///     Maximum matrix-free conjugate-gradient iterations per outer update.
+/// cg_relative_tolerance : float
+///     Relative linear-residual stopping tolerance in ``(0, 1)``.
+/// maximum_line_search_steps : int
+///     Maximum full-data trial-objective evaluations per outer update.
+/// line_search_reduction : float
+///     Multiplicative backtracking factor in ``(0, 1)``.
+/// line_search_sufficient_decrease : float
+///     Armijo sufficient-decrease coefficient in ``(0, 1)``.
+/// epsilon : float
+///     Positive floor for dark-field derivatives and Fourier coverage.
+///
+/// Raises
+/// ------
+/// InvalidParameterError
+///     If a limit or positive scale is zero, non-finite, or outside its
+///     documented interval.
+/// NumericalError
+///     If a matrix-free product is non-finite, conjugate-gradient curvature is
+///     non-positive, the direction is not descending, or backtracking cannot
+///     accept a finite trial. A rejected trial does not modify the object.
+///
+/// Notes
+/// -----
+/// The pupil and calibration variables remain fixed during each object update.
+/// The solver repeatedly processes the full frame stack and stores neither a
+/// Jacobian nor a Hessian. It can be used as the object algorithm inside
+/// ``JointReconstruction`` because every physical-model refresh is followed by
+/// a fresh linearization.
+///
+/// References
+/// ----------
+/// [L.-H. Yeh, J. Dong, J. Zhong, L. Tian, M. Chen, G. Tang,
+/// M. Soltanolkotabi, and L. Waller, "Experimental robustness of Fourier
+/// ptychography phase retrieval algorithms," Optics Express 23(26),
+/// 33214-33240 (2015)](https://doi.org/10.1364/OE.23.033214). fpm-rs uses a
+/// matrix-free damped Gauss–Newton approximation to the amplitude objective,
+/// rather than the paper's explicitly formed exact CR-calculus Hessian.
+///
+/// [S. Kandel, S. Maddali, Y. S. G. Nashed, S. O. Hruszkewycz, C. Jacobsen,
+/// and M. Allain, "Efficient ptychographic phase retrieval via a matrix-free
+/// Levenberg-Marquardt algorithm," Optics Express 29(15), 23019-23055
+/// (2021)](https://doi.org/10.1364/OE.422768). That work treats
+/// diffraction-plane ptychography with automatic differentiation; fpm-rs uses
+/// analytic products for image-plane Fourier ptychography.
+#[pyclass(module = "fpm_rs._core", name = "GlobalGaussNewton", frozen)]
+pub(crate) struct PyGlobalGaussNewton {
+    inner: GlobalGaussNewton,
+}
+
+#[pymethods]
+impl PyGlobalGaussNewton {
+    #[new]
+    #[pyo3(signature = (*, iterations=20, damping=1e-3, maximum_cg_iterations=12, cg_relative_tolerance=1e-3, maximum_line_search_steps=8, line_search_reduction=0.5, line_search_sufficient_decrease=1e-4, epsilon=1e-10))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        iterations: usize,
+        damping: f64,
+        maximum_cg_iterations: usize,
+        cg_relative_tolerance: f64,
+        maximum_line_search_steps: usize,
+        line_search_reduction: f64,
+        line_search_sufficient_decrease: f64,
+        epsilon: f64,
+    ) -> PyResult<Self> {
+        let inner = GlobalGaussNewton {
+            iterations,
+            damping,
+            maximum_cg_iterations,
+            cg_relative_tolerance,
+            maximum_line_search_steps,
+            line_search_reduction,
+            line_search_sufficient_decrease,
+            epsilon,
+        };
+        inner.validate().map_err(to_py_err)?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (problem, *, callbacks=None, resume_from=None, schedule="sequential", schedule_seed=0))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        problem: PyRef<'_, PyReconstructionProblem>,
+        callbacks: Option<&Bound<'_, PyAny>>,
+        resume_from: Option<PyRef<'_, PyReconstructionCheckpoint>>,
+        schedule: &str,
+        schedule_seed: u64,
+    ) -> PyResult<PyReconstructionResult> {
+        run_algorithm(
+            py,
+            self.inner.clone(),
+            &problem,
+            callbacks,
+            resume_from.as_deref(),
+            schedule,
+            schedule_seed,
+        )
+    }
+}
+
 /// Wirtinger-style loss-gradient reconstruction for Fourier ptychography.
 ///
 /// The solver differentiates the selected data loss through the complex FPM
@@ -2935,6 +3084,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyMpie>()?;
     module.add_class::<PyEpry>()?;
     module.add_class::<PyAdmm>()?;
+    module.add_class::<PyGlobalGaussNewton>()?;
     module.add_class::<PyGradientDescent>()?;
     Ok(())
 }

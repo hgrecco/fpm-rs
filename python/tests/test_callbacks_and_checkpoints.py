@@ -181,6 +181,35 @@ def test_truncated_poisson_gradient_resumes_without_auxiliary_state(
     assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
 
 
+def test_global_gauss_newton_resumes_without_auxiliary_state(
+    problem: fpm.ReconstructionProblem,
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "global-gauss-newton-checkpoints"
+    parameters = {"maximum_cg_iterations": 2}
+    fpm.GlobalGaussNewton(iterations=1, **parameters).run(
+        problem,
+        callbacks=[fpm.CheckpointEvery(1, directory)],
+    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(
+        directory / "checkpoint_00001.json"
+    )
+
+    resumed = fpm.GlobalGaussNewton(iterations=2, **parameters).run(
+        problem,
+        resume_from=checkpoint,
+    )
+    uninterrupted = fpm.GlobalGaussNewton(iterations=2, **parameters).run(problem)
+
+    np.testing.assert_allclose(
+        resumed.object_spectrum,
+        uninterrupted.object_spectrum,
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
+
+
 def test_python_callback_can_stop_early(problem: fpm.ReconstructionProblem) -> None:
     result = fpm.AlternatingProjection(iterations=10).run(
         problem,

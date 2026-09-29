@@ -37,9 +37,19 @@ def assert_canonical_blind_result(
         fpm.Mpie(iterations=1),
         fpm.Epry(iterations=1),
         fpm.Admm(iterations=1, batch_size=1),
+        fpm.GlobalGaussNewton(iterations=1, maximum_cg_iterations=2),
         fpm.GradientDescent(iterations=1, parallel_workers=1),
     ],
-    ids=["ap", "adaptive-ap", "fpie", "mpie", "epry", "admm", "gradient"],
+    ids=[
+        "ap",
+        "adaptive-ap",
+        "fpie",
+        "mpie",
+        "epry",
+        "admm",
+        "global-gauss-newton",
+        "gradient",
+    ],
 )
 def test_all_algorithms_return_numpy_results(
     problem: fpm.ReconstructionProblem,
@@ -74,6 +84,19 @@ def test_all_algorithms_return_numpy_results(
         assert result.algorithm_metrics == [
             (1, "adaptive_alternating_projection", "object_step", 1.0)
         ]
+    elif isinstance(algorithm, fpm.GlobalGaussNewton):
+        values = {
+            (namespace, metric): value
+            for _, namespace, metric, value in result.algorithm_metrics
+        }
+        assert set(values) == {
+            ("global_gauss_newton", "conjugate_gradient_iterations"),
+            ("global_gauss_newton", "linear_residual_ratio"),
+            ("global_gauss_newton", "line_search_evaluations"),
+            ("global_gauss_newton", "accepted_step_scale"),
+            ("global_gauss_newton", "gradient_norm"),
+        }
+        assert all(math.isfinite(value) and value >= 0.0 for value in values.values())
     else:
         assert result.algorithm_metrics == []
 
@@ -115,6 +138,15 @@ def test_algorithm_parameter_errors_remain_typed() -> None:
 
     with pytest.raises(fpm.InvalidParameterError, match="momentum_friction"):
         fpm.Mpie(momentum_friction=1.0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="damping"):
+        fpm.GlobalGaussNewton(damping=0.0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="cg_relative_tolerance"):
+        fpm.GlobalGaussNewton(cg_relative_tolerance=1.0)
+
+    with pytest.raises(fpm.InvalidParameterError, match="line_search_reduction"):
+        fpm.GlobalGaussNewton(line_search_reduction=1.0)
 
     with pytest.raises(ValueError, match="loss_type"):
         fpm.GradientDescent(loss_type="unknown")
@@ -206,6 +238,16 @@ def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
             "background_bounds",
             "epsilon",
             "loss_type",
+        ],
+        fpm.GlobalGaussNewton: [
+            "iterations",
+            "damping",
+            "maximum_cg_iterations",
+            "cg_relative_tolerance",
+            "maximum_line_search_steps",
+            "line_search_reduction",
+            "line_search_sufficient_decrease",
+            "epsilon",
         ],
         fpm.GradientDescent: [
             "iterations",

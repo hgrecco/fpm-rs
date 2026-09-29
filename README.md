@@ -18,8 +18,8 @@ ptychography, multislice propagation, and GPU execution are not implemented.
 - **Simulate an acquisition.** Generate ideal or camera-affected intensity
   frames from synthetic or supplied complex objects.
 - **Reconstruct the object.** Start with alternating projection, or use FPIE,
-  mPIE, EPRY, ADMM, or gradient descent when their convergence, calibration,
-  and regularization options fit the experiment.
+  mPIE, EPRY, ADMM, global Gauss–Newton, or gradient descent when their
+  convergence, calibration, and regularization options fit the experiment.
 - **Calibrate a planar LED array physically.** Alternate analytic object or
   object/pupil updates with bounded pose, pitch, reference-index,
   selected-offset, source-power, or frame-gain updates and reuse the returned

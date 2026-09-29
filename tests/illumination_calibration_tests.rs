@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use fpm_rs::{
     algorithms::{
-        AdaptiveAlternatingProjection, Fpie, JointReconstruction, Mpie, ReconstructionAlgorithm,
+        AdaptiveAlternatingProjection, Fpie, GlobalGaussNewton, JointReconstruction, Mpie,
+        ReconstructionAlgorithm,
     },
     callbacks::CheckpointEvery,
     experiment::{
@@ -858,6 +859,33 @@ fn joint_reconstruction_returns_reusable_physical_state() {
         decoded.final_parameters.translation_m,
         result.final_parameters.translation_m
     );
+}
+
+#[test]
+fn joint_reconstruction_accepts_global_gauss_newton_object_updates() {
+    let nominal = Illumination::from_geometry(array([0.0, 0.0, -80e-3])).unwrap();
+    let (measurements, nominal_model, _) = simulate_pair(&nominal, &nominal);
+    let problem = ReconstructionProblem::new(measurements, nominal_model).unwrap();
+    let parameters = PlanarArrayCalibrationParameters::builder()
+        .translation([true, false, false])
+        .build()
+        .unwrap();
+    let result = JointReconstruction::new(
+        GlobalGaussNewton::default()
+            .iterations(1)
+            .maximum_cg_iterations(2),
+        optics(),
+        nominal,
+        IlluminationCalibration::new(parameters),
+        1,
+    )
+    .run(&problem)
+    .unwrap();
+
+    assert!(result.reconstruction.trace.algorithm_metrics.iter().any(|record| {
+        record.namespace == "object_update.global_gauss_newton"
+            && record.metric == "conjugate_gradient_iterations"
+    }));
 }
 
 #[test]
