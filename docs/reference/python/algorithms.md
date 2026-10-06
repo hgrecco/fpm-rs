@@ -16,8 +16,6 @@ rule, recoverable quantities, and algorithm-specific parameters.
 
 ::: fpm_rs.Admm
 
-::: fpm_rs.GlobalGaussNewton
-
 ::: fpm_rs.GradientDescent
 
 ## Physical planar-array calibration

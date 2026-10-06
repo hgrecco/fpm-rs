@@ -54,11 +54,9 @@ only when the input sampling pitch is known.
 
 Algorithms can additionally expose long-form `result.algorithm_metrics` tuples:
 `(iteration, namespace, metric, value)`. ADMM uses the `admm` namespace for
-`primal_residual_rms` and `dual_residual_rms`. Global Gauss–Newton uses
-`global_gauss_newton` for conjugate-gradient iterations and residual ratio,
-line-search evaluations and accepted scale, and the pre-update gradient norm.
-These values do not appear in universal iteration rows or scalar diagnostics.
-Algorithms without stable algorithm-specific metrics return an empty list.
+`primal_residual_rms` and `dual_residual_rms`. These values do not appear in
+universal iteration rows or scalar diagnostics. Algorithms without stable
+algorithm-specific metrics return an empty list.
 
 Joint physical illumination runs emit `data_loss`, `regularization_loss`,
 `total_loss`, geometry-refresh count, intensity-only-update count, and rejected

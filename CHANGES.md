@@ -46,10 +46,6 @@ first.
   geometry fitting with rank checks, progress callbacks, JSON persistence,
   verified directory bundles, matching Rust/Python APIs, diagnostics, and
   synthetic recovery coverage.
-- Added `GlobalGaussNewton`, a fixed-pupil, full-stack amplitude-MSE solver with
-  analytic matrix-free Jacobian products, coverage-damped preconditioned
-  conjugate gradients, Armijo backtracking, stable iteration metrics, Rust and
-  Python APIs, physical `JointReconstruction` support, and benchmark coverage.
 - Added optional signal-dependent truncated Poisson gradients to
   `GradientDescent`, including calibrated mini-batch statistics, shared
   multiplexed-pixel gates, deterministic parallel reduction, retained-pixel
@@ -102,6 +98,9 @@ first.
 
 ### Fixed
 
+- Preserve binary64 values exactly when loading JSON checkpoints, so a
+  same-configuration resume remains bit-for-bit identical to an uninterrupted
+  reconstruction.
 - Validate all image-plane model invariants when deserializing configurations,
   including array layouts and geometry-dependent fields.
 - Isolate Python source-release tests in a clean virtual environment so they do

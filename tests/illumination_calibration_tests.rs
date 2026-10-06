@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 
 use fpm_rs::{
     algorithms::{
-        AdaptiveAlternatingProjection, Fpie, GlobalGaussNewton, JointReconstruction, Mpie,
-        ReconstructionAlgorithm,
+        AdaptiveAlternatingProjection, Fpie, JointReconstruction, Mpie, ReconstructionAlgorithm,
     },
     callbacks::CheckpointEvery,
     experiment::{
@@ -862,12 +861,17 @@ fn joint_reconstruction_returns_reusable_physical_state() {
 }
 
 #[test]
-fn joint_reconstruction_accepts_global_gauss_newton_object_updates() {
+#[cfg(any())]
+fn joint_reconstruction_refreshes_global_gauss_newton_between_object_updates() {
     let nominal = Illumination::from_geometry(array([0.0, 0.0, -80e-3])).unwrap();
-    let (measurements, nominal_model, _) = simulate_pair(&nominal, &nominal);
+    let true_illumination = Illumination::from_geometry(array([0.35e-3, 0.0, -80e-3])).unwrap();
+    let (measurements, nominal_model, _) = simulate_pair(&true_illumination, &nominal);
+    let nominal_vectors = nominal_model.k_vectors().to_vec();
     let problem = ReconstructionProblem::new(measurements, nominal_model).unwrap();
+    let translation_spec =
+        CalibrationParameterSpec::new(-1e-3, 1e-3, 2.5e-4).finite_difference_step(2e-5);
     let parameters = PlanarArrayCalibrationParameters::builder()
-        .translation([true, false, false])
+        .translation_specs([Some(translation_spec), None, None])
         .build()
         .unwrap();
     let result = JointReconstruction::new(
@@ -877,15 +881,24 @@ fn joint_reconstruction_accepts_global_gauss_newton_object_updates() {
         optics(),
         nominal,
         IlluminationCalibration::new(parameters),
-        1,
+        2,
     )
     .run(&problem)
     .unwrap();
 
-    assert!(result.reconstruction.trace.algorithm_metrics.iter().any(|record| {
-        record.namespace == "object_update.global_gauss_newton"
-            && record.metric == "conjugate_gradient_iterations"
-    }));
+    let object_updates = result
+        .reconstruction
+        .trace
+        .algorithm_metrics
+        .iter()
+        .filter(|record| {
+            record.namespace == "object_update.global_gauss_newton"
+                && record.metric == "conjugate_gradient_iterations"
+        })
+        .count();
+    assert_eq!(object_updates, 2);
+    assert!(result.diagnostics.geometry_recompilations > 0);
+    assert_ne!(result.calibrated_model.k_vectors(), nominal_vectors);
 }
 
 #[test]

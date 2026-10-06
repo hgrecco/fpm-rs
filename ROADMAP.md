@@ -11,8 +11,7 @@ material differences from its cited method.
 
 ## Open work index
 
-- **Reconstruction:** [Global Gauss-Newton promotion](#global-gauss-newton-promotion),
-  [bright-field initializer evaluation](#bright-field-initializer-evaluation),
+- **Reconstruction:** [bright-field initializer evaluation](#bright-field-initializer-evaluation),
   [APIC complex-field reconstruction](#apic-complex-field-reconstruction),
   [multi-wavelength reconstruction](#multi-wavelength-reconstruction), and
   [partial coherence and spectral bandwidth](#partial-coherence-and-spectral-bandwidth).
@@ -37,9 +36,19 @@ material differences from its cited method.
 
 ## Reconstruction algorithms
 
-### Global Gauss-Newton promotion
+### Global Gauss-Newton promotion (closed)
 
-- [ ] **Design first:** Evaluate a global Newton, Gauss–Newton, or practical
+- [x] **Not promoted:** A release benchmark on 2026-10-06 (seed 2026, 20 outer
+  iterations, one warmup, and five repetitions) compared the candidate with
+  fixed-pupil Fpie and amplitude-MSE GradientDescent. Although it produced a
+  lower final amplitude-MSE objective on the noisy and aberrated-pupil cases,
+  it consumed 13.6--17.0 times Fpie's median CPU time and its aligned complex
+  object error was worse on both difficult cases (0.996 versus 0.250 for
+  Poisson/Gaussian noise; 0.386 versus 0.246 for pupil mismatch). It therefore
+  met neither the faster-threshold nor equal-runtime quality criterion. The
+  public Rust/Python candidate and promotion benchmark were removed.
+
+  Evaluate a global Newton, Gauss–Newton, or practical
   quasi-Newton object solver against the existing sequential and mini-batch
   methods. Specify Hessian approximation, memory scaling, preconditioning,
   supported loss functions, and interaction with pupil and calibration
@@ -149,15 +158,21 @@ material differences from its cited method.
     regression. If neither condition holds, document the negative result,
     remove the public candidate, and close this roadmap item rather than
     keeping a maintenance-heavy algorithm on iteration-count evidence alone.
-  - Before marking this item complete, add finite-difference `J v`, real-adjoint
+    `benchmark_global_gauss_newton` implements the isolated repeated-run
+    protocol and emits raw and median summaries for every required quantity. A
+    release-mode reference run now exercises all nine preset/algorithm pairs;
+    a predeclared threshold or equal-runtime comparison and the resulting
+    promotion decision remain outstanding.
+  - **Implemented verification coverage:** Finite-difference `J v`, real-adjoint
     dot-product, and dense tiny-problem `J^T J` checks; deterministic tests for
     masks, weights, gains, backgrounds, fractional crops, multiplexing,
     coverage floors, conjugate-gradient stopping, line-search rejection without
-    mutation, schedule invariance, joint-model refresh, validation, and
-    uninterrupted versus checkpoint-resumed equality; and Python construction,
-    validation, execution, metrics, joint reconstruction, and resume coverage.
-    Add the algorithm to Rustdoc, the authoritative Python stub, algorithm
-    selection guidance, benchmark profiles/example, and `CHANGES.md`.
+    mutation, sequential/reverse/seeded schedule invariance, joint-model
+    refresh, validation, and uninterrupted versus checkpoint-resumed equality;
+    and Python construction, validation, execution, metrics, joint
+    reconstruction, and resume coverage. The algorithm is also present in
+    Rustdoc, the authoritative Python stub, algorithm-selection guidance,
+    benchmark profiles/example, and `CHANGES.md`.
   - Document that Yeh et al. use exact CR-calculus Hessians and report global
     Newton results for amplitude, intensity, and Poisson objectives, whereas
     this proposal uses only the positive-semidefinite Gauss–Newton part of the

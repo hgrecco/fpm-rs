@@ -3,8 +3,7 @@
 //! Choose a concrete solver such as [`crate::algorithms::AlternatingProjection`],
 //! [`crate::algorithms::AdaptiveAlternatingProjection`],
 //! [`crate::algorithms::Fpie`], [`crate::algorithms::Mpie`], [`crate::algorithms::Epry`],
-//! [`crate::algorithms::Admm`], [`crate::algorithms::GradientDescent`], or
-//! [`crate::algorithms::GlobalGaussNewton`]. All
+//! [`crate::algorithms::Admm`] or [`crate::algorithms::GradientDescent`]. All
 //! implement [`crate::algorithms::ReconstructionAlgorithm`] and consume a validated
 //! [`crate::reconstruction::ReconstructionProblem`]; illumination geometry is compiled
 //! beforehand into the problem's [`crate::model::ImagePlaneModel`].
@@ -16,7 +15,6 @@ mod common;
 mod epry;
 mod fpie;
 mod gauge;
-mod global_gauss_newton;
 mod gradient_descent;
 mod joint_reconstruction;
 mod metrics;
@@ -31,7 +29,6 @@ pub use admm::{Admm, AdmmIterationMetrics};
 pub use alternating_projection::AlternatingProjection;
 pub use epry::Epry;
 pub use fpie::Fpie;
-pub use global_gauss_newton::{GlobalGaussNewton, GlobalGaussNewtonIterationMetrics};
 pub use gradient_descent::{GradientDescent, GradientDescentIterationMetrics};
 pub use joint_reconstruction::{
     JointIterationMetrics, JointReconstruction, JointReconstructionResult,

@@ -4,7 +4,7 @@ use fpm_rs::{
     Complex64, Error, Result,
     algorithms::{
         AdaptiveAlternatingProjection, Admm, AlternatingProjection, Epry, Fpie, GradientDescent,
-        GlobalGaussNewton, Mpie, ReconstructionAlgorithm,
+        Mpie, ReconstructionAlgorithm,
     },
     benchmark::{
         BENCHMARK_PROFILES, BenchmarkProfile, BenchmarkRecord, CPU_BENCHMARK_PROFILE,
@@ -94,14 +94,6 @@ fn main() -> Result<()> {
         &case,
         format!("iterations={iterations},penalty=1.0,batch_size=all"),
         Admm::default().iterations(iterations),
-    )?;
-    run_synthetic_case(
-        &mut records,
-        &case,
-        format!(
-            "iterations={iterations},damping=0.001,maximum_cg_iterations=12,cg_relative_tolerance=0.001,maximum_line_search_steps=8"
-        ),
-        GlobalGaussNewton::default().iterations(iterations),
     )?;
     run_synthetic_case(
         &mut records,

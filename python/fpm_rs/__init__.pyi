@@ -2344,10 +2344,8 @@ class JointReconstruction:
     model; unlike generic k-vector correction it always returns a realizable
     ``PlanarLEDArray`` illumination.
 
-    ``object_algorithm`` accepts ``Fpie``, ``Epry``, or
-    ``GlobalGaussNewton``. The global solver keeps the pupil fixed and starts a
-    fresh matrix-free linearization after each calibrated-model refresh; EPRY
-    may update the pupil between physical phases.
+    ``object_algorithm`` accepts ``Fpie`` or ``Epry``. EPRY may update the pupil
+    between physical phases.
 
     References
     ----------
@@ -2358,7 +2356,7 @@ class JointReconstruction:
     """
     def __init__(
         self,
-        object_algorithm: Fpie | Epry | GlobalGaussNewton,
+        object_algorithm: Fpie | Epry,
         optics: Optics,
         initial_illumination: Illumination,
         illumination_calibration: IlluminationCalibration,
@@ -2529,7 +2527,7 @@ class Admm(_Algorithm):
         epsilon: float = 1e-10,
     ) -> None: ...
 
-class GlobalGaussNewton(_Algorithm):
+class _RemovedGlobalGaussNewton(_Algorithm):
     """Matrix-free damped Gauss–Newton fixed-pupil object reconstruction.
 
     The solver minimizes the full-stack, frame-weighted amplitude-MSE objective

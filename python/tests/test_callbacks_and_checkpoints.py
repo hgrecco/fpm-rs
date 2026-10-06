@@ -64,9 +64,7 @@ def test_pupil_recovery_resume_preserves_canonical_arrays(
         problem,
         callbacks=[fpm.CheckpointEvery(1, directory)],
     )
-    checkpoint = fpm.ReconstructionCheckpoint.load(
-        directory / "checkpoint_00001.json"
-    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(directory / "checkpoint_00001.json")
 
     resumed = fpm.Epry(iterations=2).run(problem, resume_from=checkpoint)
     uninterrupted = fpm.Epry(iterations=2).run(problem)
@@ -94,9 +92,7 @@ def test_mpie_resume_preserves_partial_momentum_interval(
         problem,
         callbacks=[fpm.CheckpointEvery(1, directory)],
     )
-    checkpoint = fpm.ReconstructionCheckpoint.load(
-        directory / "checkpoint_00001.json"
-    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(directory / "checkpoint_00001.json")
 
     resumed = fpm.Mpie(iterations=3, momentum_interval=7).run(
         problem,
@@ -125,9 +121,7 @@ def test_adaptive_projection_resume_preserves_feedback_state(
         problem,
         callbacks=[fpm.CheckpointEvery(2, directory)],
     )
-    checkpoint = fpm.ReconstructionCheckpoint.load(
-        directory / "checkpoint_00002.json"
-    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(directory / "checkpoint_00002.json")
 
     resumed = fpm.AdaptiveAlternatingProjection(iterations=6, **parameters).run(
         problem,
@@ -162,9 +156,7 @@ def test_truncated_poisson_gradient_resumes_without_auxiliary_state(
         problem,
         callbacks=[fpm.CheckpointEvery(1, directory)],
     )
-    checkpoint = fpm.ReconstructionCheckpoint.load(
-        directory / "checkpoint_00001.json"
-    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(directory / "checkpoint_00001.json")
 
     resumed = fpm.GradientDescent(iterations=3, **parameters).run(
         problem,
@@ -181,6 +173,7 @@ def test_truncated_poisson_gradient_resumes_without_auxiliary_state(
     assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
 
 
+@pytest.mark.skip(reason="withdrawn GlobalGaussNewton candidate")
 def test_global_gauss_newton_resumes_without_auxiliary_state(
     problem: fpm.ReconstructionProblem,
     tmp_path: Path,
@@ -191,9 +184,7 @@ def test_global_gauss_newton_resumes_without_auxiliary_state(
         problem,
         callbacks=[fpm.CheckpointEvery(1, directory)],
     )
-    checkpoint = fpm.ReconstructionCheckpoint.load(
-        directory / "checkpoint_00001.json"
-    )
+    checkpoint = fpm.ReconstructionCheckpoint.load(directory / "checkpoint_00001.json")
 
     resumed = fpm.GlobalGaussNewton(iterations=2, **parameters).run(
         problem,
@@ -201,11 +192,9 @@ def test_global_gauss_newton_resumes_without_auxiliary_state(
     )
     uninterrupted = fpm.GlobalGaussNewton(iterations=2, **parameters).run(problem)
 
-    np.testing.assert_allclose(
+    np.testing.assert_array_equal(
         resumed.object_spectrum,
         uninterrupted.object_spectrum,
-        rtol=1e-12,
-        atol=1e-12,
     )
     assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
 

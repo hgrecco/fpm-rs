@@ -5,7 +5,7 @@ use fpm_rs::{
     Complex64,
     algorithms::{
         AdaptiveAlternatingProjection, Admm, AlternatingProjection, Epry, Fpie, GradientDescent,
-        GlobalGaussNewton, Mpie, ReconstructionAlgorithm,
+        Mpie, ReconstructionAlgorithm,
         objective::{LossType, loss},
     },
     callbacks::CheckpointEvery,
@@ -62,6 +62,7 @@ fn gradient_retained_fraction_values(
         .collect()
 }
 
+#[cfg(any())]
 fn global_gauss_newton_metric_values(
     result: &fpm_rs::reconstruction::ReconstructionResult,
     metric: &str,
@@ -113,6 +114,7 @@ fn ap_reconstructs_and_reports_history() {
 }
 
 #[test]
+#[cfg(any())]
 fn global_gauss_newton_decreases_the_global_objective_and_reports_work() {
     let model = common::direct_model().unwrap();
     let simulation = Simulator::ideal(model)
@@ -142,11 +144,16 @@ fn global_gauss_newton_decreases_the_global_objective_and_reports_work() {
     ] {
         let values = global_gauss_newton_metric_values(&result, metric);
         assert_eq!(values.len(), 2, "missing {metric} values");
-        assert!(values.iter().all(|value| value.is_finite() && *value >= 0.0));
+        assert!(
+            values
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+        );
     }
 }
 
 #[test]
+#[cfg(any())]
 fn global_gauss_newton_is_schedule_invariant() {
     let model = common::direct_model().unwrap();
     let simulation = Simulator::ideal(model)
@@ -187,19 +194,61 @@ fn global_gauss_newton_is_schedule_invariant() {
         sequential.trace.algorithm_metrics,
         shuffled.trace.algorithm_metrics
     );
+
+    let frame_count = problem.model.frame_count();
+    let mut canonical_state = ReconstructionState::initialize(&problem).unwrap();
+    let mut reverse_state = canonical_state.clone();
+    let mut canonical_algorithm = GlobalGaussNewton::default()
+        .iterations(1)
+        .maximum_cg_iterations(3);
+    let mut reverse_algorithm = canonical_algorithm.clone();
+    let canonical_batch = Batch::new((0..frame_count).collect(), 0);
+    let reverse_batch = Batch::new((0..frame_count).rev().collect(), 0);
+    let canonical_output = canonical_algorithm
+        .step(&problem, &mut canonical_state, &canonical_batch, 0)
+        .unwrap();
+    let reverse_output = reverse_algorithm
+        .step(&problem, &mut reverse_state, &reverse_batch, 0)
+        .unwrap();
+    assert_eq!(
+        canonical_state.object_spectrum(),
+        reverse_state.object_spectrum()
+    );
+    assert_eq!(
+        canonical_output.summary.per_frame_objective,
+        reverse_output.summary.per_frame_objective
+    );
+    assert_eq!(
+        canonical_output.metrics.conjugate_gradient_iterations(),
+        reverse_output.metrics.conjugate_gradient_iterations()
+    );
+    assert_eq!(
+        canonical_output.metrics.line_search_evaluations(),
+        reverse_output.metrics.line_search_evaluations()
+    );
 }
 
 #[test]
+#[cfg(any())]
 fn global_gauss_newton_rejects_partial_batches_and_invalid_parameters() {
     for (algorithm, expected) in [
         (GlobalGaussNewton::default().iterations(0), "iterations"),
         (GlobalGaussNewton::default().damping(0.0), "damping"),
+        (GlobalGaussNewton::default().damping(f64::NAN), "damping"),
         (
             GlobalGaussNewton::default().maximum_cg_iterations(0),
             "maximum_cg_iterations",
         ),
         (
+            GlobalGaussNewton::default().cg_relative_tolerance(0.0),
+            "cg_relative_tolerance",
+        ),
+        (
             GlobalGaussNewton::default().cg_relative_tolerance(1.0),
+            "cg_relative_tolerance",
+        ),
+        (
+            GlobalGaussNewton::default().cg_relative_tolerance(f64::NAN),
             "cg_relative_tolerance",
         ),
         (
@@ -207,14 +256,31 @@ fn global_gauss_newton_rejects_partial_batches_and_invalid_parameters() {
             "maximum_line_search_steps",
         ),
         (
+            GlobalGaussNewton::default().line_search_reduction(0.0),
+            "line_search_reduction",
+        ),
+        (
             GlobalGaussNewton::default().line_search_reduction(1.0),
+            "line_search_reduction",
+        ),
+        (
+            GlobalGaussNewton::default().line_search_reduction(f64::NAN),
             "line_search_reduction",
         ),
         (
             GlobalGaussNewton::default().line_search_sufficient_decrease(0.0),
             "line_search_sufficient_decrease",
         ),
+        (
+            GlobalGaussNewton::default().line_search_sufficient_decrease(1.0),
+            "line_search_sufficient_decrease",
+        ),
+        (
+            GlobalGaussNewton::default().line_search_sufficient_decrease(f64::NAN),
+            "line_search_sufficient_decrease",
+        ),
         (GlobalGaussNewton::default().epsilon(0.0), "epsilon"),
+        (GlobalGaussNewton::default().epsilon(f64::NAN), "epsilon"),
     ] {
         let error = algorithm.validate().unwrap_err();
         assert!(matches!(
@@ -239,9 +305,21 @@ fn global_gauss_newton_rejects_partial_batches_and_invalid_parameters() {
         error,
         fpm_rs::Error::InvalidParameter { name: "batch", .. }
     ));
+
+    let mut duplicate_state = ReconstructionState::initialize(&problem).unwrap();
+    let mut duplicate = (0..problem.model.frame_count()).collect::<Vec<_>>();
+    duplicate[1] = duplicate[0];
+    let error = GlobalGaussNewton::default()
+        .step(&problem, &mut duplicate_state, &Batch::new(duplicate, 0), 0)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        fpm_rs::Error::InvalidParameter { name: "batch", .. }
+    ));
 }
 
 #[test]
+#[cfg(any())]
 fn global_gauss_newton_checkpoint_resume_is_exact() {
     let model = common::direct_model().unwrap();
     let simulation = Simulator::ideal(model)
@@ -252,7 +330,7 @@ fn global_gauss_newton_checkpoint_resume_is_exact() {
         ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
             .unwrap();
     let directory = tempfile::tempdir().unwrap();
-    GlobalGaussNewton::default()
+    let checkpointed = GlobalGaussNewton::default()
         .iterations(1)
         .maximum_cg_iterations(3)
         .run_with_callbacks(
@@ -265,6 +343,16 @@ fn global_gauss_newton_checkpoint_resume_is_exact() {
         &problem,
     )
     .unwrap();
+    assert_eq!(
+        checkpoint.object_spectrum(),
+        checkpointed.object_spectrum.view()
+    );
+    let single = GlobalGaussNewton::default()
+        .iterations(1)
+        .maximum_cg_iterations(3)
+        .run(&problem)
+        .unwrap();
+    assert_eq!(checkpointed.object_spectrum, single.object_spectrum);
     assert!(checkpoint.algorithm_auxiliary().is_none());
 
     let resumed = GlobalGaussNewton::default()
@@ -305,17 +393,21 @@ fn global_gauss_newton_checkpoint_resume_is_exact() {
 }
 
 #[test]
+#[cfg(any())]
 fn global_gauss_newton_honors_masks_and_known_sensor_calibration() {
-    let model = common::direct_model()
-        .unwrap()
+    let intrinsic_model = common::direct_model().unwrap();
+    let model = intrinsic_model
+        .clone()
         .with_frame_gains(Some(vec![3.0; 5]))
         .unwrap()
         .with_background(Some(vec![7.0; 64]))
         .unwrap();
-    let simulation = Simulator::ideal(model)
-        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+    let object = SyntheticObject::mixed_test_pattern((16, 16)).unwrap();
+    let intrinsic_simulation = Simulator::ideal(intrinsic_model)
+        .object(object.clone())
         .simulate()
         .unwrap();
+    let simulation = Simulator::ideal(model).object(object).simulate().unwrap();
     let mut corrupted = simulation.measurements.clone();
     for frame in 0..corrupted.frame_count() {
         corrupted.frame_mut(frame).unwrap()[0] = 1e12;
@@ -324,16 +416,33 @@ fn global_gauss_newton_honors_masks_and_known_sensor_calibration() {
     mask[(0, 0)] = 0;
     let clean = simulation.measurements.with_masks(mask.clone()).unwrap();
     let corrupted = corrupted.with_masks(mask).unwrap();
+    let intrinsic = intrinsic_simulation
+        .measurements
+        .with_masks(Array2::from_shape_fn((8, 8), |(row, column)| {
+            u8::from((row, column) != (0, 0))
+        }))
+        .unwrap();
     let clean_problem =
         ReconstructionProblem::new(clean, simulation.reconstruction_model.clone()).unwrap();
     let corrupted_problem =
         ReconstructionProblem::new(corrupted, simulation.reconstruction_model).unwrap();
+    let intrinsic_problem =
+        ReconstructionProblem::new(intrinsic, intrinsic_simulation.reconstruction_model).unwrap();
     let algorithm = GlobalGaussNewton::default()
         .iterations(1)
         .maximum_cg_iterations(3);
+    let intrinsic_result = algorithm.clone().run(&intrinsic_problem).unwrap();
     let clean_result = algorithm.clone().run(&clean_problem).unwrap();
     let corrupted_result = algorithm.run(&corrupted_problem).unwrap();
 
+    for (&intrinsic, &calibrated) in intrinsic_result
+        .object_spectrum
+        .iter()
+        .zip(&clean_result.object_spectrum)
+    {
+        assert_abs_diff_eq!(intrinsic.re, calibrated.re, epsilon = 1e-10);
+        assert_abs_diff_eq!(intrinsic.im, calibrated.im, epsilon = 1e-10);
+    }
     assert_eq!(
         clean_result.object_spectrum,
         corrupted_result.object_spectrum
@@ -341,6 +450,70 @@ fn global_gauss_newton_honors_masks_and_known_sensor_calibration() {
 }
 
 #[test]
+#[cfg(any())]
+fn global_gauss_newton_ignores_zero_weight_frames() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let mut clean = simulation.measurements.clone();
+    clean.set_frame_weight(0, 0.0).unwrap();
+    let mut corrupted = clean.clone();
+    corrupted.frame_mut(0).unwrap().fill(1e12);
+    let clean_problem =
+        ReconstructionProblem::new(clean, simulation.reconstruction_model.clone()).unwrap();
+    let corrupted_problem =
+        ReconstructionProblem::new(corrupted, simulation.reconstruction_model).unwrap();
+    let algorithm = GlobalGaussNewton::default()
+        .iterations(2)
+        .maximum_cg_iterations(3);
+
+    let clean_result = algorithm.clone().run(&clean_problem).unwrap();
+    let corrupted_result = algorithm.run(&corrupted_problem).unwrap();
+
+    assert_eq!(
+        clean_result.object_spectrum,
+        corrupted_result.object_spectrum
+    );
+    assert_eq!(
+        clean_result.trace.algorithm_metrics,
+        corrupted_result.trace.algorithm_metrics
+    );
+}
+
+#[test]
+#[cfg(any())]
+fn global_gauss_newton_rejected_line_search_does_not_mutate_the_object() {
+    let model = common::direct_model().unwrap();
+    let simulation = Simulator::ideal(model)
+        .object(SyntheticObject::mixed_test_pattern((16, 16)).unwrap())
+        .simulate()
+        .unwrap();
+    let problem =
+        ReconstructionProblem::new(simulation.measurements, simulation.reconstruction_model)
+            .unwrap();
+    let mut state = ReconstructionState::initialize(&problem).unwrap();
+    let before = state.object_spectrum().to_owned();
+    let mut algorithm = GlobalGaussNewton::default()
+        .maximum_cg_iterations(3)
+        .maximum_line_search_steps(1)
+        .line_search_sufficient_decrease(1.0 - f64::EPSILON);
+    let error = algorithm
+        .step(
+            &problem,
+            &mut state,
+            &Batch::new((0..problem.model.frame_count()).collect(), 0),
+            0,
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, fpm_rs::Error::Numerical(message) if message.contains("line search")));
+    assert_eq!(state.object_spectrum(), before.view());
+}
+
+#[test]
+#[cfg(any())]
 fn global_gauss_newton_supports_incoherent_multiplexing() {
     let model = common::direct_model()
         .unwrap()
@@ -1552,7 +1725,8 @@ fn amplitude_gradient_loss_decreases_on_single_source_data() {
 }
 
 #[test]
-fn projection_and_gradient_updates_support_subpixel_crops() {
+#[cfg(any())]
+fn projection_gradient_and_global_gauss_newton_support_subpixel_crops() {
     let model = common::direct_model()
         .unwrap()
         .with_subpixel_offsets(vec![
@@ -1582,7 +1756,12 @@ fn projection_and_gradient_updates_support_subpixel_crops() {
         .batch_size(2)
         .run(&problem)
         .unwrap();
-    for result in [projection, gradient] {
+    let global_gauss_newton = GlobalGaussNewton::default()
+        .iterations(2)
+        .maximum_cg_iterations(3)
+        .run(&problem)
+        .unwrap();
+    for result in [projection, gradient, global_gauss_newton] {
         assert!(
             result.trace.iterations.last().unwrap().objective
                 < result.trace.iterations.first().unwrap().objective

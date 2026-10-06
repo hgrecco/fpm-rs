@@ -7,7 +7,7 @@ for NumPy-based scientific workflows.
 
 Use it to compile illumination geometry into a Fourier-space model, simulate
 detector measurements, reconstruct a complex object with AP, FPIE, mPIE, EPRY,
-ADMM, global Gauss–Newton, or gradient descent, and record diagnostics or
+ADMM, or gradient descent, and record diagnostics or
 checkpoints. It is intended for microscopy researchers, algorithm developers,
 and applications that need a reusable FPM core. Diffraction-plane ptychography,
 multislice propagation, and GPU execution are outside the current scope.
@@ -74,8 +74,8 @@ straight to the [Python API](reference/python/index.md).
   and resolved illumination state.
 - `model` compiles sampling, pupil, Fourier crops, and the shared forward model.
 - `measurements` provides resident and lazy intensity stacks plus preprocessing.
-- `algorithms` implements AP, FPIE, mPIE, EPRY, linearized ADMM, matrix-free
-  global Gauss–Newton, and gradient descent.
+- `algorithms` implements AP, FPIE, mPIE, EPRY, linearized ADMM, and gradient
+  descent.
 - `reconstruction` provides problems, state, results, schedules, batches, and
   runner orchestration.
 - `callbacks` records images, CSV history, checkpoints, progress, and early

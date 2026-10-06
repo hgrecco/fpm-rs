@@ -37,7 +37,6 @@ from ._core import (
     FpmError,
     FpmIoError,
     FrameOutOfRangeError,
-    GlobalGaussNewton,
     GradientDescent,
     BoundedFiniteDifferenceOptimizer,
     BrightfieldCircleInitializer,
