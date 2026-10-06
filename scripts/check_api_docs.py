@@ -12,6 +12,7 @@ CHECKS = (
     "check_python_docs.py",
     "check_python_api.py",
     "check_algorithm_guidance.py",
+    "check_quickstart_calls.py",
     "check_citations.py",
 )
 

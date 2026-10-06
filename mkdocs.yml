@@ -7,6 +7,8 @@ repo_name: fpm-rs
 edit_uri: !ENV [MKDOCS_EDIT_URI, ""]
 hooks:
   - scripts/mkdocs_hooks.py
+exclude_docs: |
+  AGENTS.md
 
 theme:
   name: material

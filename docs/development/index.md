@@ -76,6 +76,15 @@ modify sources remain `format-rust`, `format-python`, and `format-toml`; `pixi
 run lint` runs the configured pre-commit checks. Dataset tests use generated
 local bundles and never require network access.
 
+Choose validation in proportion to the change. Focused implementation changes
+start with their affected Rust or Python tests. Public Rust API and rustdoc
+changes require `pixi run rust-doc` and `pixi run rust-doc-test`; public Python
+API, signature, stub, or docstring changes require `pixi run python-api-docs`.
+Authored-site, navigation, and notebook changes require `pixi run docs-build`,
+while citation changes additionally require `pixi run citation-check`. Use
+`pixi run ci` for cross-cutting changes or when complete source validation is
+warranted; a narrow prose correction does not require every unrelated suite.
+
 ## Python extension
 
 `pyproject.toml` uses maturin with `python/Cargo.toml`, module name
@@ -109,6 +118,37 @@ compares exports, public class members, and callable parameter shapes against an
 installed local extension. `scripts/check_python_docs.py` checks every routed
 public stub and wrapper item for meaningful prose without a broad exclusion
 list. Both run through `pixi run python-api-docs` after `maturin develop`.
+That task also checks keyword-oriented calls across `README.md`, the site landing
+page, the quickstart, and its tutorial notebook so their recommended calling
+convention cannot drift silently.
+
+## Physical calibration changes
+
+Keep physical `PlanarLedArray` calibration distinct from generic independent
+k-vector or Fourier-grid correction. Physical parameters retain SI units and
+the active, right-handed, extrinsic XYZ rotation convention; arbitrary source
+shifts are not realizable apparatus calibration.
+
+Keep illumination geometry, stable `SourceCalibration`, and sparse canonical
+`AcquisitionPlan` state separate and resolve them atomically through
+`Illumination`. The planar-array calibrator may own the corresponding `Optics`
+and `Illumination`, but its object phase must call the canonical compiled
+forward model and measurement loss. Preserve Rust/Python illumination parity,
+sources normally at negative sample `z`, positive-`z` incident propagation, and
+the separately documented propagation-vector/Fourier-crop sign convention.
+
+Preserve the identifiability checks: reject lateral translation with its
+corresponding reference index, constrain selected offset means when translation
+is active, normalize source powers and frame gains to mean one, and never
+silently enable source offsets or an unconstrained source-power/frame-gain
+combination. Do not add geometry-level wavelength overrides, acquisition
+ordering, powers, gains, angle-list or coded-geometry types, or pre-release
+compatibility layers.
+
+Update physical calibration results, callbacks, checkpoints, bundles,
+serialization, Rust and Python APIs, authoritative stubs, and synthetic recovery
+tests together. New physical parameters require bounded deterministic recovery
+tests and partial-update regression coverage.
 
 ## Notebook maintenance
 
@@ -143,15 +183,52 @@ strict mode and workspace Rustdoc with all features and `-D warnings`.
 documentation a compiler error. The same gates run in pull-request CI; the
 fast citation check also runs in pre-commit.
 
-Scientific references belong beside the claim or method they support. Include
-authors, linked title, venue, volume/pages or article number, and year; use a
-canonical `https://doi.org/...` target where one exists. `pixi run
-citation-check` rejects bare identifiers and noncanonical DOI resolvers in
-authored Rust, Python, Markdown, and notebook sources. Live publisher checks
-are intentionally not a merge gate because publisher outages and bot blocking
-are nondeterministic; verify new or changed metadata manually against the DOI
-resolver and an authoritative publisher or archival record and report that
-source in the change summary.
+### Scientific citations
+
+Cite a source at the closest durable explanation of every
+publication-derived algorithm, formula, threshold, convention, dataset, or
+scientific claim. A citation does not replace an explanation of what this
+implementation does, its assumptions, or its material differences from the
+cited work.
+
+State the implementation location, public API, assumptions, approximations,
+and references when documenting a scientific method.
+
+Use the primary source when available. Verify bibliographic metadata against
+the canonical DOI resolver and an authoritative publisher or archive; never
+infer authors, titles, venues, dates, pages, or article numbers. Give a complete
+reference: authors, a linked title or author-year label, venue, volume and issue
+when applicable, page range or article number, and year. Link to the canonical
+`https://doi.org/...` URL rather than displaying a bare DOI or using another
+resolver.
+
+Place the full reference according to the public surface:
+
+- In Rust, use a `# References` section in the rustdoc for the public item that
+  exposes the method or behavior. Add an implementation comment only when a
+  formula, sign, constant, or translation would otherwise be hard to audit;
+  identify the source there by author and year.
+- In Python, use a NumPy-style `References` section in the authoritative
+  checked-in stub. Keep corresponding wrapper and PyO3 runtime docstrings
+  semantically synchronized when they expose the same method or claim.
+- In Markdown and notebooks, put the full reference in the paragraph making
+  the claim or in a clearly linked `References` section on the same page.
+- In tests, examples, and fixtures, cite a publication only when an expected
+  value, convention, or dataset comes from it. Explain the derivation or
+  transformation nearby and point to the public documentation containing the
+  full reference.
+
+`CITATION.cff` describes how to cite `fpm-rs`; it is not the bibliography for
+scientific methods. Update it only for software authorship, release version,
+title, repository, or preferred software-citation changes, and keep its version
+synchronized with `Cargo.toml` and `pyproject.toml` at every release. Treat it
+as part of the release checklist alongside `CHANGES.md`.
+
+Run `pixi run citation-check` after adding or changing citations, then render
+the affected Rustdoc, Python API documentation, or MkDocs page. Live publisher
+checks are intentionally not a merge gate because publisher outages and bot
+blocking are nondeterministic; report the DOI resolver and publisher or archive
+used to verify changed metadata.
 
 ## Release checks
 

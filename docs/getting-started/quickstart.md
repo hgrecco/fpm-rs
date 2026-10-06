@@ -25,17 +25,25 @@ geometry = fpm.PlanarLEDArray(
     ),
 )
 illumination = fpm.Illumination(geometry=geometry)
-model = fpm.compile_model(optics, illumination, image_shape=(32, 32))
+model = fpm.compile_model(
+    optics=optics,
+    illumination=illumination,
+    image_shape=(32, 32),
+)
 
 row, column = np.indices(model.reconstruction_shape)
 amplitude = 0.7 + 0.3 * ((row // 8 + column // 8) % 2)
 phase = 0.4 * np.sin(row / 7.0) * np.cos(column / 9.0)
 object_field = np.asarray(amplitude * np.exp(1j * phase), dtype=np.complex128)
 
-simulation = fpm.simulate(model, object_field, seed=1234)
+simulation = fpm.simulate(
+    true_model=model,
+    object=object_field,
+    seed=1234,
+)
 problem = fpm.ReconstructionProblem(
-    simulation.measurements,
-    simulation.reconstruction_model,
+    measurements=simulation.measurements,
+    model=simulation.reconstruction_model,
     name="quickstart",
 )
 result = fpm.AlternatingProjection(iterations=20).run(problem)

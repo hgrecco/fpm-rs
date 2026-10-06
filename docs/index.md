@@ -30,22 +30,35 @@ builds, Pixi setup, and troubleshooting.
 import numpy as np
 import fpm_rs as fpm
 
-optics = fpm.Optics(532e-9, 0.10, 4.0, 6.5e-6)
-geometry = fpm.PlanarLEDArray(
-    (3, 3), 4e-3, (1.0, 1.0),
-    fpm.ArrayPose.from_translation((0.0, 0.0, -90e-3)),
+optics = fpm.Optics(
+    wavelength_vacuum_m=532e-9,
+    objective_na=0.10,
+    magnification=4.0,
+    camera_pixel_size=6.5e-6,
 )
-illumination = fpm.Illumination(geometry)
-model = fpm.compile_model(optics, illumination, (32, 32))
+geometry = fpm.PlanarLEDArray(
+    shape=(3, 3),
+    pitch_m=4e-3,
+    reference_index=(1.0, 1.0),
+    pose=fpm.ArrayPose.from_translation(
+        translation_m=(0.0, 0.0, -90e-3),
+    ),
+)
+illumination = fpm.Illumination(geometry=geometry)
+model = fpm.compile_model(
+    optics=optics,
+    illumination=illumination,
+    image_shape=(32, 32),
+)
 
 simulation = fpm.simulate(
-    model,
-    np.ones(model.reconstruction_shape, dtype=np.complex128),
+    true_model=model,
+    object=np.ones(model.reconstruction_shape, dtype=np.complex128),
     seed=1234,
 )
 problem = fpm.ReconstructionProblem(
-    simulation.measurements,
-    simulation.reconstruction_model,
+    measurements=simulation.measurements,
+    model=simulation.reconstruction_model,
 )
 result = fpm.AlternatingProjection(iterations=10).run(problem)
 print(result.amplitude.shape)  # (42, 42)
