@@ -1,6 +1,7 @@
 # Reconstruction algorithms
 
-Every solver exposes the same `run` method and releases the Python GIL while
+Ordinary solvers share a `run` interface; the spectral solver accepts a separate
+spectral problem with keyword-only arguments. Both release the Python GIL while
 executing Rust reconstruction code. The choice of solver controls its update
 rule, recoverable quantities, and algorithm-specific parameters.
 
@@ -17,6 +18,14 @@ rule, recoverable quantities, and algorithm-specific parameters.
 ::: fpm_rs.Admm
 
 ::: fpm_rs.GradientDescent
+
+## Narrowband spectral reconstruction
+
+::: fpm_rs.SpectralAlternatingProjection
+
+::: fpm_rs.SyntheticWavelengthUnwrapper
+
+::: fpm_rs.MultiWavelengthGradientDescent
 
 ## Physical planar-array calibration
 

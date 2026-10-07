@@ -1,9 +1,11 @@
 use fpm_rs::{
     Error,
-    algorithms::{Fpie, ReconstructionAlgorithm},
+    algorithms::{Fpie, JointReconstruction, ReconstructionAlgorithm},
     backend::CpuBackend,
     experiment::{ArrayPose, Illumination, Optics, PlanarLedArray},
-    illumination_calibration::{CalibrationParameterSpec, PlanarArrayCalibrationParameters},
+    illumination_calibration::{
+        CalibrationParameterSpec, IlluminationCalibration, PlanarArrayCalibrationParameters,
+    },
     illumination_initialization::{
         BrightfieldCircleInitializer, BrightfieldCircleOptions, PlanarArrayInitializationAction,
         PlanarArrayInitializationCallback, PlanarArrayInitializationProgress,
@@ -182,5 +184,130 @@ fn simulated_brightfield_initialization_reduces_planar_translation_error() {
     assert!(matches!(
         bundle.verify(),
         Err(Error::ArtifactHashMismatch { .. })
+    ));
+}
+
+#[test]
+fn circle_warm_start_improves_the_same_budget_joint_calibration() {
+    let optics = optics();
+    let nominal = illumination([0.0, 0.0, -80e-3]);
+    let truth = illumination([0.4e-3, -0.3e-3, -80e-3]);
+    let image_shape = (48, 56);
+    let reconstruction_shape = (96, 112);
+    let true_model = ImagePlaneModel::from_experiment(
+        &optics,
+        &truth,
+        image_shape,
+        ReconstructionShape::Exact(reconstruction_shape),
+    )
+    .unwrap();
+    let nominal_model = ImagePlaneModel::from_experiment(
+        &optics,
+        &nominal,
+        image_shape,
+        ReconstructionShape::Exact(reconstruction_shape),
+    )
+    .unwrap();
+    let simulation = Simulator::ideal(true_model)
+        .object(SyntheticObject::mixed_test_pattern(reconstruction_shape).unwrap())
+        .reconstruction_model(nominal_model.clone())
+        .simulate()
+        .unwrap();
+    let translation =
+        CalibrationParameterSpec::new(-1.0e-3, 1.0e-3, 0.2e-3).finite_difference_step(1e-6);
+    let parameters = PlanarArrayCalibrationParameters::builder()
+        .translation_specs([Some(translation.clone()), Some(translation), None])
+        .build()
+        .unwrap();
+    let initializer =
+        BrightfieldCircleInitializer::new(parameters.clone()).options(BrightfieldCircleOptions {
+            center_search_radius_na: 0.012,
+            pupil_radius_search_na: 0.012,
+            gaussian_sigma_pixels: 1.5,
+            minimum_edge_contrast: 1e-4,
+            maximum_fit_steps: 150,
+            fit_initial_step_size: 0.25,
+            ..BrightfieldCircleOptions::default()
+        });
+    let initialized = initializer
+        .initialize(&simulation.measurements, &optics, &nominal, &nominal_model)
+        .unwrap();
+
+    let cold_problem =
+        ReconstructionProblem::new(simulation.measurements.clone(), nominal_model).unwrap();
+    let warm_problem = ReconstructionProblem::new(
+        simulation.measurements,
+        initialized.initialized_model.clone(),
+    )
+    .unwrap();
+    let cold = JointReconstruction::new(
+        Fpie::default().iterations(1),
+        optics.clone(),
+        nominal,
+        IlluminationCalibration::new(parameters.clone()),
+        1,
+    )
+    .run(&cold_problem)
+    .unwrap();
+    let warm = JointReconstruction::new(
+        Fpie::default().iterations(1),
+        optics.clone(),
+        initialized.initialized_illumination.clone(),
+        IlluminationCalibration::new(parameters),
+        1,
+    )
+    .run(&warm_problem)
+    .unwrap();
+    let cold_error = source_error(&optics, &cold.calibrated_illumination, &truth);
+    let warm_error = source_error(&optics, &warm.calibrated_illumination, &truth);
+    assert!(
+        warm_error < cold_error,
+        "warm source error did not improve under the same joint-calibration budget: {cold_error} -> {warm_error}"
+    );
+}
+
+#[test]
+fn circle_initializer_rejects_a_textureless_specimen() {
+    let optics = optics();
+    let nominal = illumination([0.0, 0.0, -80e-3]);
+    let truth = illumination([0.4e-3, -0.3e-3, -80e-3]);
+    let image_shape = (48, 56);
+    let reconstruction_shape = (96, 112);
+    let true_model = ImagePlaneModel::from_experiment(
+        &optics,
+        &truth,
+        image_shape,
+        ReconstructionShape::Exact(reconstruction_shape),
+    )
+    .unwrap();
+    let nominal_model = ImagePlaneModel::from_experiment(
+        &optics,
+        &nominal,
+        image_shape,
+        ReconstructionShape::Exact(reconstruction_shape),
+    )
+    .unwrap();
+    let simulation = Simulator::ideal(true_model)
+        .object(SyntheticObject::constant(reconstruction_shape, 1.0, 0.0).unwrap())
+        .reconstruction_model(nominal_model.clone())
+        .simulate()
+        .unwrap();
+    let translation =
+        CalibrationParameterSpec::new(-1.0e-3, 1.0e-3, 0.2e-3).finite_difference_step(1e-6);
+    let parameters = PlanarArrayCalibrationParameters::builder()
+        .translation_specs([Some(translation.clone()), Some(translation), None])
+        .build()
+        .unwrap();
+    let initializer =
+        BrightfieldCircleInitializer::new(parameters).options(BrightfieldCircleOptions {
+            center_search_radius_na: 0.012,
+            pupil_radius_search_na: 0.012,
+            gaussian_sigma_pixels: 1.5,
+            minimum_edge_contrast: 0.2,
+            ..BrightfieldCircleOptions::default()
+        });
+    assert!(matches!(
+        initializer.initialize(&simulation.measurements, &optics, &nominal, &nominal_model),
+        Err(Error::InvalidMeasurements(_))
     ));
 }

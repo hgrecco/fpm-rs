@@ -7,6 +7,11 @@
 //! implement [`crate::algorithms::ReconstructionAlgorithm`] and consume a validated
 //! [`crate::reconstruction::ReconstructionProblem`]; illumination geometry is compiled
 //! beforehand into the problem's [`crate::model::ImagePlaneModel`].
+//!
+//! [`crate::algorithms::SpectralAlternatingProjection`] reconstructs wavelength fields from a compiled
+//! [`crate::model::SpectralImagePlaneModel`]. [`crate::algorithms::MultiWavelengthGradientDescent`]
+//! instead fits wavelength amplitudes and one shared nondispersive OPD to those
+//! detector measurements, using referenced phase mixing or an explicit OPD start.
 
 mod adaptive_alternating_projection;
 mod admm;
@@ -19,8 +24,10 @@ mod gradient_descent;
 mod joint_reconstruction;
 mod metrics;
 mod mpie;
+mod multi_wavelength;
 pub mod objective;
 mod regularization;
+mod spectral;
 
 pub use adaptive_alternating_projection::{
     AdaptiveAlternatingProjection, AdaptiveAlternatingProjectionIterationMetrics,
@@ -35,6 +42,8 @@ pub use joint_reconstruction::{
 };
 pub use metrics::{AlgorithmIterationMetrics, NoIterationMetrics, StepOutput, StepSummary};
 pub use mpie::Mpie;
+pub use multi_wavelength::{MultiWavelengthGradientDescent, MultiWavelengthSolverResult};
+pub use spectral::{SpectralAlternatingProjection, SpectralReconstructionAlgorithm};
 
 use crate::{
     Result,

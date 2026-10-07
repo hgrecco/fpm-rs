@@ -15,6 +15,34 @@ algorithm path is statically dispatched without a dataset enum or measurement
 trait objects. Construction, preprocessing, materialization, and cache controls
 remain operations on the concrete storage types.
 
+## Narrowband spectral channels
+
+`SpectralImagePlaneModel` contains ordered ordinary `ImagePlaneModel` kernels
+and a sparse global detector plan. Every channel has its own wavelength, pupil,
+source powers, k-vectors, and crop offsets, while detector shape and object-plane
+pixel pitch are common. Shared physical geometry is resolved with every
+channel's optics. The high-resolution grid contains all channels' crop bounds.
+
+Detector rows combine channel/local-frame intensities incoherently: fields at
+different wavelengths do not interfere in this model. The physical detector
+gain and uniform background are applied after the spectral sum. Sharing the
+complex object is an explicit approximation (`SharedComplex`); independent
+objects are the default. Sampled pupils are always channel-specific. See
+[multi-wavelength reconstruction](../guides/reconstruction.md#reconstruct-multiple-wavelengths)
+for the method, scope, reference, and executable example.
+
+For a common nondispersive OPD, independent channel phases scale with inverse
+wavelength. `SyntheticWavelengthUnwrapper` combines referenced phase differences
+to recover fringe orders and an OPD map; `SharedComplex` represents a different
+assumption. See [OPD phase unwrapping](../guides/reconstruction.md#unwrap-opd-across-wavelengths)
+for the phase reference, interval, resolution, and noise requirements.
+
+`MultiWavelengthGradientDescent` also fits that common OPD and separate channel
+amplitudes directly to detector intensities. Its channel phases derive from the
+same OPD throughout optimization. See the
+[joint OPD solver](../guides/reconstruction.md#jointly-fit-opd-to-detector-intensities)
+for initialization, reference gauges, objective, and constraints.
+
 ## Object, pupil, and Fourier sampling
 
 The object is a complex field. Its magnitude is amplitude and its angle is

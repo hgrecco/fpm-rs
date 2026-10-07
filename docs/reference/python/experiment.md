@@ -44,3 +44,13 @@ with `Optics` before compilation.
 ::: fpm_rs.ResolvedFrame
 
 ::: fpm_rs.ResolvedIllumination
+
+## Narrowband spectral acquisition
+
+::: fpm_rs.SpectralChannel
+
+::: fpm_rs.SpectralGeometry
+
+::: fpm_rs.SpectralFrame
+
+::: fpm_rs.SpectralAcquisitionPlan

@@ -44,6 +44,848 @@ Path: TypeAlias = str | PathLike[str]
 __version__: str
 """Installed package version."""
 
+class SpectralChannel:
+    """One narrowband channel's fixed optics, source powers, and local acquisition.
+
+    Parameters
+    ----------
+    channel_id
+        Stable nonempty unique identifier, retained with the output arrays.
+    optics
+        Channel-specific optics with positive vacuum wavelength in metres.
+    calibration
+        Fixed source powers; known spectral response can be included here.
+    acquisition
+        Local ordinary acquisition rows, including source mixing and local gains.
+
+    Notes
+    -----
+    Inputs are copied into Rust-owned storage. IDs, distinct wavelengths, and
+    acquisition compatibility are validated by ``compile_spectral_model``.
+    Geometry is an explicit separate ``SpectralGeometry`` choice.
+    """
+    def __init__(
+        self,
+        *,
+        channel_id: str,
+        optics: Optics,
+        calibration: SourceCalibration,
+        acquisition: AcquisitionPlan,
+    ) -> None: ...
+    @property
+    def channel_id(self) -> str:
+        """Return the stable narrowband channel identifier."""
+        ...
+    @property
+    def wavelength_vacuum_m(self) -> float:
+        """Return this channel's vacuum wavelength in metres."""
+        ...
+
+class SpectralGeometry:
+    """Explicit sharing or separation of physical illumination geometry.
+
+    Shared geometry is resolved with each channel's own optics; this preserves
+    wavelength-dependent transverse wave vectors. Channel-local direct
+    ``KVectorList`` values are accepted, but sharing them is rejected during
+    compilation because they already encode a particular wavelength.
+    """
+    @staticmethod
+    def shared(*, geometry: Geometry) -> SpectralGeometry:
+        """Copy one physical geometry to resolve separately for every channel."""
+        ...
+    @staticmethod
+    def per_channel(*, geometries: Sequence[Geometry]) -> SpectralGeometry:
+        """Copy exactly one geometry per channel, in declared channel order."""
+        ...
+
+class SpectralFrame:
+    """One physical detector exposure's sparse narrowband intensity composition.
+
+    Parameters
+    ----------
+    contributions
+        Triples ``(channel_index, local_frame_index, spectral_weight)``.
+        Indices are zero-based and weights are nonnegative intensity multipliers.
+    gain
+        Finite positive detector gain applied once after the spectral sum.
+    background
+        Finite nonnegative uniform detector background, in intensity units.
+
+    Notes
+    -----
+    The plan constructor validates values, sums duplicate pairs, removes zero
+    weights, and sorts pairs. Local frame gains precede the spectral sum.
+    """
+    def __init__(
+        self,
+        *,
+        contributions: Sequence[tuple[int, int, float]],
+        gain: float = 1.0,
+        background: float = 0.0,
+    ) -> None: ...
+    @property
+    def contributions(self) -> list[tuple[int, int, float]]:
+        """Return copied channel/local-frame/intensity-weight triples."""
+        ...
+    @property
+    def gain(self) -> float:
+        """Return the positive physical detector exposure gain."""
+        ...
+    @property
+    def background(self) -> float:
+        """Return the uniform additive detector intensity background."""
+        ...
+
+class SpectralAcquisitionPlan:
+    """Canonical detector exposures with explicit separate or multiplexed semantics.
+
+    Rows retain physical acquisition order; pairs within rows are sorted.
+    Every row must retain a finite positive contribution. Channel/local-frame
+    references and complete structural coverage are checked during compilation.
+    """
+    @staticmethod
+    def separate(*, frame_counts: Sequence[int]) -> SpectralAcquisitionPlan:
+        """Create channel-major separate exposures with unit weights and gains.
+
+        Each count must be positive. Detector backgrounds are zero.
+        """
+        ...
+    @staticmethod
+    def multiplexed(*, frames: Sequence[SpectralFrame]) -> SpectralAcquisitionPlan:
+        """Canonicalize sparse exposures while preserving physical row order.
+
+        Reject empty rows and non-finite or invalid weights/calibration. Duplicate
+        channel/local-frame pairs are summed and zero weights removed.
+        """
+        ...
+    @property
+    def frame_count(self) -> int:
+        """Return the number of physical detector exposures."""
+        ...
+    @property
+    def frames(self) -> list[SpectralFrame]:
+        """Return copied canonical sparse detector rows in acquisition order."""
+        ...
+
+class SpectralImagePlaneModel:
+    """Compiled wavelength-specific kernels on one common object grid.
+
+    Created by ``compile_spectral_model``. Algorithms use this immutable model,
+    without access to physical source geometry. Channel pupils and crops remain
+    wavelength-specific even when the complex object is explicitly shared.
+    """
+    @property
+    def channel_ids(self) -> list[str]:
+        """Return stable identifiers in numerical channel order."""
+        ...
+    @property
+    def wavelengths_vacuum_m(self) -> list[float]:
+        """Return ordered channel vacuum wavelengths in metres."""
+        ...
+    @property
+    def image_shape(self) -> Shape2D:
+        """Return the common low-resolution detector height and width."""
+        ...
+    @property
+    def reconstruction_shape(self) -> Shape2D:
+        """Return common-grid high-resolution object height and width."""
+        ...
+    @property
+    def frame_count(self) -> int:
+        """Return the physical detector acquisition frame count."""
+        ...
+    @property
+    def object_coupling(self) -> Literal["independent", "shared_complex"]:
+        """Return the explicitly selected complex transmission sharing rule."""
+        ...
+    @property
+    def channel_models(self) -> list[ImagePlaneModel]:
+        """Return copied ordinary kernels in declared channel order."""
+        ...
+    @property
+    def acquisition(self) -> SpectralAcquisitionPlan:
+        """Return a copied canonical sparse detector acquisition plan."""
+        ...
+    def forward_intensities(self, *, object_spectra: ComplexArray) -> FloatArray:
+        """Evaluate the grayscale detector stack from centered complex spectra.
+
+        Parameters
+        ----------
+        object_spectra
+            C-contiguous finite complex128 array of shape
+            ``(objects, height, width)`` on the common reconstruction grid.
+            Spectra follow the core's forward FFT normalization by ``1/(H*W)``.
+            Independent coupling requires one object per channel; shared
+            coupling requires exactly one object. The input is copied.
+
+        Returns
+        -------
+        numpy.ndarray
+            Owned writable float64 ``(frames, image_height, image_width)``
+            intensities. Gains/background apply after the incoherent sum.
+
+        Raises
+        ------
+        FpmError
+            If count, shape, layout, or finite-value validation fails.
+
+        Notes
+        -----
+        Releases the GIL while evaluating canonical channel forward operators.
+        """
+        ...
+
+def compile_spectral_model(
+    *,
+    channels: Sequence[SpectralChannel],
+    geometry: SpectralGeometry,
+    acquisition: SpectralAcquisitionPlan,
+    image_shape: Shape2D,
+    reconstruction_shape: ReconstructionShapeSpec = "smooth",
+    object_coupling: Literal["independent", "shared_complex"] = "independent",
+) -> SpectralImagePlaneModel:
+    """Compile narrowband kernels and size one grid from all channel crop bounds.
+
+    Parameters
+    ----------
+    channels
+        Ordered channels with unique IDs and distinct positive vacuum wavelengths.
+    geometry
+        Explicit shared physical or channel-local geometry choice.
+    acquisition
+        Explicit sparse global detector exposure plan.
+    image_shape
+        Common detector ``(height, width)``.
+    reconstruction_shape
+        Explicit common grid or minimum, smooth, or power-of-two union sizing.
+    object_coupling
+        Independent transmissions by default. ``shared_complex`` stores one
+        transmission and assumes wavelength independence of that complex field.
+
+    Returns
+    -------
+    SpectralImagePlaneModel
+        Immutable copied kernels retaining channel-specific sampling and pupils.
+
+    Raises
+    ------
+    FpmError
+        For invalid IDs/wavelengths/references, uncovered local frames, shared
+        direct k-vectors, unequal object-plane detector pitch, or insufficient grid.
+
+    Notes
+    -----
+    Compilation releases the GIL. Detector registration, resampling, finite
+    bandwidth, and dispersive material models are outside this implementation.
+    """
+    ...
+
+class SpectralReconstructionProblem:
+    """Scalar detector measurements paired with a compiled spectral model.
+
+    Parameters
+    ----------
+    measurements
+        ``MeasurementStack`` or C-contiguous float64
+        ``(frames, image_height, image_width)`` array copied into Rust storage.
+    model
+        Compiled spectral model with equal detector count and shape.
+    frame_weights
+        Optional finite nonnegative reconstruction weights, one per detector row.
+    masks
+        Optional C-contiguous uint8 array matching measurements; zero excludes pixels.
+
+    Notes
+    -----
+    Positive-weight rows must have unmasked pixels, and every channel/local row
+    must occur in a positive-weight detector frame. Membership comes from the
+    spectral plan, not ``FrameMetadata.illumination_index``. Validation releases
+    the GIL after input conversion.
+    """
+    def __init__(
+        self,
+        *,
+        measurements: MeasurementStack | FloatArray,
+        model: SpectralImagePlaneModel,
+        frame_weights: Sequence[float] | None = None,
+        masks: MaskArray | None = None,
+    ) -> None: ...
+    @property
+    def frame_count(self) -> int:
+        """Return the number of physical detector exposures."""
+        ...
+    @property
+    def image_shape(self) -> Shape2D:
+        """Return the common low-resolution detector height and width."""
+        ...
+    @property
+    def reconstruction_shape(self) -> Shape2D:
+        """Return the common high-resolution object height and width."""
+        ...
+
+class SpectralReconstructionResult:
+    """Owned channel-ordered spectral fields and the global acquisition trace.
+
+    Array properties return writable copies with channel as the first axis.
+    Shared-object output repeats the identical field in every channel plane.
+    Unconstrained AP has independent unobservable phase pistons for independent
+    objects, or one for shared-complex coupling. Joint OPD descent imposes a
+    further referenced phase constraint; object_coupling describes the compiled
+    model's field storage/reuse, not its real-parameter coupling.
+    """
+    def unwrap_opd(
+        self,
+        *,
+        unwrapper: SyntheticWavelengthUnwrapper,
+        phase_offsets_rad: Sequence[float] | None = None,
+        reference_mask: MaskArray | None = None,
+        reference_opd_m: float = 0.0,
+        mask: MaskArray | None = None,
+    ) -> OpticalPathDifferenceResult:
+        """Combine independent wavelength phases into referenced common OPD.
+
+        Parameters
+        ----------
+        unwrapper
+            Nondispersive phase-mixing configuration with an explicit OPD interval.
+        phase_offsets_rad
+            One constant phase piston per channel in radians, subtracted before
+            mixing. Requires omission of ``reference_mask`` and zero
+            ``reference_opd_m``. Zero offsets require already referenced fields.
+        reference_mask
+            Alternative C-contiguous uint8 ``(height, width)`` constant-OPD
+            reference region. Nonzero selects pixels, intersected with validity.
+        reference_opd_m
+            Known constant reference-region OPD in metres; only applies to a mask.
+        mask
+            Optional matching C-contiguous uint8 validity mask; zero excludes pixels.
+
+        Returns
+        -------
+        OpticalPathDifferenceResult
+            Common-grid OPD in metres and phase consistency/order diagnostics.
+
+        Raises
+        ------
+        FpmError
+            For shared-complex coupling, invalid references, shapes, or values.
+        ValueError
+            Unless exactly one reference choice is supplied.
+
+        Notes
+        -----
+        Masks are copied; computation releases the GIL. Uses channel metadata
+        for wavelengths and ordering. Fields must be registered with matched
+        spatial resolution and negligible OPD dispersion. See
+        ``SyntheticWavelengthUnwrapper`` for the hierarchy and its reference.
+        """
+        ...
+    @property
+    def channel_ids(self) -> list[str]:
+        """Return stable identifiers aligned with stacked channel arrays."""
+        ...
+    @property
+    def wavelengths_vacuum_m(self) -> list[float]:
+        """Return channel vacuum wavelengths in metres, in output order."""
+        ...
+    @property
+    def object_coupling(self) -> Literal["independent", "shared_complex"]:
+        """Return the compiled model's complex-field storage/reuse rule."""
+        ...
+    @property
+    def object(self) -> ComplexArray:
+        """Return complex128 transmission copies shaped ``(channels, height, width)``."""
+        ...
+    @property
+    def object_spectrum(self) -> ComplexArray:
+        """Return centered complex128 spectra shaped ``(channels, height, width)``."""
+        ...
+    @property
+    def amplitude(self) -> FloatArray:
+        """Return nonnegative float64 object magnitudes with channel first."""
+        ...
+    @property
+    def phase(self) -> FloatArray:
+        """Return float64 wrapped object phases in radians with channel first."""
+        ...
+    @property
+    def pupils(self) -> ComplexArray:
+        """Return fixed complex128 pupils shaped ``(channels, image_height, image_width)``."""
+        ...
+    @property
+    def trace(self) -> list[tuple[int, float, float]]:
+        """Return iteration, weighted objective, and elapsed seconds.
+
+        Spectral AP reports pre-update pass objectives starting at one. Joint
+        OPD descent reports the constrained initial objective at zero followed
+        by post-update full-data smoothed amplitude objectives.
+        """
+        ...
+    @property
+    def completed_iterations(self) -> int:
+        """Return the number of complete global acquisition passes."""
+        ...
+
+class SpectralAlternatingProjection:
+    """Object-only narrowband amplitude projection with fixed channel pupils.
+
+    Parameters
+    ----------
+    iterations
+        Positive number of complete global acquisition passes.
+    object_step
+        Finite positive object correction relaxation.
+    batch_size
+        Positive exposures per step; does not alter per-frame update order.
+    epsilon
+        Finite positive division floor and dark-prediction threshold.
+
+    Notes
+    -----
+    All coherent modes of one detector exposure are evaluated before updates.
+    One measured-to-predicted amplitude ratio corrects all modes, with weighted
+    canonical adjoints accumulated into independent or shared objects. Only
+    current-exposure fields are retained. Source powers, gains, backgrounds,
+    and per-channel pupils stay fixed. Single-channel and separate independent
+    acquisitions reduce to ordinary alternating projection.
+
+    This typed channel/local-frame implementation generalizes narrowband state
+    decomposition; finite spectral bandwidth and mixed-state coherence are excluded.
+
+    References
+    ----------
+    S. Dong, R. Shiradkar, P. Nanda, and G. Zheng,
+    [“Spectral multiplexing and coherent-state decomposition in Fourier ptychographic imaging”](https://doi.org/10.1364/BOE.5.001757), Biomedical Optics Express
+    **5**(6), 1757–1767 (2014).
+    """
+    def __init__(
+        self,
+        *,
+        iterations: int = 50,
+        object_step: float = 1.0,
+        batch_size: int = 1,
+        epsilon: float = 1e-10,
+    ) -> None: ...
+    def run_opd(
+        self,
+        *,
+        problem: SpectralReconstructionProblem,
+        unwrapper: SyntheticWavelengthUnwrapper,
+        phase_offsets_rad: Sequence[float] | None = None,
+        reference_mask: MaskArray | None = None,
+        reference_opd_m: float = 0.0,
+        mask: MaskArray | None = None,
+        initial_objects: ComplexArray | None = None,
+        frame_order: Sequence[int] | None = None,
+        seed: int | None = None,
+    ) -> MultiWavelengthReconstructionResult:
+        """Reconstruct independent wavelength fields and mix their phases into OPD.
+
+        Parameters
+        ----------
+        problem
+            Scalar detector measurements with an independent-object spectral model.
+        unwrapper
+            Explicit OPD interval, amplitude floor, and optional residual tolerance.
+        phase_offsets_rad
+            Optional channel pistons in radians, as in ``unwrap_opd``.
+        reference_mask
+            Alternative copied C-contiguous uint8 constant-OPD reference region.
+        reference_opd_m
+            Known reference-region OPD in metres, as in ``unwrap_opd``.
+        mask
+            Optional copied C-contiguous uint8 common-grid validity mask.
+        initial_objects
+            Optional copied complex128 channel fields, as in ``run``.
+        frame_order
+            Optional global detector permutation, as in ``run``.
+        seed
+            Optional deterministic shuffle seed, mutually exclusive with frame_order.
+
+        Returns
+        -------
+        MultiWavelengthReconstructionResult
+            Both the wavelength-field reconstruction and referenced OPD diagnostics.
+
+        Raises
+        ------
+        FpmError
+            For invalid reconstruction inputs, shared-complex coupling, or OPD inputs.
+        ValueError
+            For conflicting ordering options or a missing/conflicting phase reference.
+
+        Notes
+        -----
+        Performs ``run`` followed by ``SpectralReconstructionResult.unwrap_opd``;
+        both computations release the GIL. Assumes registered fields with matched
+        spatial resolution and nondispersive OPD; does not jointly optimize OPD
+        against detector intensities. Exactly one phase reference is required.
+        """
+        ...
+    def run(
+        self,
+        *,
+        problem: SpectralReconstructionProblem,
+        initial_objects: ComplexArray | None = None,
+        frame_order: Sequence[int] | None = None,
+        seed: int | None = None,
+    ) -> SpectralReconstructionResult:
+        """Reconstruct channel fields while releasing the Python GIL.
+
+        Parameters
+        ----------
+        problem
+            Validated scalar detector data and compiled spectral kernels.
+        initial_objects
+            Optional finite C-contiguous complex128 ``(objects, height, width)``
+            common-grid transmissions copied into Rust. Independent coupling
+            requires one per channel; shared coupling requires exactly one.
+            Omission uses weighted measured-amplitude initialization, which
+            splits mixed signal per unit spectral/local-gain weight as a heuristic.
+        frame_order
+            Optional explicit permutation of all detector rows, reused each pass.
+        seed
+            Optional deterministic per-iteration shuffle seed; mutually exclusive
+            with ``frame_order``. Omission of both uses acquisition order.
+
+        Returns
+        -------
+        SpectralReconstructionResult
+            Owned channel fields and global trace; array access returns copies.
+
+        Raises
+        ------
+        FpmError
+            For invalid parameters, object layout/count/shape, or detector ordering.
+        """
+        ...
+
+class SyntheticWavelengthUnwrapper:
+    """Recover nondispersive OPD by mixing registered wavelength phases.
+
+    Parameters
+    ----------
+    opd_range_m
+        Finite increasing half-open ``(minimum, maximum)`` OPD bounds in metres.
+        Width must not exceed the longest phase-difference synthetic wavelength.
+    minimum_amplitude
+        Finite nonnegative floor; every channel must strictly exceed it per pixel.
+    max_phase_residual_rad
+        Optional maximum RMS principal phase residual in ``(0, pi]`` radians.
+        None retains all otherwise valid pixels while reporting residuals.
+
+    Notes
+    -----
+    Requires at least two distinct positive vacuum wavelengths and finite,
+    registered, resolution-matched complex transmission fields on a common grid.
+    The shared quantity is OPD: ``phase_i = wrap(2*pi*OPD/lambda_i)``. This
+    assumes negligible OPD dispersion; it does not impose identical complex fields.
+    A reference region or explicit channel phase pistons fixes FPM's phase gauges.
+
+    Subtract shorter/longer channel phases to form difference periods
+    ``Lambda = lambda_short*lambda_long/(lambda_long-lambda_short)``. The longest
+    beat selects a branch inside the explicit interval; descending shorter beat
+    and original periods refine integer orders by rounding. A final least-squares
+    fit of the unwrapped original phases uses equal phase weights across channels.
+    Spatial continuity is unnecessary, but noise in each coarse estimate must be
+    below half the next period for correct rounding. Residuals cannot guarantee
+    fringe uniqueness. This adaptation uses an interval instead of spatially
+    unwrapping the longest beat, and omits phase-sum wavelengths and holographic optics.
+
+    References
+    ----------
+    S. K. Mirsky and N. T. Shaked,
+    [“Six-pack holography for dynamic profiling of thick and extended objects by simultaneous three-wavelength phase unwrapping with doubled field of view”](https://doi.org/10.1038/s41598-023-45237-6),
+    Scientific Reports 13, article 19293 (2023), synthetic-wavelength and
+    hierarchical phase-unwrapping sections.
+    """
+    def __init__(
+        self,
+        *,
+        opd_range_m: tuple[float, float],
+        minimum_amplitude: float = 0.0,
+        max_phase_residual_rad: float | None = None,
+    ) -> None: ...
+    @property
+    def opd_range_m(self) -> tuple[float, float]:
+        """Return the half-open absolute OPD interval in metres."""
+        ...
+    @property
+    def minimum_amplitude(self) -> float:
+        """Return the strict per-channel amplitude validity floor."""
+        ...
+    @property
+    def max_phase_residual_rad(self) -> float | None:
+        """Return the optional RMS phase residual cutoff in radians."""
+        ...
+    def unwrap_fields(
+        self,
+        *,
+        fields: ComplexArray,
+        wavelengths_vacuum_m: Sequence[float],
+        phase_offsets_rad: Sequence[float] | None = None,
+        reference_mask: MaskArray | None = None,
+        reference_opd_m: float = 0.0,
+        mask: MaskArray | None = None,
+    ) -> OpticalPathDifferenceResult:
+        """Mix phases from copied complex128 ``(channels, rows, columns)`` fields.
+
+        Parameters
+        ----------
+        fields
+            Finite C-contiguous complex128 registered transmission fields.
+        wavelengths_vacuum_m
+            At least two distinct finite positive vacuum wavelengths in metres,
+            ordered like the channel axis of fields.
+        phase_offsets_rad
+            One finite channel piston in radians to subtract. Exactly one of
+            this option and reference_mask is required. Explicit zero offsets
+            are appropriate only for fields already referenced to zero OPD.
+        reference_mask
+            Alternative copied C-contiguous uint8 ``(rows, columns)`` mask of a
+            constant-known-OPD region. Nonzero selects pixels valid in all channels.
+            Pistons are estimated from equal-weight circular means of unit phasors.
+        reference_opd_m
+            Known constant OPD in metres of that region. Applies only to a mask.
+        mask
+            Optional copied C-contiguous uint8 validity mask; zero excludes pixels.
+
+        Returns
+        -------
+        OpticalPathDifferenceResult
+            Owned OPD and diagnostics; NumPy getters return writable copies.
+            Zero/below-floor channel amplitudes, out-of-interval estimates, and
+            residual failures have valid_mask=0, NaN OPD/residual, and zero orders.
+
+        Raises
+        ------
+        FpmError
+            For invalid/ill-conditioned wavelengths, interval width, shapes/layout, nonfinite fields,
+            unusable reference means, or no usable amplitudes in all channels.
+        ValueError
+            For missing/conflicting reference choices or reference_opd_m with offsets.
+
+        Notes
+        -----
+        Copies inputs before releasing the GIL for computation. No registration,
+        resolution matching, dispersion correction, or spatial unwrap is performed.
+        Input masks do not permit nonfinite field values. Individual failed pixels
+        are reported by the output mask, including an entirely invalid result.
+        """
+        ...
+
+class OpticalPathDifferenceResult:
+    """Owned common-grid nondispersive OPD and input-channel-ordered diagnostics.
+
+    Every array property returns a writable copy. Invalid pixels have NaN OPD
+    and residual, zero fringe orders, and zero valid_mask. Phase residuals assess
+    consistency but cannot certify correct fringe orders under large noise.
+    """
+    @property
+    def opd_m(self) -> FloatArray:
+        """Return float64 OPD in metres shaped ``(rows, columns)``."""
+        ...
+    @property
+    def valid_mask(self) -> MaskArray:
+        """Return uint8 common-grid validity with one usable and zero invalid."""
+        ...
+    @property
+    def phase_residual_rad(self) -> FloatArray:
+        """Return float64 RMS original-channel wrapped phase residual in radians."""
+        ...
+    @property
+    def fringe_orders(self) -> NDArray[np.int64]:
+        """Return integer added cycles shaped ``(channels, rows, columns)``."""
+        ...
+    @property
+    def phase_offsets_rad(self) -> list[float]:
+        """Return applied principal phase pistons in input-channel order."""
+        ...
+    @property
+    def wavelengths_vacuum_m(self) -> list[float]:
+        """Return vacuum wavelengths in metres in input-channel order."""
+        ...
+    @property
+    def wavelength_ladder_m(self) -> list[float]:
+        """Return descending synthetic/original refinement periods in metres."""
+        ...
+
+class MultiWavelengthReconstructionResult:
+    """Wavelength reconstruction together with its phase-mixed common OPD map.
+
+    Returned wrappers retain immutable Rust ownership; their scientific NumPy
+    array getters return independent writable copies.
+    """
+    @property
+    def spectral(self) -> SpectralReconstructionResult:
+        """Return wavelength fields, pupils, metadata, and the intensity-fit trace."""
+        ...
+    @property
+    def opd(self) -> OpticalPathDifferenceResult:
+        """Return the referenced OPD map and phase-mixing diagnostics."""
+        ...
+
+class MultiWavelengthGradientDescent:
+    """Jointly fit one nondispersive OPD map and wavelength-specific amplitudes.
+
+    Parameters
+    ----------
+    iterations
+        Positive maximum accepted full-data joint updates.
+    initialization_iterations
+        Spectral AP passes for automatic initialization; must be positive unless
+        an explicit OPD/amplitude start is supplied.
+    amplitude_step
+        Finite positive multiplier for the pixel-count-scaled amplitude gradient.
+    opd_step
+        Finite positive multiplier for the pixel-count-scaled phase-coordinate
+        gradient, with ``q = 2*pi*OPD/min(wavelengths)``.
+    max_backtracks
+        Positive maximum trials per update; the common step multiplier is halved.
+    epsilon
+        Finite positive intensity smoothing and squared minimum object amplitude.
+
+    Notes
+    -----
+    Every channel field is ``A_c * exp(2j*pi*OPD/lambda_c)`` on the same grid.
+    Amplitudes vary by wavelength; phases always derive from one shared OPD in
+    metres. Requires an independent-storage spectral model with at least two
+    wavelengths. Fixed pupils, source powers, gains, backgrounds, and all sparse
+    source/spectral intensity mixtures use the canonical compiled forward model.
+
+    Minimizes the frame-weighted mean of valid-pixel
+    ``(sqrt(prediction+epsilon)-sqrt(max(measurement,0)+epsilon))**2``. Full-data
+    analytic adjoints differentiate amplitudes and OPD together. Both gradients
+    are scaled by the common-grid pixel count before their separate step factors.
+    Backtracking accepts only non-increasing full-data objective values; amplitudes
+    are projected to at least sqrt(epsilon) and OPD to explicit half-open bounds.
+    Failure to find a step stops cleanly with stopped_early=True. The solver is
+    nonconvex and cannot guarantee recovery of an incorrectly initialized branch.
+
+    Automatic initialization uses independent AP then referenced synthetic phase
+    mixing. A known constant-OPD reference region stays fixed pixelwise during
+    joint optimization. Explicit piston offsets instead retain the initialized
+    spatial mean OPD. Assumes nondispersive OPD, registered common grids, matched
+    effective resolution, and a justified absolute reference. Does not estimate
+    dispersion, pupil, or physical calibration; does not use ordinary checkpoints.
+
+    References
+    ----------
+    L. Bian, J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai,
+    [“Fourier ptychographic reconstruction using Wirtinger flow optimization”](https://doi.org/10.1364/OE.23.004856),
+    Optics Express 23(4), 4856–4866 (2015), for FPM loss-gradient optimization.
+    Shared OPD, the smoothed amplitude loss, box/gauge projections, and monotone
+    backtracking are implementation extensions. See SyntheticWavelengthUnwrapper
+    for the initialization hierarchy and reference.
+    """
+    def __init__(
+        self,
+        *,
+        iterations: int = 100,
+        initialization_iterations: int = 50,
+        amplitude_step: float = 1.0,
+        opd_step: float = 1.0,
+        max_backtracks: int = 30,
+        epsilon: float = 1e-10,
+    ) -> None: ...
+    def run(
+        self,
+        *,
+        problem: SpectralReconstructionProblem,
+        unwrapper: SyntheticWavelengthUnwrapper,
+        phase_offsets_rad: Sequence[float] | None = None,
+        reference_mask: MaskArray | None = None,
+        reference_opd_m: float = 0.0,
+        initial_opd_m: FloatArray | None = None,
+        initial_amplitudes: FloatArray | None = None,
+    ) -> MultiWavelengthSolverResult:
+        """Fit detector measurements with shared OPD while releasing the GIL.
+
+        Parameters
+        ----------
+        problem
+            Scalar detector stack and independent-storage compiled spectral model.
+            Existing measurement masks and frame weights enter the joint objective.
+        unwrapper
+            OPD branch and phase-fusion configuration. Used for automatic
+            initialization; explicit starts use only its opd_range_m bounds.
+        phase_offsets_rad
+            One finite channel piston in radians for automatic phase fusion.
+            Mutually exclusive with reference_mask. Joint fitting preserves the
+            initial OPD mean. With explicit OPD, offsets validate the gauge choice
+            but do not subtract phase from an already unwrapped start.
+        reference_mask
+            Alternative copied C-contiguous uint8 common-grid constant-OPD region.
+            Nonzero pixels are fixed to reference_opd_m during every joint update.
+        reference_opd_m
+            Finite known reference-region OPD in metres, inside the half-open bounds.
+            Applies only to a reference mask.
+        initial_opd_m
+            Optional copied finite C-contiguous float64 ``(rows, columns)`` OPD
+            map in metres, inside the half-open interval. Requires initial_amplitudes.
+        initial_amplitudes
+            Optional copied finite nonnegative C-contiguous float64
+            ``(channels, rows, columns)`` amplitudes in model channel order.
+            Requires initial_opd_m; values are floored at sqrt(epsilon).
+
+        Returns
+        -------
+        MultiWavelengthSolverResult
+            Shared OPD, derived channel fields and joint loss trace, and optional
+            pre-fit phase-fusion/AP diagnostics. Array getters return writable copies.
+
+        Raises
+        ------
+        FpmError
+            For invalid scientific values, layouts, shapes, coupling, references,
+            or any invalid automatically unwrapped initialization pixel.
+        ValueError
+            For missing/conflicting phase references or only one explicit start array.
+
+        Notes
+        -----
+        Explicit starts bypass AP/unwrapping, so their interval can exceed the
+        longest synthetic wavelength; the caller supplies the correct branch.
+        Inputs are copied before releasing the GIL. Full-data gradients stream
+        detector frames in acquisition order. Ordinary batch/schedule/checkpoint
+        contracts do not apply. Runtime elapsed time covers joint refinement;
+        initialization_trace separately records the AP passes when used.
+        """
+        ...
+
+class MultiWavelengthSolverResult:
+    """Joint OPD fit and derived wavelength fields with optional initialization records.
+
+    Scientific arrays are independent writable copies. The joint trace starts
+    at iteration zero's constrained initial loss and records post-update full-data
+    smoothed amplitude loss thereafter. Pre-fit phase diagnostics, when present,
+    describe automatic initialization rather than the coupled final fields.
+    """
+    @property
+    def opd_m(self) -> FloatArray:
+        """Return the optimized float64 common-grid OPD in metres."""
+        ...
+    @property
+    def spectral(self) -> SpectralReconstructionResult:
+        """Return derived fields, channel amplitudes/pupils, and the joint objective trace."""
+        ...
+    @property
+    def initialization_opd(self) -> OpticalPathDifferenceResult | None:
+        """Return pre-fit phase-mixing diagnostics, or None for explicit OPD starts."""
+        ...
+    @property
+    def initialization_trace(self) -> list[tuple[int, float, float]] | None:
+        """Return independent AP iteration/objective/time records, or None for explicit starts."""
+        ...
+    @property
+    def completed_iterations(self) -> int:
+        """Return the number of accepted full-data joint updates."""
+        ...
+    @property
+    def stopped_early(self) -> bool:
+        """Return whether backtracking stopped before the requested update count."""
+        ...
+
 class FpmError(Exception):
     """Base class for errors raised by the Rust extension."""
 

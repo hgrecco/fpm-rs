@@ -9,8 +9,10 @@ mod illumination_initialization;
 mod measurements;
 mod metrics;
 mod model;
+mod multi_wavelength;
 mod reconstruction;
 mod simulation;
+mod spectral;
 
 use pyo3::prelude::*;
 
@@ -29,5 +31,7 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     measurements::register(module)?;
     simulation::register(module)?;
     reconstruction::register(module)?;
+    spectral::register(module)?;
+    multi_wavelength::register(module)?;
     Ok(())
 }

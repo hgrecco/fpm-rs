@@ -41,6 +41,25 @@ first.
 
 ### Added
 
+- Added `MultiWavelengthGradientDescent` and `MultiWavelengthSolverResult` in
+  Rust and Python. The solver jointly fits one nondispersive OPD map and channel
+  amplitudes using canonical spectral forward/adjoint kernels, smoothed amplitude
+  loss, full-data backtracking, explicit bounds, and fixed reference-region or
+  initial-mean gauge. Supports automatic AP/phase-mixing initialization and
+  explicit OPD/amplitude starts, with joint and initialization diagnostics.
+
+- Added an initial narrowband multi-wavelength reconstruction workflow in Rust
+  and Python: explicit separate/multiplexed spectral plans, wavelength-specific
+  kernels on a common grid, independent/shared complex objects, fixed-pupil
+  spectral alternating projection, scalar detector forward evaluation, and
+  channel-ordered results. Spectral persistence and dataset schemas remain pending.
+
+- Added referenced synthetic-wavelength phase unwrapping in Rust and Python:
+  coarse-to-fine phase-difference mixing, equal-phase-weight OPD fitting,
+  explicit piston/reference-region and interval contracts, validity/residual/order
+  diagnostics, and a reconstruction-to-OPD convenience. Assumes nondispersive
+  OPD and already registered fields with matched resolution.
+
 - Added deterministic bright-field circle initialization for physical planar
   LED arrays, including two-pass streaming preprocessing, bounded robust
   geometry fitting with rank checks, progress callbacks, JSON persistence,

@@ -427,9 +427,11 @@ material differences from its cited method.
   The public bright-field initializer, physical fit, callbacks, JSON and
   verified bundle persistence, Rust/Python surfaces, documentation, analytic
   rectangular-grid detector test, and deterministic translation-recovery test
-  are implemented. Keep this item open for the broader adverse-data matrix,
-  downstream cold-versus-warm calibration comparisons, and capture-range and
-  runtime benchmarks listed above before declaring the initializer promoted.
+  are implemented. A deterministic translation-recovery comparison also shows
+  that the circle warm start improves source-vector error over cold
+  `JointReconstruction` under the same one-outer-iteration Fpie/calibration
+  budget. Keep this item open for the broader adverse-data matrix, capture-range
+  and runtime benchmarks listed above before declaring the initializer promoted.
 
 ### APIC complex-field reconstruction
 
@@ -672,7 +674,52 @@ material differences from its cited method.
   1757–1767 (2014),
   [https://doi.org/10.1364/BOE.5.001757](https://doi.org/10.1364/BOE.5.001757).
 
-  **Proposed architecture; implementation pending:**
+  **Core implementation available; milestone remains open:** Experiment-layer
+  channels and canonical separate/multiplexed detector plans compile into
+  wavelength-specific ordinary kernels on a common union-sized grid. Rust and
+  keyword-only Python APIs provide independent/shared objects, streamed fixed-pupil
+  `SpectralAlternatingProjection`, explicit/shuffled global schedules, scalar
+  forward evaluation, and channel-ordered results. Deterministic tests cover
+  exact single-channel/separate-run parity, local source mixing and gains,
+  manual detector sums, shared output, channel permutation, bounded RGB recovery,
+  structural/measurement-weight coverage, validated model serialization, and
+  Python array contracts. Referenced synthetic-wavelength OPD reconstruction is
+  also available: independent wavelength fields feed `SyntheticWavelengthUnwrapper`
+  via explicit pistons or a constant-known-OPD region, a half-open branch interval,
+  a phase-difference/original-wavelength hierarchy, and an equal-phase-weight
+  final fit. Rust `SpectralRunner::run_opd` and Python
+  `SpectralAlternatingProjection.run_opd` return both fields and OPD diagnostics.
+  Tests cover signed discontinuous multi-cycle OPD, reference gauges, channel
+  permutation, intermediate beats under noise, masks, branch selection, residual
+  rejection, and intensity-to-OPD recovery. This assumes nondispersive OPD and
+  registered fields with matched effective resolution; registration, resolution
+  matching, dispersive thickness models, and
+  automatic/spatial unwrapping of the longest beat remain outside this increment.
+  Reference: S. K. Mirsky and N. T. Shaked,
+  [“Six-pack holography for dynamic profiling of thick and extended objects by simultaneous three-wavelength phase unwrapping with doubled field of view”](https://doi.org/10.1038/s41598-023-45237-6),
+  *Scientific Reports* **13**, article 19293 (2023). The implementation adapts
+  their difference-phase hierarchy with explicit bounds, omitting phase-sum
+  wavelengths and holographic optics. Spectral checkpoints, dataset schema,
+  mixing diagnostics, the broader recovery/evaluation matrix, and promotion
+  checks below remain pending.
+
+  **Joint OPD solver available:** `MultiWavelengthGradientDescent` fits a shared
+  nondispersive OPD and channel-specific amplitudes to all detector measurements.
+  Canonical fixed channel forward/adjoint kernels differentiate a smoothed
+  frame-weighted amplitude objective; full-data backtracking, amplitude/OPD
+  bounds, and a fixed reference region or initialized mean constrain each update.
+  Automatic spectral AP/synthetic-phase initialization and explicit OPD/amplitude
+  starts return `MultiWavelengthSolverResult` with the joint trace, derived fields,
+  and optional initialization diagnostics. Finite-difference tests cover the
+  amplitude/OPD chain rule with fractional crops, source/spectral mixing, masks,
+  powers, gains, backgrounds, and weights; deterministic separate/mixed recovery
+  checks verify loss/OPD improvements and exact shared phase. Registration,
+  resolution matching, dispersion, blind pupil/calibration, spectral checkpoints,
+  and wider evaluation remain pending. The gradient viewpoint follows L. Bian,
+  J. Suo, G. Zheng, K. Guo, F. Chen, and Q. Dai,
+  [“Fourier ptychographic reconstruction using Wirtinger flow optimization”](https://doi.org/10.1364/OE.23.004856),
+  *Optics Express* **23**(4), 4856–4866 (2015); OPD parameterization, smoothing,
+  projections, and backtracking are implementation extensions.
 
   - Scope the first implementation to a finite set of narrowband, mutually
     incoherent image-plane FPM channels. Channel `c` has one explicit vacuum

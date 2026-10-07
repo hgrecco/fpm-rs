@@ -10,6 +10,7 @@
 mod illumination;
 mod led_array;
 mod optics;
+mod spectral;
 mod spherical;
 
 pub use illumination::{
@@ -19,4 +20,7 @@ pub use illumination::{
 };
 pub use led_array::{ArrayPose, PlanarLedArray};
 pub use optics::{Optics, PupilAberration};
+pub use spectral::{
+    SpectralAcquisitionPlan, SpectralChannel, SpectralContribution, SpectralFrame, SpectralGeometry,
+};
 pub use spherical::{RotatingLedArc, SphericalLedArm, SphericalLedArray};

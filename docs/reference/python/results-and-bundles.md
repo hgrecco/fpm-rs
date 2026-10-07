@@ -15,6 +15,14 @@ history are normalized CSV tables.
 
 ::: fpm_rs.ReconstructionResult
 
+::: fpm_rs.SpectralReconstructionResult
+
+::: fpm_rs.OpticalPathDifferenceResult
+
+::: fpm_rs.MultiWavelengthReconstructionResult
+
+::: fpm_rs.MultiWavelengthSolverResult
+
 ::: fpm_rs.PlanarArrayParameterValues
 
 ::: fpm_rs.CalibrationParameterHistoryEntry

@@ -663,7 +663,7 @@ impl PySourceGeometry {
 )]
 #[derive(Clone)]
 pub(crate) struct PySourceCalibration {
-    inner: SourceCalibration,
+    pub(crate) inner: SourceCalibration,
 }
 
 #[pymethods]
@@ -771,7 +771,7 @@ impl PyIlluminationFrame {
 )]
 #[derive(Clone)]
 pub(crate) struct PyAcquisitionPlan {
-    inner: AcquisitionPlan,
+    pub(crate) inner: AcquisitionPlan,
 }
 
 #[pymethods]
@@ -1054,7 +1054,7 @@ pub(crate) fn extract_illumination(value: &Bound<'_, PyAny>) -> PyResult<Illumin
         })
 }
 
-fn extract_source_geometry(value: &Bound<'_, PyAny>) -> PyResult<SourceGeometry> {
+pub(crate) fn extract_source_geometry(value: &Bound<'_, PyAny>) -> PyResult<SourceGeometry> {
     if let Ok(value) = value.extract::<PyRef<'_, PySourceGeometry>>() {
         return Ok(value.inner.clone());
     }

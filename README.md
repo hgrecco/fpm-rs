@@ -20,6 +20,18 @@ ptychography, multislice propagation, and GPU execution are not implemented.
 - **Reconstruct the object.** Start with alternating projection, or use FPIE,
   mPIE, EPRY, ADMM, or gradient descent when their
   convergence, calibration, and regularization options fit the experiment.
+- **Reconstruct narrowband wavelength channels.** Compile separate or multiplexed
+  spectral acquisitions and recover independent or explicitly shared complex
+  transmissions with fixed wavelength-specific pupils. See the
+  [multi-wavelength workflow](docs/guides/reconstruction.md#reconstruct-multiple-wavelengths).
+- **Unwrap phase across wavelengths.** Mix referenced independent channel phases
+  through synthetic wavelengths to recover a common nondispersive OPD map in
+  an explicit interval. See the
+  [OPD workflow](docs/guides/reconstruction.md#unwrap-opd-across-wavelengths).
+- **Fit one OPD map to all wavelengths.** Jointly optimize common nondispersive
+  OPD and channel amplitudes against all detector exposures, starting from phase
+  mixing or an explicit branch. See the
+  [joint OPD solver](docs/guides/reconstruction.md#jointly-fit-opd-to-detector-intensities).
 - **Calibrate a planar LED array physically.** Alternate analytic object or
   object/pupil updates with bounded pose, pitch, reference-index,
   selected-offset, source-power, or frame-gain updates and reuse the returned

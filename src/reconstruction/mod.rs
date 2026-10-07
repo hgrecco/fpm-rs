@@ -10,11 +10,13 @@
 
 mod batch;
 mod checkpoint;
+mod opd;
 mod options;
 mod problem;
 mod result;
 mod runner;
 mod schedule;
+mod spectral;
 mod state;
 mod trace;
 
@@ -25,12 +27,20 @@ pub use crate::tabular::parquet::{
 };
 pub use batch::Batch;
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, ReconstructionCheckpoint};
+pub use opd::{
+    MultiWavelengthReconstructionResult, OpticalPathDifferenceResult, PhaseReference,
+    SyntheticWavelengthUnwrapper,
+};
 pub use options::RunOptions;
 pub use problem::ReconstructionProblem;
 pub use result::{ReconstructionResult, RuntimeInfo};
 pub(crate) use result::{save_grayscale, save_signed_grayscale, state_object};
 pub use runner::Runner;
 pub use schedule::FrameSchedule;
+pub use spectral::{
+    SpectralChannelResult, SpectralFrameSchedule, SpectralReconstructionProblem,
+    SpectralReconstructionResult, SpectralReconstructionState, SpectralRunner,
+};
 pub use state::{
     AdaptiveAlternatingProjectionAuxiliaryState, AdmmAuxiliaryState, AlgorithmAuxiliaryState,
     MpieAuxiliaryState, ReconstructionState,

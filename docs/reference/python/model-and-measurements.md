@@ -16,3 +16,11 @@ the Fourier and array conventions shared by both objects.
 ::: fpm_rs.MeasurementStack
 
 ::: fpm_rs.ReconstructionProblem
+
+## Narrowband spectral models
+
+::: fpm_rs.SpectralImagePlaneModel
+
+::: fpm_rs.compile_spectral_model
+
+::: fpm_rs.SpectralReconstructionProblem

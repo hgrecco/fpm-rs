@@ -55,6 +55,38 @@ LED pitch
   pose and reference index. See
   [Illumination architecture, units, and acquisition](core-concepts.md#illumination-architecture-units-and-acquisition).
 
+Spectral channel
+: A narrowband illumination wavelength with its own complex sample transmission,
+  optics, and source calibration. A shared physical source direction still
+  produces a different k-vector at each wavelength. See
+  [Narrowband spectral channels](core-concepts.md#narrowband-spectral-channels).
+
+Spectral multiplexing
+: Combining intensities from several wavelength channels in one grayscale
+  detector exposure. The acquisition plan explicitly records the contributing
+  channels and weights. See
+  [Reconstruct multiple wavelengths](../guides/reconstruction.md#reconstruct-multiple-wavelengths)
+  for the narrowband model, method, and reference.
+
+Phase piston
+: A constant phase added everywhere in a complex object. Intensity-only data
+  leave it undetermined. Independent spectral objects each have their own
+  piston; an explicitly shared complex object has one. See
+  [Reconstruct multiple wavelengths](../guides/reconstruction.md#reconstruct-multiple-wavelengths).
+
+Optical path difference (OPD)
+: The difference in optical path length relative to a reference, measured in
+  metres. A common nondispersive OPD produces different transmission phases at
+  different wavelengths. See
+  [Unwrap OPD across wavelengths](../guides/reconstruction.md#unwrap-opd-across-wavelengths).
+
+Synthetic wavelength
+: The longer beat period obtained by subtracting two referenced wavelength
+  phases. It gives a larger OPD interval for resolving integer phase cycles;
+  shorter periods then refine the estimate. See
+  [Unwrap OPD across wavelengths](../guides/reconstruction.md#unwrap-opd-across-wavelengths)
+  for assumptions, noise limits, and the method reference.
+
 Defocus
 : Axial displacement from the modeled focus. fpm-rs expresses
   `defocus_distance` in metres and compiles it as a spatial-frequency-dependent

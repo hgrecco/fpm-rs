@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy)]
-pub(crate) struct PyReconstructionShape(ReconstructionShape);
+pub(crate) struct PyReconstructionShape(pub(crate) ReconstructionShape);
 
 impl FromPyObject<'_, '_> for PyReconstructionShape {
     type Error = PyErr;
