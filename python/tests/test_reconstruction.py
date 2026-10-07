@@ -3,10 +3,9 @@ from __future__ import annotations
 import inspect
 import math
 
+import fpm_rs as fpm
 import numpy as np
 import pytest
-
-import fpm_rs as fpm
 
 
 def assert_canonical_blind_result(
@@ -137,61 +136,6 @@ def test_algorithm_parameter_errors_remain_typed() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("arguments", "parameter"),
-    [
-        ({"iterations": 0}, "iterations"),
-        ({"damping": 0.0}, "damping"),
-        ({"damping": math.inf}, "damping"),
-        ({"maximum_cg_iterations": 0}, "maximum_cg_iterations"),
-        ({"cg_relative_tolerance": 0.0}, "cg_relative_tolerance"),
-        ({"cg_relative_tolerance": 1.0}, "cg_relative_tolerance"),
-        ({"cg_relative_tolerance": math.nan}, "cg_relative_tolerance"),
-        ({"maximum_line_search_steps": 0}, "maximum_line_search_steps"),
-        ({"line_search_reduction": 0.0}, "line_search_reduction"),
-        ({"line_search_reduction": 1.0}, "line_search_reduction"),
-        ({"line_search_reduction": math.nan}, "line_search_reduction"),
-        (
-            {"line_search_sufficient_decrease": 0.0},
-            "line_search_sufficient_decrease",
-        ),
-        (
-            {"line_search_sufficient_decrease": 1.0},
-            "line_search_sufficient_decrease",
-        ),
-        (
-            {"line_search_sufficient_decrease": math.nan},
-            "line_search_sufficient_decrease",
-        ),
-        ({"epsilon": 0.0}, "epsilon"),
-        ({"epsilon": math.nan}, "epsilon"),
-    ],
-)
-@pytest.mark.skip(reason="withdrawn GlobalGaussNewton candidate")
-def test_global_gauss_newton_validates_every_constructor_parameter(
-    arguments: dict[str, float | int],
-    parameter: str,
-) -> None:
-    with pytest.raises(fpm.InvalidParameterError, match=parameter):
-        fpm.GlobalGaussNewton(**arguments)
-
-
-@pytest.mark.skip(reason="withdrawn GlobalGaussNewton candidate")
-def test_global_gauss_newton_is_seeded_schedule_invariant(
-    problem: fpm.ReconstructionProblem,
-) -> None:
-    algorithm = fpm.GlobalGaussNewton(iterations=2, maximum_cg_iterations=3)
-    sequential = algorithm.run(problem, schedule="sequential")
-    shuffled = algorithm.run(problem, schedule="random", schedule_seed=73)
-
-    np.testing.assert_array_equal(
-        sequential.object_spectrum,
-        shuffled.object_spectrum,
-    )
-    assert sequential.final_objective == shuffled.final_objective
-    assert sequential.algorithm_metrics == shuffled.algorithm_metrics
-
-
 def test_truncated_poisson_gradient_reports_retained_fraction(
     problem: fpm.ReconstructionProblem,
 ) -> None:
@@ -232,7 +176,6 @@ def test_pupil_recovery_results_use_the_canonical_gauge(
     assert_canonical_blind_result(algorithm.run(problem), model)
 
 
-@pytest.mark.skip(reason="withdrawn GlobalGaussNewton candidate")
 def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
     expected = {
         fpm.AdaptiveAlternatingProjection: [
@@ -270,16 +213,6 @@ def test_complex_algorithm_constructor_signatures_are_explicit() -> None:
             "background_bounds",
             "epsilon",
             "loss_type",
-        ],
-        _RemovedGlobalGaussNewton: [
-            "iterations",
-            "damping",
-            "maximum_cg_iterations",
-            "cg_relative_tolerance",
-            "maximum_line_search_steps",
-            "line_search_reduction",
-            "line_search_sufficient_decrease",
-            "epsilon",
         ],
         fpm.GradientDescent: [
             "iterations",

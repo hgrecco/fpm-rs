@@ -98,6 +98,14 @@ first.
 
 ### Changed
 
+- Withdrew the experimental `GlobalGaussNewton` Rust/Python candidate and its
+  promotion benchmark. The 2026-10-06 release benchmark (seed 2026, 20 outer
+  iterations, one warmup, five repetitions) found it used 13.6–17.0 times Fpie's
+  median CPU time. Despite lower final amplitude MSE on the noisy and
+  aberrated-pupil cases, its aligned complex-object error was worse: 0.996
+  versus 0.250 for Poisson/Gaussian noise and 0.386 versus 0.246 for pupil
+  mismatch. It did not meet the faster-threshold or equal-runtime quality
+  promotion criterion.
 - Shortened the Python quickstart to the default successful path, moved grid
   sizing details into the reconstruction guide, and made first-touch Python
   constructors consistently use keyword arguments.
@@ -117,6 +125,9 @@ first.
 
 ### Fixed
 
+- Removed obsolete tests and API documentation for the withdrawn solver,
+  restoring constructor-signature and subpixel-crop coverage for active
+  algorithms and eliminating the skips that failed complete-suite validation.
 - Preserve binary64 values exactly when loading JSON checkpoints, so a
   same-configuration resume remains bit-for-bit identical to an uninterrupted
   reconstruction.

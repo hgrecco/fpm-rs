@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import fpm_rs as fpm
 import numpy as np
 import pytest
-
-import fpm_rs as fpm
 
 
 def test_built_in_and_python_callbacks(
@@ -169,32 +168,6 @@ def test_truncated_poisson_gradient_resumes_without_auxiliary_state(
         uninterrupted.object_spectrum,
         rtol=1e-12,
         atol=1e-12,
-    )
-    assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
-
-
-@pytest.mark.skip(reason="withdrawn GlobalGaussNewton candidate")
-def test_global_gauss_newton_resumes_without_auxiliary_state(
-    problem: fpm.ReconstructionProblem,
-    tmp_path: Path,
-) -> None:
-    directory = tmp_path / "global-gauss-newton-checkpoints"
-    parameters = {"maximum_cg_iterations": 2}
-    fpm.GlobalGaussNewton(iterations=1, **parameters).run(
-        problem,
-        callbacks=[fpm.CheckpointEvery(1, directory)],
-    )
-    checkpoint = fpm.ReconstructionCheckpoint.load(directory / "checkpoint_00001.json")
-
-    resumed = fpm.GlobalGaussNewton(iterations=2, **parameters).run(
-        problem,
-        resume_from=checkpoint,
-    )
-    uninterrupted = fpm.GlobalGaussNewton(iterations=2, **parameters).run(problem)
-
-    np.testing.assert_array_equal(
-        resumed.object_spectrum,
-        uninterrupted.object_spectrum,
     )
     assert resumed.algorithm_metrics == uninterrupted.algorithm_metrics
 

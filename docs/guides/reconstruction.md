@@ -539,53 +539,6 @@ For multiplexed data, its joint amplitude proximal operates across all source
 modes, so checkpointed auxiliary and dual fields contain two complex values per
 frame-source-mode pixel.
 
-`GlobalGaussNewton` minimizes the full-stack, frame-weighted amplitude MSE in
-intrinsic intensity units. Each outer iteration forms an analytic object
-gradient, solves a damped Gauss–Newton normal equation with matrix-free
-preconditioned conjugate gradients, and accepts the direction with full-data
-Armijo backtracking. Masks, zero-weight frames, known gain and background,
-fractional Fourier crops, and incoherent multiplexing enter both the residual
-and the Jacobian products. Schedule order has no numerical effect because the
-solver requires one batch containing every frame and accumulates it in canonical
-index order.
-
-The solver stores a fixed number of object-sized vectors plus the coherent modes
-of the current multiplexed frame: for `N` object pixels, `P` detector pixels,
-and at most `q` simultaneous sources, working storage is `O(N + qP)`. It does
-not form the quadratic-size Hessian, but every conjugate-gradient product and
-line-search trial processes the complete frame stack. The practical cost of
-one outer iteration is therefore one global gradient pass, up to
-`maximum_cg_iterations` normal-operator passes, and up to
-`maximum_line_search_steps` trial-objective passes. Start with the defaults and
-tune `damping` first; a larger value makes the step more conservative. The
-`global_gauss_newton` trace namespace reports the conjugate-gradient iteration
-count and residual ratio, line-search evaluations and accepted scale, and the
-pre-update gradient norm.
-
-This first implementation deliberately exposes only amplitude MSE and an
-object-only step. The checkpoint pupil, gains, background, and source
-corrections are honored but not updated, and no curvature state survives an
-iteration. An iteration-boundary checkpoint is therefore an exact resume with
-the same parameters, while a checkpoint containing another solver's auxiliary
-state is rejected. The stateless linearization also permits use inside
-`JointReconstruction`, where each refreshed physical model is linearized from
-scratch.
-
-L.-H. Yeh, J. Dong, J. Zhong, L. Tian, M. Chen, G. Tang,
-M. Soltanolkotabi, and L. Waller, [“Experimental robustness of Fourier
-ptychography phase retrieval algorithms,” *Optics Express* **23**(26),
-33214–33240 (2015)](https://doi.org/10.1364/OE.23.033214), evaluate explicitly
-formed exact CR-calculus Newton systems for amplitude, intensity, and Poisson
-objectives. fpm-rs instead retains only the positive-semidefinite Gauss–Newton
-part of the amplitude residual, adds coverage-scaled damping, and applies it
-without a matrix. Matrix-free second-order ptychographic optimization is also
-demonstrated by S. Kandel, S. Maddali, Y. S. G. Nashed, S. O. Hruszkewycz,
-C. Jacobsen, and M. Allain, [“Efficient ptychographic phase retrieval via a
-matrix-free Levenberg–Marquardt algorithm,” *Optics Express* **29**(15),
-23019–23055 (2021)](https://doi.org/10.1364/OE.422768); that work concerns
-diffraction-plane ptychography and automatic differentiation, while this
-implementation uses analytic products for the image-plane FPM model.
-
 `Mpie` starts from the `Fpie` rPIE update and applies momentum after a configured
 number of positive-weight measured frames. If `O_rpie` is the spectrum after
 the current frame, `O_anchor` is the spectrum after the preceding momentum

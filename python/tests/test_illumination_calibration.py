@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import fpm_rs as fpm
 import numpy as np
 import pytest
-
-import fpm_rs as fpm
 
 
 def calibration_problem() -> tuple[
@@ -113,7 +112,9 @@ def test_joint_reconstruction_exposes_reusable_physical_result(tmp_path: Path) -
     callbacks: list[dict[str, object]] = []
     result = algorithm.run(
         problem,
-        callbacks=[fpm.IterationCallback(lambda context: callbacks.append(context) or True)],
+        callbacks=[
+            fpm.IterationCallback(lambda context: callbacks.append(context) or True)
+        ],
     )
 
     assert result.reconstruction.runtime.completed_iterations == 1
@@ -140,7 +141,9 @@ def test_joint_reconstruction_exposes_reusable_physical_result(tmp_path: Path) -
     json_path = tmp_path / "joint_result.json"
     result.save_json(json_path)
     restored = fpm.JointReconstructionResult.load_json(json_path)
-    assert restored.final_parameters.translation_m == result.final_parameters.translation_m
+    assert (
+        restored.final_parameters.translation_m == result.final_parameters.translation_m
+    )
     bundle = result.write_bundle(tmp_path / "joint_bundle", include_previews=False)
     assert bundle.result.physical_illumination_calibration is not None
 
@@ -165,33 +168,6 @@ def test_joint_reconstruction_accepts_pupil_recovery_algorithm() -> None:
     ).run(problem)
     assert result.reconstruction.runtime.completed_iterations == 1
     assert result.calibrated_model.source_count == 9
-
-
-@pytest.mark.skip(reason="withdrawn GlobalGaussNewton candidate")
-def test_joint_reconstruction_accepts_global_gauss_newton() -> None:
-    optics, nominal, problem = calibration_problem()
-    parameters = fpm.PlanarArrayCalibrationParameters(
-        translation=(True, False, False),
-        translation_spec=fpm.CalibrationParameterSpec(
-            -1e-3,
-            1e-3,
-            scale=2.5e-4,
-            finite_difference_step=2e-5,
-        ),
-    )
-    result = fpm.JointReconstruction(
-        fpm.GlobalGaussNewton(iterations=1, maximum_cg_iterations=2),
-        optics,
-        nominal,
-        fpm.IlluminationCalibration(parameters),
-        outer_iterations=1,
-    ).run(problem)
-    assert result.reconstruction.runtime.completed_iterations == 1
-    assert result.calibrated_model.source_count == 9
-    assert any(
-        namespace == "object_update.global_gauss_newton"
-        for _, namespace, _, _ in result.reconstruction.algorithm_metrics
-    )
 
 
 def test_joint_reconstruction_rejects_mpie() -> None:

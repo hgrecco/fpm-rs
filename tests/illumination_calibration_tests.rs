@@ -861,47 +861,6 @@ fn joint_reconstruction_returns_reusable_physical_state() {
 }
 
 #[test]
-#[cfg(any())]
-fn joint_reconstruction_refreshes_global_gauss_newton_between_object_updates() {
-    let nominal = Illumination::from_geometry(array([0.0, 0.0, -80e-3])).unwrap();
-    let true_illumination = Illumination::from_geometry(array([0.35e-3, 0.0, -80e-3])).unwrap();
-    let (measurements, nominal_model, _) = simulate_pair(&true_illumination, &nominal);
-    let nominal_vectors = nominal_model.k_vectors().to_vec();
-    let problem = ReconstructionProblem::new(measurements, nominal_model).unwrap();
-    let translation_spec =
-        CalibrationParameterSpec::new(-1e-3, 1e-3, 2.5e-4).finite_difference_step(2e-5);
-    let parameters = PlanarArrayCalibrationParameters::builder()
-        .translation_specs([Some(translation_spec), None, None])
-        .build()
-        .unwrap();
-    let result = JointReconstruction::new(
-        GlobalGaussNewton::default()
-            .iterations(1)
-            .maximum_cg_iterations(2),
-        optics(),
-        nominal,
-        IlluminationCalibration::new(parameters),
-        2,
-    )
-    .run(&problem)
-    .unwrap();
-
-    let object_updates = result
-        .reconstruction
-        .trace
-        .algorithm_metrics
-        .iter()
-        .filter(|record| {
-            record.namespace == "object_update.global_gauss_newton"
-                && record.metric == "conjugate_gradient_iterations"
-        })
-        .count();
-    assert_eq!(object_updates, 2);
-    assert!(result.diagnostics.geometry_recompilations > 0);
-    assert_ne!(result.calibrated_model.k_vectors(), nominal_vectors);
-}
-
-#[test]
 fn joint_reconstruction_rejects_mpie_model_recompilation() {
     let nominal = Illumination::from_geometry(array([0.0, 0.0, -80e-3])).unwrap();
     let (measurements, nominal_model, _) = simulate_pair(&nominal, &nominal);
