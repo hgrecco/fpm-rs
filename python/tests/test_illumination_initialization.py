@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -122,3 +124,89 @@ def test_brightfield_options_and_parameter_scope_are_validated(
     )
     with pytest.raises(fpm.UnsupportedError, match="source powers"):
         initializer.initialize(measurements, optics, illumination, model)
+
+
+@pytest.mark.parametrize("excluded", ["weight", "mask", "cutoff"])
+def test_explicit_brightfield_frames_are_validated_before_detection(excluded):
+    optics = fpm.Optics(532e-9, 0.1, 4.0, 6.5e-6)
+    illumination = planar_illumination((0.0, 0.0, -80e-3))
+    model = fpm.compile_model(optics, illumination, (48, 56), (96, 112))
+    weights = np.ones(25)
+    masks = np.ones((25, 48, 56), dtype=np.uint8)
+    frame = 0 if excluded == "cutoff" else 11
+    if excluded == "weight":
+        weights[frame] = 0
+    if excluded == "mask":
+        masks[frame, 0, 0] = 0
+    measurements = fpm.MeasurementStack(
+        measurements=np.ones((25, 48, 56)), frame_weights=weights.tolist(), masks=masks
+    )
+    initializer = fpm.BrightfieldCircleInitializer(
+        parameters=fpm.PlanarArrayCalibrationParameters(
+            translation=(True, True, False)
+        ),
+        options=fpm.BrightfieldCircleOptions(
+            frame_indices=[frame], center_search_radius_na=0.012
+        ),
+    )
+    message = {
+        "weight": "positive measurement weight",
+        "mask": "invalid pixels",
+        "cutoff": "bright-field boundary",
+    }[excluded]
+    with pytest.raises(fpm.InvalidMeasurementsError, match=message):
+        initializer.initialize(
+            measurements=measurements,
+            optics=optics,
+            nominal_illumination=illumination,
+            model=model,
+        )
+
+
+def benchmark_module():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "benchmark_brightfield_initialization.py"
+    )
+    spec = importlib.util.spec_from_file_location("brightfield_benchmark", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_brightfield_benchmark_compares_actual_pipeline_errors_and_budgets():
+    benchmark = benchmark_module()
+    args = SimpleNamespace(
+        scenario="clean",
+        capture=0.4,
+        seed=0,
+        rows=48,
+        columns=56,
+        iterations=1,
+        center_tolerance_na=0.004,
+    )
+    records = []
+    for method in benchmark.METHODS:
+        args.method = method
+        records.append(benchmark.trial(args))
+    assert all(record["status"] == "ok" for record in records)
+    assert all(record["elapsed_seconds"] > 0 for record in records)
+    assert all(
+        record["peak_rss_mib"] >= record["baseline_rss_mib"] > 0 for record in records
+    )
+    cold, warm = records[1], records[3]
+    assert warm["source_na_rmse"] < cold["source_na_rmse"]
+    assert warm["initialization_measurement_passes"] == 2
+    assert warm["fit_rank"] == 2
+    assert warm["geometry_recompilations"] > 0
+    summary = benchmark.comparisons(records, 0.004, 0.4)
+    assert len(summary["matched_budget"]) == 1
+    assert summary["matched_budget"][0]["warm_source_error_ratio"] < 1
+    # The reported alignment must remove the documented integer translation
+    # and piston without silently fitting an amplitude scale.
+    rng = np.random.default_rng(19)
+    field = rng.standard_normal((8, 12)) + 1j * rng.standard_normal((8, 12))
+    shifted = np.roll(field, (2, -3), axis=(0, 1)) * np.exp(0.7j)
+    assert benchmark.aligned_error(field, shifted) < 1e-12
+    assert benchmark.aligned_error(field, 2 * shifted) == pytest.approx(1.0)

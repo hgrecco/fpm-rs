@@ -831,6 +831,61 @@ all three artifacts before loading the authoritative result. The call blocks in
 Python; native processing releases the GIL and reacquires it only for a
 `PlanarArrayInitializationCallback`.
 
+### Evaluate a bright-field warm start
+
+The offline example
+[`benchmark_brightfield_initialization.py`](https://github.com/hgrecco/fpm-rs/blob/main/python/examples/benchmark_brightfield_initialization.py)
+compares four pipelines on the same detector data: nominal geometry with FPIE,
+cold `JointReconstruction`, circle initialization followed by FPIE, and circle
+initialization followed by joint refinement. The circle-only pipeline still
+runs FPIE to measure downstream object error; it performs no subsequent
+geometry refinement. Cold and warm joint runs use the same object-pass and
+physical-step budgets. Each pipeline runs in a fresh process, and warm-run
+timing includes circle detection and fitting.
+
+```console
+pixi run python python/examples/benchmark_brightfield_initialization.py \
+  --scenarios all --captures 0.2 0.6 --passes 1 4 \
+  --output /tmp/brightfield-comparison.json
+```
+
+Fixtures cover amplitude, phase, mixed, weak-texture and textureless specimens;
+additive detector noise; near-cutoff and bright-field-poor acquisitions;
+rotation, pitch, distance and reference-index errors; objective NA; known pupil
+aberration; spatial vignetting; known source power, frame gain and background;
+and pupil-radius mismatch. `capture` scales the named physical perturbation in
+each fixture; the report retains SI parameter errors and dimensionless source
+NA errors. The bright-field-poor fixture needs a larger Fourier grid to include
+its dark-field sources; all four methods in a fixture share that grid.
+
+The report includes source-vector NA RMSE, translation/pitch errors in metres,
+rotation error in radians, reference-index error, detector amplitude MSE,
+complex-field relative error, circle counts, rank/conditioning, fit evaluations,
+runtime and process peak RSS. Complex-field comparison removes periodic integer
+translation and global phase, retaining amplitude-scale error. Evaluation
+after reconstruction is excluded from runtime and peak-memory sampling.
+The two circle-detection measurement passes are counted separately from
+reconstruction forward passes. `forward_model_pass_upper_bound` counts object
+passes, each joint phase's base objective and geometry trial recompilations;
+a failed recompile can consume no forward pass, so this is an upper bound.
+
+Detection recall counts accepted centers within `--center-tolerance-na` of
+geometrically eligible truth centers. Eligibility requires a safe bright-field
+margin, a nominal center separated from its conjugate search region, and truth
+inside the configured center search. Textureless and radius-mismatch fixtures
+have no eligible truth edges. False acceptance is the fraction of accepted
+centers that fail these labels or the localization tolerance; it is not a
+population false-positive rate. Rejections and execution errors remain in the
+report. The example uses an explicit 0.012 NA center search, 0.03 NA radius
+search and 0.015 NA radius-agreement tolerance; these are benchmark controls.
+
+`sampled_capture` reports the largest tested perturbation meeting both source
+and object-error tolerances. `time_to_target` selects the fastest successful
+sampled pass budget, including initialization time. Neither establishes a
+continuous capture range or a convergence-time guarantee. The initializer
+remains optional: inaccurate individual circles and unsuitable acquisitions
+must be considered even when a global fit reduces the source-vector error.
+
 J. Sun, Q. Chen, Y. Zhang, and C. Zuo, [“Efficient positional misalignment
 correction method for Fourier ptychographic microscopy,” *Biomedical Optics
 Express* **7**(4), 1336–1350

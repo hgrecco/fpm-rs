@@ -42,25 +42,22 @@ The existing workflow is documented in
 [bright-field planar-array initialization](docs/guides/reconstruction.md#bright-field-planar-array-initialization).
 Remaining promotion work:
 
-- [ ] Expand adverse-data coverage across amplitude, phase, and mixed specimens;
-  weak texture; noise; near-cutoff illumination; conjugate ambiguity; radius
-  mismatch; and known gain/background variation. Verify detection rejection,
-  frame selection, acquisition permutation, and resident/lazy/backend parity
-  across this matrix rather than only the existing bounded fixtures.
-- [ ] Extend bounded physical recovery beyond translation to rotation, pitch or
-  axial distance with the complementary scale fixed, and reference index.
-  Verify rank and gauge failures, partial updates, and atomic model refresh
-  while preserving pupil and intensity calibration.
-- [ ] Extend the existing same-budget warm-start comparison to bright-field-rich
-  and bright-field-poor acquisitions across pose, pitch, objective NA, noise,
-  aberration, and specimen contrast. Compare cold `JointReconstruction`, circle
-  initialization alone, and initialization followed by the same refinement
-  budget.
-- [ ] Benchmark capture range, detection recall/false acceptance, source-vector
-  and physical-parameter error, fit rank/condition, forward-model passes,
-  runtime, peak memory, downstream objective, and aligned complex-object error.
-  Promotion requires a wider reliable capture range or less time to the same
-  downstream error than cold joint calibration, with unsuitable data rejected.
+- [ ] Extend resident/lazy/backend and acquisition-permutation regression
+  coverage beyond the amplitude/phase/mixed and bounded-noise matrix to weak
+  texture, pupil-radius mismatch, aberration and spatial vignetting. Use the
+  adverse cases in `python/examples/benchmark_brightfield_initialization.py`
+  to investigate inaccurate accepted centers and suitable acquisitions rejected
+  by the detector; preserve rejection of unsuitable data.
+- [ ] Extend end-to-end detected-circle recovery beyond translation to coupled
+  rotation, pitch or axial distance with the complementary scale fixed, and
+  reference index. The exact-vector physical-fit tests isolate these components;
+  promotion still needs detector-to-parameter error bounds and rank/gauge
+  failures for jointly selected components.
+- [ ] Establish a wider reliable capture range or less time to the same
+  downstream error than cold joint calibration, using repeated seeds and denser
+  capture/pass sweeps of the offline warm-start benchmark. Measure exact
+  forward-model counts beyond the reported upper bound, and require unsuitable
+  acquisitions to be rejected before promoting the initializer.
 
 ### APIC complex-field reconstruction
 

@@ -2528,6 +2528,211 @@ mod tests {
     }
 
     #[test]
+    fn physical_fit_recovers_global_components_without_changing_fixed_values() {
+        // Exact canonical vectors isolate the physical fit from pixel-level
+        // circle-localization error. Each scale-gauge partner stays fixed.
+        let optics = optics();
+        let nominal = illumination([0.0, 0.0, -80e-3]);
+        let initial = PlanarArrayParameterValues::from_illumination(&nominal).unwrap();
+        for component in 0..8 {
+            let mut expected = initial.clone();
+            let mut builder = PlanarArrayCalibrationParameters::builder();
+            let tolerance;
+            if component < 3 {
+                let mut specs = [None, None, None];
+                specs[component] = Some(
+                    CalibrationParameterSpec::new(-0.15, 0.15, 0.05).finite_difference_step(1e-5),
+                );
+                builder = builder.rotation_specs(specs);
+                expected.rotation_rad[component] = 0.04;
+                tolerance = 2e-4;
+            } else if component < 5 {
+                let axis = component - 3;
+                let mut specs = [None, None];
+                specs[axis] = Some(
+                    CalibrationParameterSpec::new(3e-3, 5e-3, 0.2e-3).finite_difference_step(1e-7),
+                );
+                builder = builder.pitch_specs(specs);
+                expected.pitch_m[axis] = 4.2e-3;
+                tolerance = 1e-6;
+            } else if component == 5 {
+                builder = builder.translation_specs([
+                    None,
+                    None,
+                    Some(
+                        CalibrationParameterSpec::new(-0.1, -0.06, 4e-3)
+                            .finite_difference_step(1e-6),
+                    ),
+                ]);
+                expected.translation_m[2] = -84e-3;
+                tolerance = 2e-5;
+            } else {
+                let axis = component - 6;
+                let mut specs = [None, None];
+                specs[axis] =
+                    Some(CalibrationParameterSpec::new(1.0, 3.0, 0.2).finite_difference_step(1e-5));
+                builder = builder.reference_index_specs(specs);
+                expected.reference_index[axis] = 2.2;
+                tolerance = 1e-3;
+            }
+            let parameters = builder.build().unwrap();
+            let active = active_parameters(&parameters);
+            let truth = expected.to_illumination(&nominal).unwrap();
+            let observations = observations_for(&optics, &truth);
+            let accepted: Vec<_> = observations.iter().collect();
+            let (rank, condition) =
+                jacobian_rank(&optics, &nominal, &initial, &active, &accepted, 1e-8).unwrap();
+            assert_eq!(rank, 1, "component {component}");
+            assert!(condition.unwrap().is_finite());
+            let options = BrightfieldCircleOptions {
+                maximum_fit_steps: 200,
+                fit_initial_step_size: 0.25,
+                ..Default::default()
+            };
+            let (fitted, history) = fit_parameters(
+                &optics, &nominal, &initial, &active, &accepted, &options, &mut 0, &mut None,
+            )
+            .unwrap();
+            assert!(
+                (active[0].value(&fitted) - active[0].value(&expected)).abs() < tolerance,
+                "{}: expected {}, fitted {}",
+                active[0].name(),
+                active[0].value(&expected),
+                active[0].value(&fitted)
+            );
+            let mut fixed = fitted.clone();
+            active[0].set(&mut fixed, active[0].value(&initial));
+            assert_eq!(fixed, initial);
+            assert!(history.iter().any(|entry| entry.accepted));
+            assert!(residual_rms(&optics, &nominal, &fitted, &accepted).unwrap() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn rank_test_rejects_collinear_centers_even_with_priors() {
+        let optics = optics();
+        let nominal = illumination([0.0, 0.0, -80e-3]);
+        let observations = observations_for(&optics, &nominal);
+        // Only the central row: its pitch_y derivative is identically zero.
+        let accepted: Vec<_> = observations[10..15].iter().collect();
+        let pitch = CalibrationParameterSpec::new(3e-3, 5e-3, 1e-4)
+            .finite_difference_step(1e-6)
+            .prior(4e-3, 1.0);
+        let parameters = PlanarArrayCalibrationParameters::builder()
+            .pitch_specs([Some(pitch.clone()), Some(pitch)])
+            .build()
+            .unwrap();
+        let active = active_parameters(&parameters);
+        let initial = PlanarArrayParameterValues::from_illumination(&nominal).unwrap();
+        let (rank, _) =
+            jacobian_rank(&optics, &nominal, &initial, &active, &accepted, 1e-8).unwrap();
+        assert_eq!(rank, 1);
+    }
+
+    #[test]
+    fn explicit_frame_selection_rejects_masks_zero_weights_and_cutoff_frames() {
+        use crate::measurements::MeasurementStack;
+
+        let optics = optics();
+        let nominal = illumination([0.0, 0.0, -80e-3]);
+        let model = ImagePlaneModel::from_experiment(
+            &optics,
+            &nominal,
+            (48, 56),
+            ReconstructionShape::Exact((96, 112)),
+        )
+        .unwrap();
+        let mut measurements =
+            MeasurementStack::from_frames(&vec![vec![1.0; 48 * 56]; 25], (48, 56)).unwrap();
+        let options = BrightfieldCircleOptions {
+            center_search_radius_na: 0.012,
+            ..Default::default()
+        };
+        let frames = select_candidates(&measurements, &optics, &nominal, &model, &options).unwrap();
+        assert!(frames.iter().all(|f| f.frame == f.source));
+        assert!(frames.iter().any(|f| f.source == 11));
+        assert!(!frames.iter().any(|f| f.source == 0));
+        let mut explicit = options.clone();
+        explicit.frame_indices = Some(vec![0]);
+        assert!(
+            matches!(select_candidates(&measurements, &optics, &nominal, &model, &explicit),
+            Err(Error::InvalidMeasurements(message)) if message.contains("bright-field boundary"))
+        );
+        measurements.set_frame_weight(11, 0.0).unwrap();
+        explicit.frame_indices = Some(vec![11]);
+        assert!(
+            matches!(select_candidates(&measurements, &optics, &nominal, &model, &explicit),
+            Err(Error::InvalidMeasurements(message)) if message.contains("positive measurement weight"))
+        );
+        measurements.set_frame_weight(11, 1.0).unwrap();
+        let mut mask = ndarray::Array3::from_elem((25, 48, 56), 1u8);
+        mask[(11, 0, 0)] = 0;
+        let measurements = measurements.with_per_frame_masks(mask).unwrap();
+        assert!(
+            matches!(select_candidates(&measurements, &optics, &nominal, &model, &explicit),
+            Err(Error::InvalidMeasurements(message)) if message.contains("invalid pixels"))
+        );
+        let frames = select_candidates(&measurements, &optics, &nominal, &model, &options).unwrap();
+        assert!(!frames.iter().any(|f| f.source == 11));
+    }
+
+    #[test]
+    fn detector_rejects_unsigned_centers_and_missing_edges() {
+        let optics = optics();
+        let nominal = illumination([0.0, 0.0, -80e-3]);
+        let shape = (64, 80);
+        let model = ImagePlaneModel::from_experiment(
+            &optics,
+            &nominal,
+            shape,
+            ReconstructionShape::Exact((128, 160)),
+        )
+        .unwrap();
+        let candidate = |source| CandidateFrame {
+            frame: source,
+            source,
+            scalar: 1.0,
+            nominal: model.k_vectors()[source],
+        };
+        let values = vec![1.0; shape.0 * shape.1];
+        let options = BrightfieldCircleOptions::default();
+        let on_axis = detect_circle(
+            &values,
+            shape,
+            &model,
+            &optics,
+            &candidate(12),
+            0.0,
+            &options,
+        );
+        assert!(on_axis.rejection_reason.unwrap().contains("on-axis"));
+        let overlapping = BrightfieldCircleOptions {
+            center_search_radius_na: 0.06,
+            ..options.clone()
+        };
+        let unsigned = detect_circle(
+            &values,
+            shape,
+            &model,
+            &optics,
+            &candidate(11),
+            0.0,
+            &overlapping,
+        );
+        assert!(unsigned.rejection_reason.unwrap().contains("conjugate"));
+        let no_edge = detect_circle(
+            &values,
+            shape,
+            &model,
+            &optics,
+            &candidate(11),
+            0.0,
+            &options,
+        );
+        assert!(no_edge.rejection_reason.unwrap().contains("contrast"));
+    }
+
+    #[test]
     fn detector_localizes_an_analytic_circular_edge_on_rectangular_sampling() {
         let shape = (64, 80);
         let dkx_na = 0.004;

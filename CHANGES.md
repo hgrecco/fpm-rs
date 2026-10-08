@@ -41,6 +41,9 @@ first.
 
 ### Added
 
+- Expanded bright-field initializer evaluation with deterministic global
+  physical-fit, rejection, acquisition-order and resident/lazy/backend parity
+  tests, plus an offline capture-range and downstream warm-start benchmark.
 - Added separately versioned spectral AP/joint OPD checkpoints and lossless
   spectral result bundles, including exact resume, fixed gauges, initialization
   records, detector/model fingerprints and artifact integrity checks.
