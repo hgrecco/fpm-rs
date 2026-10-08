@@ -15,6 +15,39 @@ algorithm path is statically dispatched without a dataset enum or measurement
 trait objects. Construction, preprocessing, materialization, and cache controls
 remain operations on the concrete storage types.
 
+## Model assumptions and limitations
+
+The implemented `ImagePlaneModel` and `ForwardModel` describe scalar,
+image-plane Fourier ptychography of one thin two-dimensional complex
+transmission field. The following limits apply to both simulation and
+reconstruction; a lower objective does not establish that an experiment meets
+them.
+
+| Model component | Implemented assumption and limit |
+| --- | --- |
+| Illumination coherence | Each source is internally spatially and temporally coherent: one plane wave at one vacuum wavelength. Finite emitter size, within-source partial coherence, and finite spectral bandwidth are absent. |
+| Coded illumination | Distinct sources combine mutually incoherently as a weighted sum of intensities. There are no interference cross terms between sources; a coherently combined coded laser acquisition requires another model. |
+| Specimen | One thin complex-transmission slice is shared by the frames of an ordinary model. There is no propagation between specimen slices, multiple scattering, or volumetric reconstruction. |
+| Objective | One sampled pupil is shared by the modeled field of view. Spatially varying objective aberrations are not modeled automatically; pupil recovery still estimates one shared pupil. Polarization and vector-field effects are absent. |
+| Defocus | `Pupil::circular` applies the documented paraxial quadratic pupil phase. It does not use exact nonparaxial angular-spectrum propagation. Approximation error depends on wavelength, propagation distance, and angular range; there is no universal NA validity cutoff. |
+| Pupil aberrations | `PupilAberration` coefficients are direct radian weights on the crate's sampled radial polynomials. They are not Noll-normalized Zernike RMS coefficients and cannot be substituted for those coefficients without conversion. |
+| Illumination transmission | Geometry resolves directions and Fourier crops, without automatically adding an angle-dependent obliquity factor or spatial vignetting law. Known source-power and frame-gain calibration supplies scalar intensity scaling; it does not create spatial transmission variation. |
+| Detector | The optical model samples intensity at the coherent field's grid points, without detector-pixel-area integration. Gain and background are deterministic terms; reconstruction loss selection does not automatically include the simulator's read noise, quantization, or saturation behavior. |
+| Reconstruction grid | Grid containment and `synthetic_na` describe sampling and outer support, without guaranteeing complete Fourier coverage, identifiability, or recoverable resolution. |
+
+Explicit narrowband [spectral channels](#narrowband-spectral-channels) provide
+separate wavelength kernels and optional object coupling. They do not integrate
+an unresolved continuous spectrum or within-channel bandwidth. Physical source
+positions compile to one plane-wave direction for the processed field of view;
+they do not propagate a spherical wave across the object.
+
+These are limits of the current implementation in `src/model/forward.rs`,
+`src/model/pupil.rs`, and experiment-to-model compilation. The underlying
+thin-object Fourier-crop model is explained with references in
+[Object, pupil, and Fourier sampling](#object-pupil-and-fourier-sampling).
+See [Choose a measurement loss](../guides/reconstruction.md#choose-a-measurement-loss)
+for noise assumptions and known gain/background handling.
+
 ## Narrowband spectral channels
 
 `SpectralImagePlaneModel` contains ordered ordinary `ImagePlaneModel` kernels

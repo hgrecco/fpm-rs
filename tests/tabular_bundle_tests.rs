@@ -101,6 +101,9 @@ fn canonical_tables_have_stable_schemas_and_long_form_dynamic_values() -> Result
     let summary = summary_dataframe("run-a", &result)?;
     let record = BenchmarkRecord::from_result("case-a", "synthetic", "iterations=3", &result);
     let runs = benchmark_runs_dataframe(std::slice::from_ref(&record))?;
+    for column in ["crop_row", "crop_column", "crop_height", "crop_width"] {
+        assert_eq!(runs.column(column)?.u64()?.get(0), None);
+    }
     for &column in COMMON_RUN_COLUMNS {
         assert_eq!(
             summary.column(column)?.dtype(),

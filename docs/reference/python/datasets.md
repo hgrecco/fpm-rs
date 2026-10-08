@@ -11,6 +11,8 @@ for the on-disk contract and provenance policy.
 
 ::: fpm_rs.Dataset
 
+::: fpm_rs.DatasetSubset
+
 ::: fpm_rs.open_dataset
 
 ::: fpm_rs.SpectralDataset

@@ -16,6 +16,7 @@ use pyo3::{prelude::*, types::PyDict};
 
 use crate::{
     bundle::{PyBundleArtifact, PyResultBundle, artifact},
+    datasets::PyDatasetSubset,
     errors::to_py_err,
     reconstruction::PyReconstructionResult,
 };
@@ -140,7 +141,10 @@ impl PyBenchmarkSuite {
         })
     }
 
-    #[pyo3(signature = (result, *, case_id, dataset_name, algorithm_configuration=""))]
+    /// Add a completed result; an optional resolved dataset subset preserves its
+    /// original frame/illumination identities, crop and provenance in the bundle.
+    /// Frame count and shapes must match; no residual metrics are recomputed.
+    #[pyo3(signature = (result, *, case_id, dataset_name, algorithm_configuration="", dataset_subset=None))]
     fn add_result(
         &self,
         py: Python<'_>,
@@ -148,6 +152,7 @@ impl PyBenchmarkSuite {
         case_id: String,
         dataset_name: String,
         algorithm_configuration: &str,
+        dataset_subset: Option<PyRef<'_, PyDatasetSubset>>,
     ) -> PyResult<String> {
         if case_id.is_empty() || dataset_name.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -163,8 +168,25 @@ impl PyBenchmarkSuite {
             "algorithm_configuration".into(),
             algorithm_configuration.into(),
         );
-        let record =
-            BenchmarkRecord::from_result(case_id, dataset_name, algorithm_configuration, &result);
+        let record = if let Some(subset) = dataset_subset {
+            BenchmarkRecord::from_subset_result(
+                case_id,
+                dataset_name,
+                algorithm_configuration,
+                &result,
+                &subset.inner,
+            )
+            .map_err(to_py_err)?
+        } else {
+            BenchmarkRecord::from_result(case_id, dataset_name, algorithm_configuration, &result)
+        };
+        result.metadata.extend(record.metadata.clone());
+        result
+            .metadata
+            .insert("case_id".into(), record.case_id.clone());
+        result
+            .metadata
+            .insert("dataset_name".into(), record.dataset_name.clone());
         let run_id = record.run_id.clone();
         self.entries().push(BenchmarkSuiteEntry { record, result });
         Ok(run_id)

@@ -96,6 +96,31 @@ Synthetic wavelength
   [Unwrap OPD across wavelengths](../guides/reconstruction.md#unwrap-opd-across-wavelengths)
   for assumptions, noise limits, and the method reference.
 
+Spatial and temporal coherence
+: Stable phase relationships across an illuminated region and over time.
+  fpm-rs treats each source as one coherent plane wave at one wavelength;
+  mutually incoherent sources add intensities without interference cross terms.
+  See [Model assumptions and limitations](core-concepts.md#model-assumptions-and-limitations).
+
+Multislice and multiple scattering
+: A multislice model propagates light through successive specimen layers;
+  multiple scattering accounts for light scattering more than once within the
+  specimen. The current model contains one thin transmission slice and neither
+  mechanism. See [Model assumptions and limitations](core-concepts.md#model-assumptions-and-limitations).
+
+Obliquity and vignetting
+: Obliquity describes angle-dependent transmission; vignetting describes
+  attenuation that varies across the field of view. fpm-rs does not derive
+  either correction automatically from illumination geometry. See
+  [Model assumptions and limitations](core-concepts.md#model-assumptions-and-limitations).
+
+Shot noise and read noise
+: Shot noise is the variation associated with discrete detected photons or
+  photoelectrons; an ideal Poisson count has variance equal to its mean. Read
+  noise is added by the detector's readout electronics. A pure Poisson likelihood
+  does not include that read noise. See
+  [Choose a measurement loss](../guides/reconstruction.md#choose-a-measurement-loss).
+
 Defocus
 : Axial displacement from the modeled focus. fpm-rs expresses
   `defocus_distance` in metres and compiles it as a spatial-frequency-dependent

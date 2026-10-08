@@ -38,7 +38,7 @@ valid-object mask. When present, amplitude, phase, complex-field, and Fourier
 metrics ignore pixels outside the mask. Public data without ground truth passes
 `None`; per-frame intensity residuals remain available.
 
-```rust,no_run
+```rust
 use fpm_rs::{
     Result,
     algorithms::AlternatingProjection,
@@ -94,6 +94,40 @@ Converted-dataset benchmarks use the same API. When ground truth is unavailable,
 pass `ground_truth: None`; normalized frame residuals remain available without
 ground truth. The `load_local_dataset` example demonstrates this path.
 
+For dataset subsets, use `run_benchmark_subset_case` to carry the resolved
+selection into the record automatically:
+
+```rust
+use fpm_rs::{Result, algorithms::AlternatingProjection,
+    benchmark::run_benchmark_subset_case, datasets::{DatasetLoader, FrameSelector}};
+
+fn main() -> Result<()> {
+    let dataset = DatasetLoader::new("converted-fpm")?.load()?;
+    let subset = dataset.subset()
+        .frames(FrameSelector::Indices(vec![2, 0]))
+        .crop_pixels(16, 32, 64, 64)?.build()?;
+    let (record, result) = run_benchmark_subset_case(
+        "converted-fpm", "iterations=10",
+        AlternatingProjection::default().iterations(10), &subset,
+    )?;
+    assert_eq!(record.spatial_crop, Some([16, 32, 64, 64]));
+    assert_eq!(record.frames[0].original_frame_index, 2);
+    Ok(())
+}
+```
+
+The helper builds the ordinary reconstruction problem, uses the subset's
+cropped truth and validity mask when available, and copies source provenance,
+measurement units, and `dataset_version` when declared. `spatial_crop` is
+`[row, column, height, width]` in original detector pixels, including the full
+image rectangle for frame-only selections. Original frame indices follow the
+resolved requested order. Illumination identifiers are descriptive acquisition
+metadata: missing identifiers stay absent, and no individual source is inferred
+for coded illumination. Algorithm failures retain the same selection records.
+Case hashes include frame order, original identifiers, and crop, so equally
+sized crops at different origins have different identities. JSON and CSV retain
+these existing record fields; their record schema remains version 1.
+
 ## Normalized benchmark bundles
 
 A `BenchmarkRecord` has two identities: `case_id` identifies an immutable case
@@ -107,6 +141,13 @@ With the `parquet` feature, `write_benchmark_bundle` writes four stable tables:
 also has one nested `ResultBundle` under `results/<run_id>`; arrays are not
 duplicated in benchmark-level storage. Shared run columns have the same names
 and dtypes as result summary tables, so joins are direct.
+
+Benchmark bundle format version **2** adds nullable `UInt64` run columns
+`crop_row`, `crop_column`, `crop_height`, and `crop_width`. All four are present
+for resolved subsets and all four are null when a crop was not supplied. The
+`frames` table retains `original_frame_index` and nullable
+`original_illumination_index`. Readers reject older benchmark bundle versions;
+result-bundle and dataset format versions are unchanged.
 
 Python can build a comparison from existing results:
 
@@ -122,6 +163,32 @@ benchmark = suite.write_bundle("output/comparison", label="AP repeats")
 reopened = fpm.read_benchmark_bundle(benchmark.path)
 result_bundle = reopened.results[run_id]
 ```
+
+To preserve a dataset selection in Python, pass the same resolved subset used
+for reconstruction:
+
+```python
+subset = dataset.subset(frames=[2, 0], crop=(16, 32, 64, 64))
+problem = subset.reconstruction_problem()
+result = fpm.AlternatingProjection(iterations=10).run(problem=problem)
+suite = fpm.BenchmarkSuite("dataset-subsets")
+run_id = suite.add_result(
+    result=result,
+    case_id="converted-v1-frames-2-0-crop-16-32-64-64-ap10",
+    dataset_name="converted-fpm",
+    algorithm_configuration="iterations=10",
+    dataset_subset=subset,
+)
+benchmark = suite.write_bundle(path="output/subsets")
+```
+
+`BenchmarkRecord::from_subset_result` is the equivalent Rust conversion for an
+already completed result. These conversions check frame count and both grid
+shapes; callers must supply the subset actually used. They preserve the explicit
+caller-defined `case_id` and do not recompute residual metrics. Without a
+subset, result-only conversion retains sequential frame indices and no crop.
+Include the resolved selection and algorithm settings in your explicit case ID
+when comparing such runs.
 
 Install `fpm-rs[polars]` to query the ordinary Parquet paths:
 

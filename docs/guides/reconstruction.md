@@ -676,7 +676,9 @@ ptychography testing for future work. Equal friction and feedback reproduce
 their object recurrence; fpm-rs exposes them separately and keeps the compiled
 pupil fixed.
 
-`GradientDescent` defaults to an image-amplitude residual. Its `loss_type` can
+`GradientDescent` defaults to an image-amplitude residual. See
+[Choose a measurement loss](#choose-a-measurement-loss) for noise assumptions,
+gain/background normalization, and alternatives. Its `loss_type` can
 select amplitude MSE, intensity MSE, Poisson negative log likelihood, or robust
 Huber amplitude loss. Losses are evaluated in intrinsic intensity units after
 removing known linear gain and background, keeping the trajectory independent
@@ -903,6 +905,87 @@ iterative physical refinement remains the existing calibrator's job. It does
 not implement spectral correlation or label independent Fourier shifts as
 apparatus calibration.
 
+## Choose a measurement loss
+
+Start with `loss_type="amplitude_mse"` when noise statistics are uncertain or
+the acquisition spans bright-field and dark-field intensities. Taking square
+roots reduces the dominance of bright-frame residuals. This is a robust default,
+not a guarantee against model mismatch. Yeh et al. found amplitude-based costs
+more tolerant than intensity-based costs across the large FPM dynamic range;
+Bian et al. motivate Poisson likelihood and gradient truncation for noisy FPM.
+The complete references are below.
+
+| Python `loss_type` | When to choose it | Assumption or limitation |
+| --- | --- | --- |
+| `"amplitude_mse"` | Default for mixed bright-field/dark-field data or uncertain noise | Squares the difference between predicted and measured square-root intensities; it does not estimate a detector noise distribution. |
+| `"poisson_nll"` | Calibrated photon/photoelectron counts dominated by shot noise | A count's variance follows its mean. Read noise, clipping, unmodeled background, or gross outliers violate a pure Poisson model. |
+| `"intensity_mse"` | Approximately constant-variance additive intensity errors in the chosen units | Squares intensity residuals, so bright residuals can dominate the objective and underweight dark-field information. |
+| `"huber_amplitude"` | Sparse large amplitude residuals after calibration and masking | Quadratic near zero and linear for large residuals; the crate's fixed transition is one amplitude unit, so the unit scale matters. |
+
+Rust uses `LossType::{AmplitudeMse, PoissonNegativeLogLikelihood, IntensityMse,
+HuberAmplitude}` from `algorithms::objective`. The scalar definitions live in
+`src/algorithms/objective.rs`; `GradientDescent` exposes them through
+`loss_type`, and physical `IlluminationCalibration` uses the same definitions
+on detector-space predictions. Alternating-projection and PIE algorithms use
+their documented amplitude projections rather than exposing this loss selector.
+
+### Gain, background, and the meaning of Poisson loss
+
+The compiled ordinary forward model predicts
+`I_detector = frame_gain * sum(source_weight * |source_field|²) + background`.
+Source weights include calibrated source power and acquisition contributions;
+they are distinct from measurement frame weights, which weight the objective.
+Known background may be shared or per frame and spatially varying. It is added
+after the frame gain. This is deterministic prediction scaling, not a camera
+noise likelihood. `CameraModel` provides detector-noise simulation separately.
+
+`GradientDescent` evaluates every selectable loss in intrinsic intensity units:
+its target is `max((I_measured - background) / frame_gain, 0)`, and its prediction
+is the source-weighted intrinsic intensity sum. The Poisson mean has a `1e-12`
+numerical floor and omits measurement-only constants. This normalization keeps
+known detector scaling out of the update, but gain-divided or background-subtracted
+values are not automatically Poisson counts. In particular, subtracting a known
+background removes its mean without removing its shot-noise variance. Treat the
+normalized Poisson loss as a count-based approximation unless the intrinsic
+units and noise statistics justify it. The crate does not implement a combined
+Poisson–Gaussian likelihood, a censored likelihood for saturation, or a
+background-noise variance correction.
+
+Physical `IlluminationCalibration` instead compares the full detector-space
+prediction with the processed measurements. Its Poisson objective can therefore
+retain a modeled count background in the predicted mean, but still requires
+appropriate count units and shot-noise-dominated data. Loss numbers from this
+calibration and normalized gradient descent need not be comparable.
+
+Measurement preprocessing is a separate, explicit operation: dark/background
+subtraction, flat-field division, exposure normalization, and optional negative
+clamping happen before reconstruction. Keep the compiled gain/background in
+those processed units and avoid subtracting a background twice. Corrections,
+exposure division, or clamping can change the noise distribution; choosing
+`"poisson_nll"` does not undo them. Masks exclude invalid or saturated pixels,
+and zero frame weight excludes a frame. For read-noise-dominated dark-field data,
+evaluate amplitude or Huber-amplitude loss and inspect residuals rather than
+assuming pure Poisson statistics. For sparse gross outliers, the optional
+[Poisson gradient truncation](#algorithm-options-and-calibration) reduces their update influence;
+it does not repair clipping or supply missing detector physics.
+
+Compare losses using the same corrected measurements, masks, and evaluation
+metrics. Their objective values have different scales and offsets, so a smaller
+raw objective under one loss is not evidence that it reconstructed a better
+object. Retune `object_step` when changing the loss.
+
+The noise and dynamic-range guidance follows L.-H. Yeh, J. Dong, J. Zhong,
+L. Tian, M. Chen, G. Tang, M. Soltanolkotabi, and L. Waller,
+[“Experimental robustness of Fourier ptychography phase retrieval algorithms,”
+*Optics Express* **23**(26), 33214–33240
+(2015)](https://doi.org/10.1364/OE.23.033214), and L. Bian, J. Suo, J. Chung,
+X. Ou, C. Yang, F. Chen, and Q. Dai,
+[“Fourier ptychographic reconstruction using Poisson maximum likelihood and
+truncated Wirtinger gradient,” *Scientific Reports* **6**, 27384
+(2016)](https://doi.org/10.1038/srep27384). fpm-rs uses its existing normalized
+mini-batch gradient implementation; this guidance does not claim to implement
+Yeh et al.'s global Newton solver or a complete detector likelihood.
+
 ## Physical planar LED-array calibration
 
 Physical calibration and generic k-vector correction solve different problems.
@@ -1053,7 +1136,7 @@ names.
 
 The equivalent Rust selection and joint run use the same canonical units:
 
-```rust,no_run
+```rust
 use fpm_rs::{
     Result,
     algorithms::{Fpie, JointReconstruction},
@@ -1196,7 +1279,7 @@ long-form records with `iteration`, `namespace`, `metric`, and `value`.
 
 With the Rust `parquet` feature, write a final result bundle with:
 
-```rust,no_run
+```rust
 # use fpm_rs::{Result, reconstruction::{BundleExportOptions, ReconstructionResult}};
 # fn save(result: &ReconstructionResult) -> Result<()> {
 let bundle = result.write_bundle(

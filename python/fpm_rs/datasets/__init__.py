@@ -2,6 +2,7 @@
 
 from fpm_rs._core import (
     Dataset,
+    DatasetSubset,
     DatasetRegistry,
     DatasetRegistryEntry,
     SpectralDataset,
@@ -11,6 +12,7 @@ from fpm_rs._core import (
 
 __all__ = [
     "Dataset",
+    "DatasetSubset",
     "DatasetRegistry",
     "DatasetRegistryEntry",
     "SpectralDataset",

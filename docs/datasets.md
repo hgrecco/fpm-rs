@@ -29,7 +29,7 @@ dataset-root/
 
 Rust loading is explicit and offline:
 
-```rust,no_run
+```rust
 use fpm_rs::{Result, datasets::DatasetLoader};
 
 fn main() -> Result<()> {
@@ -43,6 +43,37 @@ fn main() -> Result<()> {
 `DatasetLoader` validates safe paths, measurements, configuration and compiled
 models, optional truth and masks, provenance, and units. It never accesses the
 network.
+
+## Select frames and crop an ordinary dataset
+
+Rust's `Dataset::subset` builder accepts `FrameSelector::All`,
+`EveryNth(step)`, or ordered unique `Indices`, plus an optional detector `Rect`.
+Python resolves the same selection in one call:
+
+```python
+subset = dataset.subset(frames=[2, 0], crop=(16, 32, 64, 64))
+problem = subset.reconstruction_problem()
+print(subset.spatial_crop, subset.measurements.shape)
+# Alternatively select 0, 2, 4, ... and retain the full image:
+frame_subset = dataset.subset(every_nth_frame=2)
+```
+
+Indices refer to the loaded acquisition, with the explicit supplied order
+preserved. `frames` and `every_nth_frame` are mutually exclusive. Crop order is
+`(row, column, height, width)` in original detector pixels, with positive sizes
+and containment checked before construction. Its object-space mapping must
+land on integer reconstruction pixels. Cropping owns new measurements and
+correction arrays, recompiles selected models, and crops optional truth/masks;
+it does not resample data. Python releases the GIL during subset construction.
+
+`DatasetSubset::spatial_crop` / `subset.spatial_crop` returns the resolved
+rectangle, including the full image when no spatial crop was requested. Frame
+metadata preserves original acquisition indices and optional illumination
+identifiers separately from reindexed model sources. Dataset provenance and
+measurement units are retained. Use the
+[subset-aware benchmark workflow](benchmarks.md) to export these selections to
+JSON, CSV, and normalized Parquet tables. This is an in-memory selection API;
+the on-disk dataset contract is unchanged.
 
 ## Open an explicit spectral bundle
 
@@ -85,7 +116,7 @@ https://raw.githubusercontent.com/hgrecco/fpm-rs/main/dataset_registry.json
 In Rust, use `DatasetRegistry` when an identifier should be downloaded on
 demand:
 
-```rust,no_run
+```rust
 use fpm_rs::{Result, datasets::DatasetRegistry};
 
 fn main() -> Result<()> {

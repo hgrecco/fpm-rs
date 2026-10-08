@@ -2,6 +2,10 @@ use std::fs;
 
 use fpm_rs::{
     Complex64, Result,
+    algorithms::AlternatingProjection,
+    benchmark::{
+        BenchmarkRecord, run_benchmark_subset_case, write_benchmark_csv, write_benchmark_json,
+    },
     configuration::{ExperimentDescription, SimulationConfiguration},
     datasets::{Dataset, DatasetLoader, DatasetManifest, FrameSelector},
     experiment::{
@@ -200,6 +204,17 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
             .all(|&value| value == 1)
     );
     assert_eq!(subset.measurement_units(), Some("arbitrary intensity"));
+    let (record, result) = run_benchmark_subset_case(
+        "local-fixture",
+        "iterations=1",
+        AlternatingProjection::default().iterations(1),
+        &subset,
+    )?;
+    assert!(record.success, "{:?}", record.error);
+    assert!(record.amplitude_rmse.is_some());
+    assert_eq!(record.metadata["license"], "CC0");
+    assert_eq!(record.metadata["measurement_units"], "arbitrary intensity");
+    assert_eq!(result.unwrap().metadata["case_id"], record.case_id);
 
     serde_json::to_writer_pretty(
         fs::File::create(derived.join("ground-truth.json"))?,
@@ -242,8 +257,7 @@ fn dataset_loader_reads_a_conforming_generic_bundle() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
+fn subset_fixture() -> Result<Dataset> {
     let optics = Optics {
         wavelength_vacuum_m: 532e-9,
         objective_na: 0.1,
@@ -268,8 +282,12 @@ fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
     )?;
     let measurements =
         MeasurementStack::from_vec((0..48).map(f64::from).collect(), (4, 4), Vec::new())?;
-    let dataset = Dataset::new(measurements, configuration)?;
+    Dataset::new(measurements, configuration)
+}
 
+#[test]
+fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
+    let dataset = subset_fixture()?;
     let subset = dataset
         .subset()
         .frames(FrameSelector::Indices(vec![0, 2]))
@@ -301,6 +319,139 @@ fn deterministic_frame_and_pixel_subset_builds_a_valid_problem() -> Result<()> {
     );
     assert_eq!(subset.configuration().reconstruction_shape, (4, 4));
     subset.reconstruction_problem()?;
+    Ok(())
+}
+
+#[test]
+fn subset_benchmarks_preserve_selection_in_records_and_artifacts() -> Result<()> {
+    let dataset = subset_fixture()?;
+    let subset = dataset
+        .subset()
+        .frames(FrameSelector::Indices(vec![0, 2]))
+        .crop_pixels(1, 1, 2, 2)?
+        .build()?;
+    let reordered = dataset
+        .subset()
+        .frames(FrameSelector::Indices(vec![2, 0]))
+        .crop_pixels(1, 1, 2, 2)?
+        .build()?;
+    let run = |subset: &fpm_rs::datasets::DatasetSubset| {
+        run_benchmark_subset_case(
+            "subset-fixture",
+            "iterations=1",
+            AlternatingProjection::default().iterations(1),
+            subset,
+        )
+    };
+    let (record, result) = run(&reordered)?;
+    assert!(record.success, "{:?}", record.error);
+    assert_eq!(record.spatial_crop, Some([1, 1, 2, 2]));
+    assert_eq!(
+        record
+            .frames
+            .iter()
+            .map(|f| f.original_frame_index)
+            .collect::<Vec<_>>(),
+        [2, 0]
+    );
+    assert_eq!(
+        record
+            .frames
+            .iter()
+            .map(|f| f.original_illumination_index)
+            .collect::<Vec<_>>(),
+        [Some(2), Some(0)]
+    );
+    let (repeat, _) = run(&reordered)?;
+    assert_eq!(record.case_id, repeat.case_id);
+    assert_ne!(record.run_id, repeat.run_id);
+    let alternate_crop = dataset
+        .subset()
+        .frames(FrameSelector::Indices(vec![2, 0]))
+        .crop_pixels(0, 0, 2, 2)?
+        .build()?;
+    assert_ne!(record.case_id, run(&alternate_crop)?.0.case_id);
+    assert_ne!(record.case_id, run(&subset)?.0.case_id);
+    let full_image = dataset.subset().every_nth_frame(2).build()?;
+    assert_eq!(run(&full_image)?.0.spatial_crop, Some([0, 0, 4, 4]));
+
+    let (failed, no_result) = run_benchmark_subset_case(
+        "subset-fixture",
+        "object_step=-1",
+        AlternatingProjection::default().object_step(-1.0),
+        &reordered,
+    )?;
+    assert!(!failed.success && no_result.is_none());
+    assert_eq!(failed.spatial_crop, record.spatial_crop);
+    assert_eq!(failed.frames[0].original_frame_index, 2);
+    assert!(failed.frames.iter().all(|f| f.normalized_l2.is_none()));
+
+    let result = result.unwrap();
+    let completed = BenchmarkRecord::from_subset_result(
+        "explicit-case",
+        "subset-fixture",
+        "iterations=1",
+        &result,
+        &reordered,
+    )?;
+    assert_eq!(completed.case_id, "explicit-case");
+    assert_eq!(completed.frames[0].original_frame_index, 2);
+    assert!(
+        BenchmarkRecord::from_subset_result("case", "fixture", "", &result, &full_image).is_err()
+    );
+
+    let directory = tempfile::tempdir()?;
+    let records = [record.clone(), failed];
+    write_benchmark_json(&records, directory.path().join("records.json"))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.path().join("records.json"))?)?;
+    assert_eq!(
+        json["records"][0]["spatial_crop"],
+        serde_json::json!([1, 1, 2, 2])
+    );
+    assert_eq!(json["records"][1]["frames"][0]["original_frame_index"], 2);
+    write_benchmark_csv(&records, directory.path().join("records.csv"))?;
+    let mut csv = csv::Reader::from_path(directory.path().join("records.csv"))?;
+    let columns = csv.headers()?.clone();
+    let crop_column = columns.iter().position(|c| c == "spatial_crop").unwrap();
+    assert_eq!(&csv.records().next().unwrap()?[crop_column], "1;1;2;2");
+
+    #[cfg(feature = "parquet")]
+    {
+        use polars::prelude::{ParquetReader, SerReader};
+        let results = [(record.run_id.clone(), result)].into();
+        let bundle = fpm_rs::benchmark_bundle::write_benchmark_bundle(
+            directory.path().join("bundle"),
+            "subset-suite",
+            &records,
+            &results,
+            Default::default(),
+        )?;
+        let runs = ParquetReader::new(fs::File::open(bundle.tables.runs.path)?).finish()?;
+        let frames = ParquetReader::new(fs::File::open(bundle.tables.frames.path)?).finish()?;
+        assert_eq!(runs.column("crop_row")?.u64()?.get(1), Some(1));
+        assert_eq!(runs.column("crop_height")?.u64()?.get(0), Some(2));
+        assert_eq!(
+            frames.column("original_frame_index")?.u64()?.get(2),
+            Some(2)
+        );
+        assert_eq!(
+            frames.column("original_illumination_index")?.u64()?.get(1),
+            Some(0)
+        );
+        let mut invalid = records[0].clone();
+        invalid.spatial_crop = Some([0, 0, 3, 2]);
+        assert!(
+            fpm_rs::benchmark_bundle::write_benchmark_bundle(
+                directory.path().join("invalid"),
+                "subset-suite",
+                &[invalid],
+                &results,
+                Default::default(),
+            )
+            .is_err()
+        );
+    }
     Ok(())
 }
 

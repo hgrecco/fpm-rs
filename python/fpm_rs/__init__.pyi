@@ -1243,6 +1243,70 @@ class Dataset:
         """Return the declared units of measured intensities, if present."""
     def reconstruction_problem(self) -> ReconstructionProblem:
         """Build a validated problem from the dataset measurements and model."""
+    def subset(
+        self,
+        *,
+        frames: list[int] | None = None,
+        every_nth_frame: int | None = None,
+        crop: tuple[int, int, int, int] | None = None,
+    ) -> DatasetSubset:
+        """Resolve an owned frame selection and detector crop, releasing the GIL.
+
+        Parameters
+        ----------
+        frames
+            Unique zero-based acquisition indices in the desired order; an
+            empty or out-of-range selection raises ``DatasetError``.
+        every_nth_frame
+            Positive step selecting 0, step, 2*step, ...; mutually exclusive
+            with ``frames``. Omit both to retain every frame.
+        crop
+            Zero-based ``(row, column, height, width)`` detector rectangle.
+            Sizes must be positive, contained in the original image, and map
+            to integer reconstruction pixels; otherwise ``DatasetError``.
+            Omit to resolve the full original image rectangle.
+
+        Returns
+        -------
+        DatasetSubset
+            Owned measurements, updated compiled models, cropped truth/mask,
+            and unchanged original dataset provenance and intensity units.
+        """
+
+class DatasetSubset:
+    """Resolved ordinary dataset selection returned by ``Dataset.subset``.
+
+    Measurements and models retain original acquisition identities for
+    benchmarking. NumPy array getters return writable C-contiguous copies:
+    truth is complex128 and its mask is uint8, both in (row, column) order.
+    """
+
+    @property
+    def spatial_crop(self) -> tuple[int, int, int, int]:
+        """Resolved (row, column, height, width) in original detector pixels."""
+    @property
+    def measurements(self) -> MeasurementStack:
+        """Owned selected stack with original frame and illumination metadata."""
+    @property
+    def true_model(self) -> ImagePlaneModel:
+        """Acquisition model recompiled for the selection and cropped grids."""
+    @property
+    def reconstruction_model(self) -> ImagePlaneModel:
+        """Assumed model recompiled for the selection and cropped grids."""
+    @property
+    def ground_truth_object(self) -> ComplexArray | None:
+        """Writable copy of cropped complex truth, or None if unavailable."""
+    @property
+    def valid_object_mask(self) -> MaskArray | None:
+        """Writable copy of the cropped binary truth mask, when supplied."""
+    @property
+    def provenance(self) -> Mapping[str, str]:
+        """New mapping of the original dataset's source provenance."""
+    @property
+    def measurement_units(self) -> str | None:
+        """Unchanged declared intensity units, if supplied."""
+    def reconstruction_problem(self) -> ReconstructionProblem:
+        """Clone the selected stack and assumed model into a validated problem."""
 
 class DatasetRegistry:
     """Discover, verify, cache, and open datasets from a JSON registry.
@@ -3132,11 +3196,22 @@ class BenchmarkSuite:
         case_id: str,
         dataset_name: str,
         algorithm_configuration: str = "",
+        dataset_subset: DatasetSubset | None = None,
     ) -> str:
-        """Add a completed result and return its deterministic run ID.
+        """Add a completed result and return its fresh, unique run ID.
 
         ``case_id`` and ``dataset_name`` must be nonempty. The optional
         configuration string distinguishes algorithm settings for reporting.
+
+        Parameters
+        ----------
+        dataset_subset
+            Resolved subset used for this result. Records original acquisition
+            frame indices, optional illumination identifiers, detector crop,
+            dataset version, provenance, and units. Frame count and low/high
+            resolution shapes must match the result; otherwise
+            ``InvalidParameterError``. Residual metrics are not recomputed.
+            Omit to retain the existing result-only, sequential-frame record.
         """
     def write_bundle(
         self,

@@ -63,9 +63,17 @@ pub struct DatasetSubset {
     valid_object_mask: Option<Array2<u8>>,
     provenance: std::collections::BTreeMap<String, String>,
     measurement_units: Option<String>,
+    spatial_crop: Rect,
 }
 
 impl DatasetSubset {
+    /// Resolved detector rectangle in the original dataset's zero-based pixels.
+    ///
+    /// Frame-only selections resolve to the full original image rectangle.
+    pub fn spatial_crop(&self) -> Rect {
+        self.spatial_crop
+    }
+
     /// Borrows subsetted resident measurements.
     pub fn measurements(&self) -> &MeasurementStack {
         &self.measurements
@@ -86,7 +94,8 @@ impl DatasetSubset {
         self.valid_object_mask.as_ref()
     }
 
-    /// Borrows original provenance plus deterministic subset annotations.
+    /// Borrows the original dataset's provenance; resolved selection is in frame
+    /// metadata and [`Self::spatial_crop`].
     pub fn provenance(&self) -> &std::collections::BTreeMap<String, String> {
         &self.provenance
     }
@@ -282,6 +291,7 @@ impl<'a> DatasetSubsetBuilder<'a> {
             valid_object_mask,
             provenance: self.dataset.provenance().clone(),
             measurement_units: self.dataset.measurement_units().map(str::to_owned),
+            spatial_crop: crop,
         })
     }
 }

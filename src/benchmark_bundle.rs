@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Current benchmark-bundle manifest format version.
-pub const BENCHMARK_BUNDLE_FORMAT_VERSION: u32 = 1;
+pub const BENCHMARK_BUNDLE_FORMAT_VERSION: u32 = 2;
 
 const RUNS: &str = "tables.runs";
 const FRAMES: &str = "tables.frames";
@@ -370,6 +370,10 @@ fn validate_benchmark_tables(
             ("dataset_version", DataType::String, true),
             ("random_seed", DataType::UInt64, true),
             ("frame_count", DataType::UInt64, true),
+            ("crop_row", DataType::UInt64, true),
+            ("crop_column", DataType::UInt64, true),
+            ("crop_height", DataType::UInt64, true),
+            ("crop_width", DataType::UInt64, true),
             ("completed_iterations", DataType::UInt64, true),
             ("elapsed_seconds", DataType::Float64, false),
             ("final_objective", DataType::Float64, true),
@@ -388,6 +392,10 @@ fn validate_benchmark_tables(
     let completed_iterations = runs.column("completed_iterations")?.u64()?;
     let final_objectives = runs.column("final_objective")?.f64()?;
     let frame_counts = runs.column("frame_count")?.u64()?;
+    let crop_rows = runs.column("crop_row")?.u64()?;
+    let crop_columns = runs.column("crop_column")?.u64()?;
+    let crop_heights = runs.column("crop_height")?.u64()?;
+    let crop_widths = runs.column("crop_width")?.u64()?;
     let mut all_run_ids = BTreeSet::new();
     let mut successful_run_ids = BTreeSet::new();
     let mut expected_frame_counts = BTreeMap::new();
@@ -399,6 +407,28 @@ fn validate_benchmark_tables(
         let run_id = run_ids.get(row).ok_or_else(|| missing("run_id"))?;
         let case_id = case_ids.get(row).ok_or_else(|| missing("case_id"))?;
         let success = successes.get(row).ok_or_else(|| missing("success"))?;
+        let crop = [
+            crop_rows.get(row),
+            crop_columns.get(row),
+            crop_heights.get(row),
+            crop_widths.get(row),
+        ];
+        if !crop.iter().all(Option::is_none)
+            && (!crop.iter().all(Option::is_some)
+                || crop[2] == Some(0)
+                || crop[3] == Some(0)
+                || crop[0]
+                    .zip(crop[2])
+                    .is_none_or(|(origin, size)| origin.checked_add(size).is_none())
+                || crop[1]
+                    .zip(crop[3])
+                    .is_none_or(|(origin, size)| origin.checked_add(size).is_none()))
+        {
+            return Err(Error::InvalidParquetSchema {
+                role: RUNS.into(),
+                reason: "crop columns must be all null or one non-empty detector rectangle".into(),
+            });
+        }
         if run_id.is_empty() || case_id.is_empty() || !all_run_ids.insert(run_id.to_owned()) {
             return Err(Error::InvalidParquetSchema {
                 role: RUNS.into(),
@@ -632,6 +662,21 @@ fn validate_records(
             });
         }
         let run_path = Path::new(&record.run_id);
+        if record
+            .spatial_crop
+            .is_some_and(|[row, column, height, width]| {
+                height == 0
+                    || width == 0
+                    || [height, width] != record.image_shape
+                    || row.checked_add(height).is_none()
+                    || column.checked_add(width).is_none()
+            })
+        {
+            return Err(Error::InvalidParameter {
+                name: "benchmark spatial crop",
+                reason: "must be a non-empty detector rectangle matching image_shape".into(),
+            });
+        }
         if run_path.components().count() != 1
             || !matches!(run_path.components().next(), Some(Component::Normal(_)))
         {

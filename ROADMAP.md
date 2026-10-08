@@ -25,11 +25,8 @@ material differences from its cited method.
 - **Metrics:** [Fourier ring correlation](#fourier-ring-correlation),
   [subpixel complex-field registration](#subpixel-complex-field-registration),
   and [resolution targets and contrast criteria](#resolution-targets-and-contrast-criteria).
-- **Diagnostics:** [Benchmark source and crop records](#benchmark-source-and-crop-records)
-  and [Python Polars integration](#python-polars-integration).
-- **Documentation:** [Loss-selection guidance](#loss-selection-guidance),
-  [consolidated model limitations](#consolidated-model-limitations), and
-  [non-CPU backend guide](#non-cpu-backend-guide).
+- **Diagnostics:** [Python Polars integration](#python-polars-integration).
+- **Documentation:** [Non-CPU backend guide](#non-cpu-backend-guide).
 - **CUDA (requires scope change):** [CUDA kernels](#cuda-kernels),
   [device-resident reconstruction state](#device-resident-reconstruction-state),
   and [CPU and GPU validation](#cpu-and-gpu-validation).
@@ -426,11 +423,6 @@ Remaining extensions:
 
 ## Diagnostics and benchmarks
 
-### Benchmark source and crop records
-
-- [ ] Record resolved source frame indices, illumination associations, and
-  spatial crops in benchmark records produced from dataset subsets.
-
 ### Python Polars integration
 
 - [ ] Reconsider returning Python Polars DataFrames through `pyo3-polars` once
@@ -441,36 +433,6 @@ Remaining extensions:
   Until that full matrix is verified, bundles expose ordinary Parquet paths.
 
 ## Documentation
-
-### Loss-selection guidance
-
-- [ ] Expand loss-selection guidance in `docs/guides/reconstruction.md`. Explain
-  that amplitude loss is a robust default across the large bright-field and
-  dark-field dynamic range, Poisson negative log likelihood is appropriate for
-  calibrated shot-noise-dominated counts, intensity MSE is sensitive to bright
-  residuals, and read noise, clipping, unmodeled background, or outliers break a
-  pure Poisson assumption. Describe the crate’s gain/background handling and
-  ground the guidance in L. Bian, J. Suo, J. Chung, X. Ou, C. Yang, F. Chen,
-  and Q. Dai, [“Fourier ptychographic reconstruction using Poisson maximum
-  likelihood and truncated Wirtinger gradient”](https://doi.org/10.1038/srep27384),
-  *Scientific Reports* **6**, 27384 (2016), and L.-H. Yeh, J. Dong, J. Zhong,
-  L. Tian, M. Chen, G. Tang, M. Soltanolkotabi, and L. Waller,
-  [“Experimental robustness of Fourier ptychography phase retrieval
-  algorithms”](https://doi.org/10.1364/OE.23.033214), *Optics Express*
-  **23**(26), 33214–33240 (2015).
-
-### Consolidated model limitations
-
-- [ ] Consolidate known model limitations in
-  `docs/concepts/core-concepts.md`: each source is internally spatially and
-  temporally coherent, coded sources combine mutually incoherently, the object
-  is a single thin complex-transmission slice, multiple scattering and
-  multislice propagation are absent, defocus uses the documented paraxial
-  quadratic phase, pupil-aberration coefficients are direct radian polynomial
-  weights rather than Noll-normalized RMS coefficients, and no geometry-derived
-  obliquity or vignetting law is applied automatically. Do not assign a universal
-  paraxial NA validity cutoff; approximation error also depends on wavelength
-  and propagation distance.
 
 ### Non-CPU backend guide
 

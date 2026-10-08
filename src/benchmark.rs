@@ -21,8 +21,9 @@ use uuid::Uuid;
 use crate::{
     Complex64, Result,
     algorithms::ReconstructionAlgorithm,
+    datasets::DatasetSubset,
     evaluation::{evaluate_frame_intensity, evaluate_reconstruction_with_problem},
-    measurements::MeasurementRead,
+    measurements::{FrameMetadata, MeasurementRead},
     model::ImagePlaneModel,
     reconstruction::{ReconstructionProblem, ReconstructionResult},
 };
@@ -196,13 +197,47 @@ pub struct BenchmarkFrameRecord {
     pub frame_index: usize,
     /// Zero-based frame index in the original acquisition before subsetting.
     pub original_frame_index: usize,
-    /// Optional original individual illumination-source index.
+    /// Optional original illumination identifier from acquisition metadata.
+    ///
+    /// This is descriptive metadata, not a source inferred from the compiled
+    /// model. Missing identifiers and coded acquisitions may remain `None`.
     pub original_illumination_index: Option<usize>,
     /// Predicted-minus-measured intensity L2 norm divided by measured L2 norm.
     pub normalized_l2: Option<f64>,
 }
 
 impl BenchmarkRecord {
+    /// Builds a record for a completed result using a resolved dataset subset.
+    ///
+    /// Preserves the caller's `case_id`, original acquisition frame and optional
+    /// illumination identifiers, detector crop, dataset provenance and units.
+    /// Residual metrics are not recomputed. The caller must supply the subset
+    /// used for this result; mismatched frame counts or array shapes are rejected.
+    pub fn from_subset_result(
+        case_id: impl Into<String>,
+        dataset_name: impl Into<String>,
+        algorithm_configuration: impl Into<String>,
+        result: &ReconstructionResult,
+        subset: &DatasetSubset,
+    ) -> Result<Self> {
+        let mut record = Self::from_result(case_id, dataset_name, algorithm_configuration, result);
+        if record.frame_count != subset.measurements().frame_count()
+            || record.image_shape != [subset.spatial_crop().height, subset.spatial_crop().width]
+            || record.reconstruction_shape
+                != [
+                    subset.configuration().reconstruction_shape.0,
+                    subset.configuration().reconstruction_shape.1,
+                ]
+        {
+            return Err(crate::Error::InvalidParameter {
+                name: "dataset subset",
+                reason: "result frame count and shapes must match the supplied subset".into(),
+            });
+        }
+        annotate_subset(&mut record, subset);
+        Ok(record)
+    }
+
     /// Builds a normalized benchmark record for an already completed result.
     ///
     /// Callers provide the deterministic `case_id`; a fresh `run_id` is
@@ -279,6 +314,105 @@ impl BenchmarkRecord {
     }
 }
 
+/// Runs a concrete algorithm on a resolved dataset subset and records its provenance.
+///
+/// Clones the subset into a validated problem and evaluates its optional cropped
+/// truth and valid-object mask. Records the resolved original frame/illumination
+/// identifiers and `[row, column, height, width]` detector crop even when the
+/// algorithm fails. The deterministic case identity includes those selections.
+/// Problem-construction errors are returned; reconstruction and metric failures
+/// remain in `record.error`, as in [`run_benchmark_case`].
+///
+/// ```no_run
+/// use fpm_rs::{algorithms::AlternatingProjection, benchmark::run_benchmark_subset_case,
+///     datasets::{DatasetLoader, FrameSelector}, Result};
+/// # fn main() -> Result<()> {
+/// let dataset = DatasetLoader::new("converted-fpm")?.load()?;
+/// let subset = dataset.subset().frames(FrameSelector::EveryNth(2))
+///     .crop_pixels(0, 0, 16, 16)?.build()?;
+/// let (record, result) = run_benchmark_subset_case(
+///     "converted-fpm", "iterations=10", AlternatingProjection::default().iterations(10),
+///     &subset,
+/// )?;
+/// assert_eq!(record.spatial_crop, Some([0, 0, 16, 16]));
+/// # Ok(())
+/// # }
+/// ```
+pub fn run_benchmark_subset_case<A: ReconstructionAlgorithm>(
+    dataset_name: impl Into<String>,
+    algorithm_configuration: impl Into<String>,
+    algorithm: A,
+    subset: &DatasetSubset,
+) -> Result<(BenchmarkRecord, Option<ReconstructionResult>)> {
+    let problem = subset.reconstruction_problem()?;
+    let (mut record, mut result) = run_benchmark_case(
+        dataset_name,
+        algorithm_configuration,
+        algorithm,
+        &problem,
+        subset.ground_truth_object().map(|value| value.view()),
+        Some(&subset.configuration().compiled_models.true_model),
+        subset.valid_object_mask().map(|value| value.view()),
+    );
+    annotate_subset(&mut record, subset);
+    record.case_id = format!("{:016x}", case_hash(&record));
+    if let Some(result) = &mut result {
+        result.metadata.extend(record.metadata.clone());
+        result
+            .metadata
+            .insert("case_id".into(), record.case_id.clone());
+        result
+            .metadata
+            .insert("dataset_name".into(), record.dataset_name.clone());
+        result.metadata.insert(
+            "algorithm_configuration".into(),
+            record.algorithm_configuration.clone(),
+        );
+        if let Some(version) = &record.dataset_version {
+            result
+                .metadata
+                .insert("dataset_version".into(), version.clone());
+        }
+    }
+    Ok((record, result))
+}
+
+fn annotate_subset(record: &mut BenchmarkRecord, subset: &DatasetSubset) {
+    let crop = subset.spatial_crop();
+    record.spatial_crop = Some([crop.row, crop.column, crop.height, crop.width]);
+    for (frame, metadata) in record
+        .frames
+        .iter_mut()
+        .zip(subset.measurements().frame_metadata())
+    {
+        frame.original_frame_index = metadata.original_frame_index.unwrap_or(frame.frame_index);
+        frame.original_illumination_index = original_illumination_index(metadata);
+    }
+    record.metadata.extend(subset.provenance().clone());
+    if let Some(units) = subset.measurement_units() {
+        record
+            .metadata
+            .insert("measurement_units".into(), units.into());
+    }
+    record.dataset_version = subset
+        .provenance()
+        .get("dataset_version")
+        .cloned()
+        .or_else(|| record.dataset_version.clone());
+}
+
+fn original_illumination_index(metadata: &FrameMetadata) -> Option<usize> {
+    // Once original acquisition metadata exists, an absent original illumination
+    // identifier must remain absent instead of inheriting a reindexed source.
+    if metadata.original_frame_index.is_some() {
+        metadata.original_illumination_index
+    } else {
+        metadata
+            .original_illumination_index
+            .or(metadata.illumination_index)
+    }
+}
+
 /// Runs one concrete algorithm and always returns a record. Reconstruction or
 /// metric failures are stored in `record.error`; successful reconstruction data
 /// is returned separately so callers may inspect or save it.
@@ -337,9 +471,7 @@ where
             .map(|(index, metadata)| BenchmarkFrameRecord {
                 frame_index: index,
                 original_frame_index: metadata.original_frame_index.unwrap_or(index),
-                original_illumination_index: metadata
-                    .original_illumination_index
-                    .or(metadata.illumination_index),
+                original_illumination_index: original_illumination_index(metadata),
                 normalized_l2: None,
             })
             .collect(),

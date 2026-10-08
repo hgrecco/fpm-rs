@@ -1,7 +1,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use fpm_rs::datasets::{
-    Dataset, DatasetListing, DatasetRegistry, open_dataset as core_open_dataset,
+    Dataset, DatasetListing, DatasetRegistry, DatasetSubset, FrameSelector, Rect,
+    open_dataset as core_open_dataset,
 };
 use numpy::PyArray2;
 use pyo3::{prelude::*, types::PyDict};
@@ -143,8 +144,141 @@ impl PyDataset {
     }
 }
 
+/// Owned deterministic subset with detector crop and original acquisition identities.
+/// Array getters return writable C-contiguous copies in (row, column) order.
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "DatasetSubset",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PyDatasetSubset {
+    pub(crate) inner: Arc<DatasetSubset>,
+}
+
+#[pymethods]
+impl PyDatasetSubset {
+    #[getter]
+    fn spatial_crop(&self) -> (usize, usize, usize, usize) {
+        let crop = self.inner.spatial_crop();
+        (crop.row, crop.column, crop.height, crop.width)
+    }
+
+    #[getter]
+    fn measurements(&self) -> PyMeasurementStack {
+        PyMeasurementStack {
+            inner: Arc::new(self.inner.measurements().clone()),
+        }
+    }
+
+    #[getter]
+    fn true_model(&self) -> PyImagePlaneModel {
+        PyImagePlaneModel {
+            inner: Arc::new(
+                self.inner
+                    .configuration()
+                    .compiled_models
+                    .true_model
+                    .clone(),
+            ),
+        }
+    }
+
+    #[getter]
+    fn reconstruction_model(&self) -> PyImagePlaneModel {
+        PyImagePlaneModel {
+            inner: Arc::new(
+                self.inner
+                    .configuration()
+                    .compiled_models
+                    .reconstruction_model
+                    .clone(),
+            ),
+        }
+    }
+
+    #[getter]
+    fn ground_truth_object(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Option<Py<PyArray2<fpm_rs::Complex64>>>> {
+        self.inner
+            .ground_truth_object()
+            .cloned()
+            .map(|a| complex_array2_to_py(py, a))
+            .transpose()
+    }
+
+    #[getter]
+    fn valid_object_mask(&self, py: Python<'_>) -> PyResult<Option<Py<PyArray2<u8>>>> {
+        self.inner
+            .valid_object_mask()
+            .cloned()
+            .map(|a| array2_to_py(py, a))
+            .transpose()
+    }
+
+    #[getter]
+    fn provenance(&self) -> std::collections::BTreeMap<String, String> {
+        self.inner.provenance().clone()
+    }
+
+    #[getter]
+    fn measurement_units(&self) -> Option<&str> {
+        self.inner.measurement_units()
+    }
+
+    fn reconstruction_problem(&self) -> PyResult<PyReconstructionProblem> {
+        PyReconstructionProblem::from_parts(
+            self.inner.measurements().clone(),
+            self.inner
+                .configuration()
+                .compiled_models
+                .reconstruction_model
+                .clone(),
+            self.inner.provenance().get("dataset_id").cloned(),
+        )
+        .map_err(to_py_err)
+    }
+}
+
 #[pymethods]
 impl PyDataset {
+    /// Select unique acquisition frames in the supplied order and an optional detector crop.
+    /// Cropping and model compilation release the GIL; invalid selections raise DatasetError.
+    #[pyo3(signature = (*, frames=None, every_nth_frame=None, crop=None))]
+    fn subset(
+        &self,
+        py: Python<'_>,
+        frames: Option<Vec<usize>>,
+        every_nth_frame: Option<usize>,
+        crop: Option<(usize, usize, usize, usize)>,
+    ) -> PyResult<PyDatasetSubset> {
+        if frames.is_some() && every_nth_frame.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "frames and every_nth_frame are mutually exclusive",
+            ));
+        }
+        let selector = match (frames, every_nth_frame) {
+            (Some(frames), _) => FrameSelector::Indices(frames),
+            (_, Some(step)) => FrameSelector::EveryNth(step),
+            _ => FrameSelector::All,
+        };
+        let dataset = self.inner.clone();
+        py.detach(move || {
+            let mut builder = dataset.subset().frames(selector);
+            if let Some((row, column, height, width)) = crop {
+                builder = builder.crop(Rect::new(row, column, height, width)?);
+            }
+            builder.build()
+        })
+        .map(|inner| PyDatasetSubset {
+            inner: Arc::new(inner),
+        })
+        .map_err(to_dataset_py_err)
+    }
+
     #[getter]
     fn path(&self) -> Option<PathBuf> {
         self.inner.source_path().map(PathBuf::from)
@@ -454,6 +588,7 @@ fn open_dataset(
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDatasetRegistryEntry>()?;
     module.add_class::<PyDataset>()?;
+    module.add_class::<PyDatasetSubset>()?;
     module.add_class::<PySpectralDataset>()?;
     module.add_function(wrap_pyfunction!(load_spectral_dataset, module)?)?;
     module.add_class::<PyDatasetRegistry>()?;

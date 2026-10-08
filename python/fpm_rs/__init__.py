@@ -29,6 +29,7 @@ from ._core import (
     CsvLogger,
     DatasetError,
     Dataset,
+    DatasetSubset,
     DatasetRegistry,
     DatasetRegistryEntry,
     DiagnosticRecorder,

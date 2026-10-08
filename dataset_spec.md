@@ -301,7 +301,7 @@ Every top-level field is required, including fields whose value is `null`:
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "true_experiment": {},
   "reconstruction_experiment": {},
   "image_shape": [256, 256],

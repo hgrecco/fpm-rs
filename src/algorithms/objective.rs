@@ -20,7 +20,10 @@ pub enum LossType {
 
 /// Computes the selected mean frame loss from equal non-empty intensity slices.
 ///
-/// Values must be finite and non-negative; invalid lengths or values return an error.
+/// Lengths must match and be non-zero, and values must be finite. Amplitude,
+/// Poisson, and Huber-amplitude losses clamp negative intensities to zero;
+/// intensity MSE uses the supplied values. Invalid lengths or non-finite
+/// values return an error.
 pub fn loss(predicted: &[f64], measured: &[f64], loss_type: LossType) -> Result<f64> {
     if predicted.len() != measured.len() || predicted.is_empty() {
         return Err(Error::InvalidShape(format!(

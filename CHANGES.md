@@ -7,6 +7,10 @@ first.
 
 ### Breaking changes
 
+- Benchmark bundle format version 2 adds nullable detector-crop columns to the
+  runs table. Readers reject version-1 benchmark bundles; dataset, result-bundle,
+  and benchmark JSON/CSV record format versions are unchanged.
+
 - `Optics` now rejects a sample-plane detector pitch greater than or equal to
   `wavelength_vacuum_m / (2 * objective_na)`. This keeps the coherent pupil
   strictly inside the low-resolution FFT grid; configurations requiring a
@@ -40,6 +44,12 @@ first.
   arrays, optional previews, and a manifest.
 
 ### Added
+
+- Added subset-aware benchmark recording in Rust and Python, preserving resolved
+  source frame order, optional illumination identifiers, detector crop, and
+  dataset provenance. Python now exposes `Dataset.subset` and `DatasetSubset`.
+- Expanded measurement-loss selection guidance and consolidated forward-model
+  assumptions and limitations in the documentation.
 
 - Expanded bright-field initializer evaluation with deterministic global
   physical-fit, rejection, acquisition-order and resident/lazy/backend parity
