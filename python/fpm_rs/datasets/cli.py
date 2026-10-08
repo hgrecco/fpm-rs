@@ -29,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
         "open", help="download if needed, then open one dataset"
     )
     opened.add_argument("id", help="dataset identifier")
+    opened.add_argument(
+        "--spectral",
+        action="store_true",
+        help="open an explicit version-two spectral profile",
+    )
     _selection(commands, "clean", "remove one dataset or the complete managed cache")
     return parser
 
@@ -56,14 +61,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             for path in paths:
                 print(path)
         elif args.command == "open":
-            dataset = registry.open(args.id)
+            dataset = (
+                registry.open_spectral(args.id)
+                if args.spectral
+                else registry.open(args.id)
+            )
             print(f"id={args.id}")
             print(f"path={dataset.path}")
             print(f"frames={dataset.measurements.frame_count}")
             print(f"image_shape={dataset.measurements.image_shape}")
-            print(
-                f"reconstruction_shape={dataset.reconstruction_model.reconstruction_shape}"
-            )
+            model = dataset.model if args.spectral else dataset.reconstruction_model
+            print(f"reconstruction_shape={model.reconstruction_shape}")
+            if args.spectral:
+                print(f"channels={len(model.channel_ids)}")
         elif args.command == "clean":
             removed = registry.clean_all() if args.all else registry.clean(args.id)
             rendered = str(removed).lower() if isinstance(removed, bool) else removed

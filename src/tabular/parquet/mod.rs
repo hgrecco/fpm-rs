@@ -7,8 +7,9 @@
 
 mod bundle;
 mod manifest;
-mod npy;
+pub(crate) mod npy;
 mod options;
+mod spectral;
 mod write;
 
 pub use bundle::{
@@ -18,3 +19,5 @@ pub use bundle::{
 pub use manifest::{BUNDLE_FORMAT_VERSION, BundleExportOptions};
 pub(crate) use options::ParquetWriteOptions;
 pub(crate) use write::{sha256, write_parquet_file, write_result_bundle};
+
+pub use spectral::{SPECTRAL_BUNDLE_FORMAT_VERSION, SpectralResultBundle, read_spectral_bundle};

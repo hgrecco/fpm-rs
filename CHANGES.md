@@ -41,6 +41,14 @@ first.
 
 ### Added
 
+- Added separately versioned spectral AP/joint OPD checkpoints and lossless
+  spectral result bundles, including exact resume, fixed gauges, initialization
+  records, detector/model fingerprints and artifact integrity checks.
+- Added the explicit version-2 spectral dataset profile and offline Rust/Python
+  loading, plus spectral registry/CLI opening through verified caches.
+- Added declared mixing-matrix rank/condition diagnostics and an isolated-process
+  multi-wavelength benchmark with noise, matched starts/budgets and peak RSS.
+
 - Added `MultiWavelengthGradientDescent` and `MultiWavelengthSolverResult` in
   Rust and Python. The solver jointly fits one nondispersive OPD map and channel
   amplitudes using canonical spectral forward/adjoint kernels, smoothed amplitude
@@ -52,7 +60,7 @@ first.
   and Python: explicit separate/multiplexed spectral plans, wavelength-specific
   kernels on a common grid, independent/shared complex objects, fixed-pupil
   spectral alternating projection, scalar detector forward evaluation, and
-  channel-ordered results. Spectral persistence and dataset schemas remain pending.
+  channel-ordered results. Spectral persistence and the explicit spectral dataset profile are supported.
 
 - Added referenced synthetic-wavelength phase unwrapping in Rust and Python:
   coarse-to-fine phase-difference mixing, equal-phase-weight OPD fitting,

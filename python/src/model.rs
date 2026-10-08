@@ -48,6 +48,25 @@ pub(crate) struct PyImagePlaneModel {
 
 #[pymethods]
 impl PyImagePlaneModel {
+    /// Writes the compiled numerical kernel as float-roundtrip JSON for external converters.
+    /// Releases the GIL; errors raise FpmError. The destination is overwritten.
+    #[pyo3(signature=(*,path))]
+    fn save_json(&self, py: Python<'_>, path: std::path::PathBuf) -> PyResult<()> {
+        let model = self.inner.clone();
+        py.detach(move || model.save_json(path)).map_err(to_py_err)
+    }
+    /// Loads and validates an externally compiled kernel JSON entirely offline.
+    #[staticmethod]
+    #[pyo3(signature=(*,path))]
+    fn load_json(py: Python<'_>, path: std::path::PathBuf) -> PyResult<Self> {
+        let inner = py
+            .detach(move || ImagePlaneModel::load_json(path))
+            .map_err(to_py_err)?;
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
+    }
+
     #[getter]
     fn image_shape(&self) -> (usize, usize) {
         self.inner.image_shape()

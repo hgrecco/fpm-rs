@@ -80,3 +80,9 @@ history are normalized CSV tables.
 ::: fpm_rs.BenchmarkSuite
 
 ::: fpm_rs.read_benchmark_bundle
+
+::: fpm_rs.SpectralReconstructionCheckpoint
+
+::: fpm_rs.SpectralResultBundle
+
+::: fpm_rs.read_spectral_bundle

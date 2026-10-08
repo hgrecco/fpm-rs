@@ -4,17 +4,21 @@ use std::{f64::consts::TAU, time::Instant};
 
 use ndarray::Array2;
 use num_complex::Complex64;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, Result,
     array_layout::StandardView2,
+    array_serde::Array2Data,
     backend::FftDirection,
     measurements::MeasurementRead,
     model::{ObjectCoupling, fftshift_copy, ifftshift_copy},
     reconstruction::{
         IterationRecord, OpticalPathDifferenceResult, PhaseReference, ReconstructionTrace,
-        RuntimeInfo, SpectralChannelResult, SpectralReconstructionProblem,
+        RuntimeInfo, SpectralChannelResult, SpectralCheckpointOptions,
+        SpectralReconstructionCheckpoint, SpectralReconstructionProblem,
         SpectralReconstructionResult, SpectralReconstructionState, SyntheticWavelengthUnwrapper,
+        spectral_checkpoint::{StoredOpd, StoredSolver, fingerprints},
     },
 };
 
@@ -34,6 +38,8 @@ pub struct MultiWavelengthSolverResult {
     pub initialization_opd: Option<OpticalPathDifferenceResult>,
     /// Independent-field AP trace used by automatic initialization, otherwise absent.
     pub initialization_trace: Option<ReconstructionTrace>,
+    /// Final accepted OPD/amplitude state, fixed gauge, and initialization records for exact resume.
+    pub checkpoint: SpectralReconstructionCheckpoint,
 }
 
 /// Fits one shared nondispersive OPD and a positive amplitude for each wavelength.
@@ -81,7 +87,8 @@ pub struct MultiWavelengthSolverResult {
 /// The shared-OPD chain rule, smoothed amplitude loss, box/gauge projections, and
 /// monotone full-data backtracking are implementation extensions, not that paper's solver.
 /// See [`SyntheticWavelengthUnwrapper`] for the initialization method and reference.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MultiWavelengthGradientDescent {
     /// Positive maximum number of accepted full-data joint updates.
     pub iterations: usize,
@@ -115,9 +122,23 @@ struct Parameters {
     amplitudes: Vec<Array2<f64>>,
 }
 
-enum Gauge {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Gauge {
     Region { pixels: Vec<usize>, opd_m: f64 },
     Mean(f64),
+}
+
+struct Execution {
+    parameters: Parameters,
+    gauge: Gauge,
+    opd_range_m: (f64, f64),
+    trace: ReconstructionTrace,
+    completed: usize,
+    elapsed_offset: f64,
+    signature: (String, String),
+    initialization_opd: Option<OpticalPathDifferenceResult>,
+    initialization_trace: Option<ReconstructionTrace>,
 }
 
 struct Gradient {
@@ -163,6 +184,24 @@ impl MultiWavelengthGradientDescent {
         unwrapper: &SyntheticWavelengthUnwrapper,
         reference: &PhaseReference,
     ) -> Result<MultiWavelengthSolverResult> {
+        self.run_with_options(
+            problem,
+            unwrapper,
+            reference,
+            &SpectralCheckpointOptions::default(),
+        )
+    }
+
+    /// Runs automatic AP/phase initialization with optional accepted-update checkpoint files.
+    /// The final checkpoint retains initialization records and never repeats them on resume.
+    pub fn run_with_options<M: MeasurementRead>(
+        &self,
+        problem: &SpectralReconstructionProblem<M>,
+        unwrapper: &SyntheticWavelengthUnwrapper,
+        reference: &PhaseReference,
+        options: &SpectralCheckpointOptions,
+    ) -> Result<MultiWavelengthSolverResult> {
+        options.validate()?;
         self.validate_problem(problem, unwrapper.opd_range_m)?;
         if self.initialization_iterations == 0 {
             return Err(invalid(
@@ -185,16 +224,16 @@ impl MultiWavelengthGradientDescent {
             .iter()
             .map(|c| c.amplitude.clone())
             .collect();
-        let mut result = self.run_from_opd(
+        self.start_from_opd(
             problem,
             unwrapper.opd_range_m,
             reference,
             opd.opd_m.clone(),
             amplitudes,
-        )?;
-        result.initialization_opd = Some(opd);
-        result.initialization_trace = Some(initial.trace);
-        Ok(result)
+            Some(opd),
+            Some(initial.trace),
+            options,
+        )
     }
 
     /// Jointly refines owned finite C-contiguous OPD and channel amplitudes on the common grid.
@@ -214,6 +253,123 @@ impl MultiWavelengthGradientDescent {
         opd_m: Array2<f64>,
         amplitudes: Vec<Array2<f64>>,
     ) -> Result<MultiWavelengthSolverResult> {
+        self.run_from_opd_with_options(
+            problem,
+            opd_range_m,
+            reference,
+            opd_m,
+            amplitudes,
+            &SpectralCheckpointOptions::default(),
+        )
+    }
+
+    /// Fits explicit OPD/amplitude starts while saving periodic accepted-state checkpoints.
+    /// Scientific input and gauge contracts are identical to `run_from_opd`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_from_opd_with_options<M: MeasurementRead>(
+        &self,
+        problem: &SpectralReconstructionProblem<M>,
+        opd_range_m: (f64, f64),
+        reference: &PhaseReference,
+        opd_m: Array2<f64>,
+        amplitudes: Vec<Array2<f64>>,
+        options: &SpectralCheckpointOptions,
+    ) -> Result<MultiWavelengthSolverResult> {
+        self.start_from_opd(
+            problem,
+            opd_range_m,
+            reference,
+            opd_m,
+            amplitudes,
+            None,
+            None,
+            options,
+        )
+    }
+
+    /// Resumes the saved joint OPD state without initialization or another gauge projection.
+    /// `iterations` is the total target; all other solver options, detector values,
+    /// masks/weights, and ordered compiled model metadata must match the checkpoint.
+    pub fn run_from_checkpoint<M: MeasurementRead>(
+        &self,
+        problem: &SpectralReconstructionProblem<M>,
+        checkpoint: SpectralReconstructionCheckpoint,
+    ) -> Result<MultiWavelengthSolverResult> {
+        self.run_from_checkpoint_with_options(
+            problem,
+            checkpoint,
+            &SpectralCheckpointOptions::default(),
+        )
+    }
+
+    /// Resumes joint state and optionally continues periodic accepted-update checkpoint output.
+    pub fn run_from_checkpoint_with_options<M: MeasurementRead>(
+        &self,
+        problem: &SpectralReconstructionProblem<M>,
+        checkpoint: SpectralReconstructionCheckpoint,
+        options: &SpectralCheckpointOptions,
+    ) -> Result<MultiWavelengthSolverResult> {
+        self.validate()?;
+        options.validate()?;
+        checkpoint.validate_for_problem(problem)?;
+        let signature = checkpoint.fingerprints();
+        let StoredSolver::JointOpd {
+            configuration,
+            opd,
+            amplitudes,
+            opd_range_m,
+            gauge,
+            initialization_opd,
+            initialization_trace,
+        } = checkpoint.state
+        else {
+            return Err(invalid(
+                "resume_from",
+                "spectral AP state cannot resume joint OPD descent",
+            ));
+        };
+        if configuration != self.configuration()?
+            || self.iterations < checkpoint.completed_iterations
+        {
+            return Err(invalid(
+                "resume_from",
+                "stepping options changed or total target precedes the saved iteration",
+            ));
+        }
+        self.validate_problem(problem, opd_range_m)?;
+        let execution = Execution {
+            parameters: Parameters {
+                opd: opd.into_array()?,
+                amplitudes: amplitudes
+                    .into_iter()
+                    .map(Array2Data::into_array)
+                    .collect::<Result<_>>()?,
+            },
+            gauge,
+            opd_range_m,
+            trace: checkpoint.trace,
+            completed: checkpoint.completed_iterations,
+            elapsed_offset: checkpoint.elapsed_seconds,
+            signature,
+            initialization_opd: initialization_opd.map(|o| (*o).into_result()).transpose()?,
+            initialization_trace,
+        };
+        self.execute(problem, execution, options)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_from_opd<M: MeasurementRead>(
+        &self,
+        problem: &SpectralReconstructionProblem<M>,
+        opd_range_m: (f64, f64),
+        reference: &PhaseReference,
+        opd_m: Array2<f64>,
+        amplitudes: Vec<Array2<f64>>,
+        initialization_opd: Option<OpticalPathDifferenceResult>,
+        initialization_trace: Option<ReconstructionTrace>,
+        options: &SpectralCheckpointOptions,
+    ) -> Result<MultiWavelengthSolverResult> {
+        options.validate()?;
         self.validate_problem(problem, opd_range_m)?;
         let started = Instant::now();
         let shape = problem.model.reconstruction_shape();
@@ -255,6 +411,40 @@ impl MultiWavelengthGradientDescent {
         }
         let gauge = Gauge::new(reference, &parameters, opd_range_m)?;
         gauge.project(&mut parameters.opd, opd_range_m)?;
+        let signature = fingerprints(problem)?;
+        let execution = Execution {
+            parameters,
+            gauge,
+            opd_range_m,
+            trace: ReconstructionTrace::default(),
+            completed: 0,
+            elapsed_offset: started.elapsed().as_secs_f64(),
+            signature,
+            initialization_opd,
+            initialization_trace,
+        };
+        self.execute(problem, execution, options)
+    }
+
+    fn execute<M: MeasurementRead>(
+        &self,
+        problem: &SpectralReconstructionProblem<M>,
+        execution: Execution,
+        options: &SpectralCheckpointOptions,
+    ) -> Result<MultiWavelengthSolverResult> {
+        let started = Instant::now();
+        let Execution {
+            mut parameters,
+            gauge,
+            opd_range_m,
+            mut trace,
+            mut completed,
+            elapsed_offset,
+            signature,
+            initialization_opd,
+            initialization_trace,
+        } = execution;
+        let configuration = self.configuration()?;
         let wavelengths: Vec<_> = problem
             .model
             .channels()
@@ -266,14 +456,21 @@ impl MultiWavelengthGradientDescent {
             SpectralReconstructionState::from_objects(problem, parameters.objects(&wavelengths))?;
         let (mut objective, _) =
             self.evaluate(problem, &mut state, &parameters, &wavelengths, false)?;
-        let mut trace = ReconstructionTrace::default();
-        trace.iterations.push(IterationRecord {
-            iteration: 0,
-            objective,
-            elapsed_seconds: started.elapsed().as_secs_f64(),
-        });
-        let mut completed = 0;
-        for iteration in 1..=self.iterations {
+        if trace.iterations.is_empty() {
+            trace.iterations.push(IterationRecord {
+                iteration: 0,
+                objective,
+                elapsed_seconds: elapsed_offset + started.elapsed().as_secs_f64(),
+            });
+        } else if (trace.iterations.last().unwrap().objective - objective).abs()
+            > 64.0 * f64::EPSILON * objective.abs().max(1.0)
+        {
+            return Err(invalid(
+                "resume_from",
+                "saved objective does not match the joint numerical state",
+            ));
+        }
+        for iteration in (completed + 1)..=self.iterations {
             let (_, gradient) =
                 self.evaluate(problem, &mut state, &parameters, &wavelengths, true)?;
             let gradient = gradient.unwrap();
@@ -306,8 +503,33 @@ impl MultiWavelengthGradientDescent {
             trace.iterations.push(IterationRecord {
                 iteration,
                 objective,
-                elapsed_seconds: started.elapsed().as_secs_f64(),
+                elapsed_seconds: elapsed_offset + started.elapsed().as_secs_f64(),
             });
+            if options.directory.is_some() && iteration.is_multiple_of(options.every) {
+                let checkpoint = SpectralReconstructionCheckpoint::capture(
+                    problem.model.clone(),
+                    &signature,
+                    completed,
+                    elapsed_offset + started.elapsed().as_secs_f64(),
+                    trace.clone(),
+                    StoredSolver::JointOpd {
+                        configuration: configuration.clone(),
+                        opd: Array2Data::from_view(parameters.opd.view()),
+                        amplitudes: parameters
+                            .amplitudes
+                            .iter()
+                            .map(|a| Array2Data::from_view(a.view()))
+                            .collect(),
+                        opd_range_m,
+                        gauge: gauge.clone(),
+                        initialization_opd: initialization_opd
+                            .as_ref()
+                            .map(|o| Box::new(StoredOpd::from_result(o))),
+                        initialization_trace: initialization_trace.clone(),
+                    },
+                );
+                options.write(&checkpoint, false)?;
+            }
         }
         let objects = parameters.objects(&wavelengths);
         let channels = problem
@@ -328,22 +550,54 @@ impl MultiWavelengthGradientDescent {
                 }
             })
             .collect();
+        let elapsed_seconds = elapsed_offset + started.elapsed().as_secs_f64();
+        let checkpoint = SpectralReconstructionCheckpoint::capture(
+            problem.model.clone(),
+            &signature,
+            completed,
+            elapsed_seconds,
+            trace.clone(),
+            StoredSolver::JointOpd {
+                configuration,
+                opd: Array2Data::from_view(parameters.opd.view()),
+                amplitudes: parameters
+                    .amplitudes
+                    .iter()
+                    .map(|a| Array2Data::from_view(a.view()))
+                    .collect(),
+                opd_range_m,
+                gauge,
+                initialization_opd: initialization_opd
+                    .as_ref()
+                    .map(|o| Box::new(StoredOpd::from_result(o))),
+                initialization_trace: initialization_trace.clone(),
+            },
+        );
+        options.write(&checkpoint, true)?;
         Ok(MultiWavelengthSolverResult {
+            checkpoint,
             opd_m: parameters.opd,
             spectral: SpectralReconstructionResult {
                 channels,
                 object_coupling: ObjectCoupling::Independent,
                 trace,
+                checkpoint: None,
                 runtime: RuntimeInfo {
-                    elapsed_seconds: started.elapsed().as_secs_f64(),
+                    elapsed_seconds,
                     completed_iterations: completed,
                     stopped_early: completed < self.iterations,
                     algorithm: "MultiWavelengthGradientDescent".into(),
                 },
             },
-            initialization_opd: None,
-            initialization_trace: None,
+            initialization_opd,
+            initialization_trace,
         })
+    }
+
+    fn configuration(&self) -> Result<String> {
+        let mut configuration = self.clone();
+        configuration.iterations = 1;
+        Ok(serde_json::to_string(&configuration)?)
     }
 
     fn validate_problem<M: MeasurementRead>(
@@ -556,6 +810,41 @@ impl Parameters {
 }
 
 impl Gauge {
+    pub(crate) fn validate(&self, opd: &Array2Data<f64>, range: (f64, f64)) -> Result<()> {
+        match self {
+            Self::Region { pixels, opd_m } => {
+                if pixels.is_empty()
+                    || pixels.windows(2).any(|w| w[0] >= w[1])
+                    || !opd_m.is_finite()
+                    || *opd_m < range.0
+                    || *opd_m >= range.1
+                    || pixels
+                        .iter()
+                        .any(|&p| p >= opd.data.len() || opd.data[p] != *opd_m)
+                {
+                    return Err(invalid(
+                        "checkpoint_gauge",
+                        "reference pixels must be sorted, nonempty, in range, and fixed at the known OPD",
+                    ));
+                }
+            }
+            Self::Mean(target) => {
+                let mean: f64 = opd.data.iter().map(|v| v / opd.data.len() as f64).sum();
+                let tolerance = 64.0 * f64::EPSILON * range.0.abs().max(range.1.abs());
+                if !target.is_finite()
+                    || *target < range.0
+                    || *target >= range.1
+                    || (mean - target).abs() > tolerance
+                {
+                    return Err(invalid(
+                        "checkpoint_gauge",
+                        "stored mean OPD disagrees with the fixed gauge",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
     fn new(reference: &PhaseReference, parameters: &Parameters, range: (f64, f64)) -> Result<Self> {
         match reference {
             PhaseReference::Offsets(offsets) => {

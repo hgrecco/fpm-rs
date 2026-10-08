@@ -235,6 +235,73 @@ class SpectralImagePlaneModel:
         """
         ...
 
+    @staticmethod
+    def from_compiled_channels(
+        *,
+        channel_ids: Sequence[str],
+        models: Sequence[ImagePlaneModel],
+        acquisition: SpectralAcquisitionPlan,
+        object_coupling: str = "independent",
+    ) -> SpectralImagePlaneModel:
+        """Assemble stable ordered kernels without resolving physical geometry.
+
+        Parameters
+        ----------
+        channel_ids
+            One nonempty unique stable ID per kernel.
+        models
+            Already compiled common-grid kernels with distinct positive wavelengths.
+        acquisition
+            Sparse scalar exposure order; every local frame must participate.
+        object_coupling
+            Explicit independent or shared_complex field storage.
+
+        Returns
+        -------
+        SpectralImagePlaneModel
+            Owned validated compiled channels. Invalid sampling/metadata raises
+            FpmError; mismatched counts or invalid coupling raises ValueError.
+        """
+        ...
+    def mixing_diagnostics(
+        self, *, relative_tolerance: float | None = None
+    ) -> SpectralMixingDiagnostics:
+        """Measure numerical rank/conditioning of declared exposure/channel weights.
+
+        Parameters
+        ----------
+        relative_tolerance
+            Finite nonnegative threshold relative to the largest singular value.
+            Omission uses max(frames, channels) times binary64 epsilon. Rank counts
+            singular values strictly greater than the resulting absolute threshold.
+
+        Returns
+        -------
+        SpectralMixingDiagnostics
+            Matrix and descending singular values; deficient column rank yields
+            condition_number=None. Array getters return independent writable copies.
+
+        Raises
+        ------
+        FpmError
+            For invalid tolerance, overflow or Jacobi SVD nonconvergence.
+
+        Notes
+        -----
+        Each entry sums detector gain times spectral weight times local frame gain
+        times incoherent local source-weight sum. Background and measurement
+        masks/weights are excluded. Distinct crops/pupils remain separate operators;
+        this diagnostic does not establish nonlinear recoverability. Releases the GIL.
+
+        References
+        ----------
+        NumPy, [matrix_rank documentation](https://numpy.org/doc/stable/reference/generated/numpy.linalg.matrix_rank.html),
+        for the default rank threshold. LAPACK 3.12.1,
+        [DGESVJ documentation](https://www.netlib.org/lapack/explore-html/d9/deb/group__gesvj_ga7aec05d2a1523bbeee77ece21b12187c.html),
+        for one-sided Jacobi SVD; the crate uses its own scaled cyclic rotations.
+        """
+        ...
+
 def compile_spectral_model(
     *,
     channels: Sequence[SpectralChannel],
@@ -426,6 +493,39 @@ class SpectralReconstructionResult:
         """Return the number of complete global acquisition passes."""
         ...
 
+    def write_bundle(
+        self, *, path: Path, run_id: str | None = None, label: str | None = None
+    ) -> SpectralResultBundle:
+        """Persist lossless arrays, trace and spectral solver state; release the GIL.
+
+        Parameters
+        ----------
+        path
+            Requested local directory; existing destinations get numbered siblings.
+        run_id
+            Optional unique table/manifest identity; omission generates a UUID.
+        label
+            Optional human-readable label retained in the manifest.
+
+        Returns
+        -------
+        SpectralResultBundle
+            Published manifest-last bundle with NPY arrays and Parquet tables.
+
+        Raises
+        ------
+        FpmError
+            For invalid/inconsistent state or file failures. Failed publication
+            leaves an in-progress directory. Joint state requires the enclosing
+            MultiWavelengthSolverResult rather than its spectral child.
+        """
+        ...
+
+    @property
+    def checkpoint(self) -> SpectralReconstructionCheckpoint | None:
+        """Return resumable AP state; joint state lives in its enclosing result."""
+        ...
+
 class SpectralAlternatingProjection:
     """Object-only narrowband amplitude projection with fixed channel pupils.
 
@@ -478,6 +578,9 @@ class SpectralAlternatingProjection:
         initial_objects: ComplexArray | None = None,
         frame_order: Sequence[int] | None = None,
         seed: int | None = None,
+        resume: SpectralReconstructionCheckpoint | None = None,
+        checkpoint_directory: Path | None = None,
+        checkpoint_every: int = 1,
     ) -> MultiWavelengthReconstructionResult:
         """Reconstruct independent wavelength fields and mix their phases into OPD.
 
@@ -501,6 +604,17 @@ class SpectralAlternatingProjection:
             Optional global detector permutation, as in ``run``.
         seed
             Optional deterministic shuffle seed, mutually exclusive with frame_order.
+
+        resume
+            Optional saved spectral AP state. Rejects simultaneous initial objects,
+            changed data/model/options or an explicitly different schedule. When
+            ordering is omitted, resumes the saved schedule. Iterations is the total
+            target including completed passes, which may increase.
+        checkpoint_directory
+            Optional local directory for atomic iteration-boundary JSON snapshots.
+            Final state is always returned; fingerprinting streams the data once.
+        checkpoint_every
+            Positive complete-pass interval. The final checkpoint is also written.
 
         Returns
         -------
@@ -529,6 +643,9 @@ class SpectralAlternatingProjection:
         initial_objects: ComplexArray | None = None,
         frame_order: Sequence[int] | None = None,
         seed: int | None = None,
+        resume: SpectralReconstructionCheckpoint | None = None,
+        checkpoint_directory: Path | None = None,
+        checkpoint_every: int = 1,
     ) -> SpectralReconstructionResult:
         """Reconstruct channel fields while releasing the Python GIL.
 
@@ -546,7 +663,19 @@ class SpectralAlternatingProjection:
             Optional explicit permutation of all detector rows, reused each pass.
         seed
             Optional deterministic per-iteration shuffle seed; mutually exclusive
-            with ``frame_order``. Omission of both uses acquisition order.
+            with ``frame_order``. Fresh runs default to acquisition order; resumes
+            inherit the saved schedule when both options are omitted.
+
+        resume
+            Optional saved spectral AP state. Rejects simultaneous initial objects,
+            changed data/model/options or an explicitly different schedule. When
+            ordering is omitted, resumes the saved schedule. Iterations is the total
+            target including completed passes, which may increase.
+        checkpoint_directory
+            Optional local directory for atomic iteration-boundary JSON snapshots.
+            Final state is always returned; fingerprinting streams the data once.
+        checkpoint_every
+            Positive complete-pass interval. The final checkpoint is also written.
 
         Returns
         -------
@@ -725,6 +854,34 @@ class MultiWavelengthReconstructionResult:
         """Return the referenced OPD map and phase-mixing diagnostics."""
         ...
 
+    def write_bundle(
+        self, *, path: Path, run_id: str | None = None, label: str | None = None
+    ) -> SpectralResultBundle:
+        """Persist lossless arrays, trace and spectral solver state; release the GIL.
+
+        Parameters
+        ----------
+        path
+            Requested local directory; existing destinations get numbered siblings.
+        run_id
+            Optional unique table/manifest identity; omission generates a UUID.
+        label
+            Optional human-readable label retained in the manifest.
+
+        Returns
+        -------
+        SpectralResultBundle
+            Published manifest-last bundle with NPY arrays and Parquet tables.
+
+        Raises
+        ------
+        FpmError
+            For invalid/inconsistent state or file failures. Failed publication
+            leaves an in-progress directory. Joint state requires the enclosing
+            MultiWavelengthSolverResult rather than its spectral child.
+        """
+        ...
+
 class MultiWavelengthGradientDescent:
     """Jointly fit one nondispersive OPD map and wavelength-specific amplitudes.
 
@@ -798,6 +955,8 @@ class MultiWavelengthGradientDescent:
         reference_opd_m: float = 0.0,
         initial_opd_m: FloatArray | None = None,
         initial_amplitudes: FloatArray | None = None,
+        checkpoint_directory: Path | None = None,
+        checkpoint_every: int = 1,
     ) -> MultiWavelengthSolverResult:
         """Fit detector measurements with shared OPD while releasing the GIL.
 
@@ -828,6 +987,12 @@ class MultiWavelengthGradientDescent:
             ``(channels, rows, columns)`` amplitudes in model channel order.
             Requires initial_opd_m; values are floored at sqrt(epsilon).
 
+        checkpoint_directory
+            Optional local directory for accepted-update JSON snapshots. The final
+            state is always returned; fingerprinting streams measurements once.
+        checkpoint_every
+            Positive accepted-update interval, with a final snapshot also written.
+
         Returns
         -------
         MultiWavelengthSolverResult
@@ -847,9 +1012,44 @@ class MultiWavelengthGradientDescent:
         Explicit starts bypass AP/unwrapping, so their interval can exceed the
         longest synthetic wavelength; the caller supplies the correct branch.
         Inputs are copied before releasing the GIL. Full-data gradients stream
-        detector frames in acquisition order. Ordinary batch/schedule/checkpoint
-        contracts do not apply. Runtime elapsed time covers joint refinement;
+        detector frames in acquisition order. Ordinary batching and scheduling
+        contracts do not apply; spectral checkpoints preserve the fixed OPD gauge. Runtime elapsed time covers joint refinement;
         initialization_trace separately records the AP passes when used.
+        """
+        ...
+
+    def run_from_checkpoint(
+        self,
+        *,
+        problem: SpectralReconstructionProblem,
+        checkpoint: SpectralReconstructionCheckpoint,
+        checkpoint_directory: Path | None = None,
+        checkpoint_every: int = 1,
+    ) -> MultiWavelengthSolverResult:
+        """Resume joint refinement without unwrapping or projecting its saved gauge.
+
+        Parameters
+        ----------
+        problem
+            Identical compiled channels and detector values/masks/weights.
+        checkpoint
+            Joint OPD snapshot from a result or file. Stepping parameters must
+            match; iterations is the total target and may increase.
+        checkpoint_directory
+            Optional accepted-update snapshot directory.
+        checkpoint_every
+            Positive update interval; final state is also written.
+
+        Returns
+        -------
+        MultiWavelengthSolverResult
+            Continued fields and authoritative OPD, with accumulated trace/timing.
+
+        Raises
+        ------
+        FpmError
+            For mismatched solver/model/data/options or invalid state. Spectral AP
+            checkpoints cannot be consumed here. Computation releases the GIL.
         """
         ...
 
@@ -884,6 +1084,39 @@ class MultiWavelengthSolverResult:
     @property
     def stopped_early(self) -> bool:
         """Return whether backtracking stopped before the requested update count."""
+        ...
+
+    def write_bundle(
+        self, *, path: Path, run_id: str | None = None, label: str | None = None
+    ) -> SpectralResultBundle:
+        """Persist lossless arrays, trace and spectral solver state; release the GIL.
+
+        Parameters
+        ----------
+        path
+            Requested local directory; existing destinations get numbered siblings.
+        run_id
+            Optional unique table/manifest identity; omission generates a UUID.
+        label
+            Optional human-readable label retained in the manifest.
+
+        Returns
+        -------
+        SpectralResultBundle
+            Published manifest-last bundle with NPY arrays and Parquet tables.
+
+        Raises
+        ------
+        FpmError
+            For invalid/inconsistent state or file failures. Failed publication
+            leaves an in-progress directory. Joint state requires the enclosing
+            MultiWavelengthSolverResult rather than its spectral child.
+        """
+        ...
+
+    @property
+    def checkpoint(self) -> SpectralReconstructionCheckpoint:
+        """Return authoritative OPD, amplitudes, bounds, gauge and initialization state."""
         ...
 
 class FpmError(Exception):
@@ -1051,6 +1284,22 @@ class DatasetRegistry:
         """Remove one cached dataset and return whether it existed."""
     def clean_all(self) -> int:
         """Remove all managed datasets and return the number removed."""
+
+    def open_spectral(self, id: str) -> SpectralDataset:
+        """Open an explicit version-two registry ID through verified downloads/cache.
+
+        Parameters
+        ----------
+        id
+            Registered spectral dataset ID. This explicit operation may access the
+            network and releases the GIL. Version-one profiles require open instead.
+
+        Returns
+        -------
+        SpectralDataset
+            Validated resident channels and scalar frames; failures raise DatasetError.
+        """
+        ...
 
 def open_dataset(
     id: str,
@@ -1823,6 +2072,33 @@ class ImagePlaneModel:
     @property
     def frame_gains(self) -> FloatArray | None:
         """Return optional positive acquisition-frame intensity multipliers."""
+
+    def save_json(self, *, path: Path) -> None:
+        """Save validated compiled sampling/crops/pupil as local float-roundtrip JSON.
+
+        Parameters
+        ----------
+        path
+            File to overwrite; parent directory must exist. Releases the GIL and
+            synchronizes contents. File/validation failures raise FpmError.
+        """
+        ...
+    @staticmethod
+    def load_json(*, path: Path) -> ImagePlaneModel:
+        """Load and validate a compiled numerical kernel entirely offline.
+
+        Parameters
+        ----------
+        path
+            Local JSON file previously saved by a converter or save_json.
+
+        Returns
+        -------
+        ImagePlaneModel
+            Owned compiled kernel. File/validation failures raise FpmError;
+            loading releases the GIL.
+        """
+        ...
 
 def compile_model(
     optics: Optics,
@@ -3456,3 +3732,169 @@ class GradientDescent(_Algorithm):
         pupil_smoothing: float = 0.0,
         parallel_workers: int = 0,
     ) -> None: ...
+
+class SpectralReconstructionCheckpoint:
+    """Separately versioned spectral AP or joint OPD iteration-boundary snapshot.
+
+    Preserves exact ordered compiled channels and a streaming SHA-256 of detector
+    values, masks and frame weights. Joint state retains bounds, fixed gauge and
+    initialization diagnostics. Scientific state/objectives resume exactly; elapsed
+    times accumulate. Stepping options must match, but the total target may grow.
+    Ordinary reconstruction checkpoints are rejected. Getters return writable copies.
+    """
+
+    format_version: int
+    """Independent spectral checkpoint schema version, currently one."""
+    completed_iterations: int
+    """Completed spectral passes or accepted joint updates, including earlier runs."""
+    algorithm: str
+    """Solver name determining the compatible resume entry point."""
+    model: SpectralImagePlaneModel
+    """Owned compiled channels, sparse detector plan and fixed calibration metadata."""
+    trace: list[tuple[int, float, float]]
+    """Accumulated iteration, objective and elapsed-second records."""
+    opd_m: FloatArray | None
+    """Copied float64 common-grid joint OPD in metres; None for AP."""
+    @staticmethod
+    def load(*, path: Path) -> SpectralReconstructionCheckpoint:
+        """Load and validate local spectral JSON while releasing the GIL.
+
+        Parameters
+        ----------
+        path
+            Existing spectral checkpoint file; malformed or ordinary state raises
+            FpmError. The solver additionally verifies its problem fingerprint.
+
+        Returns
+        -------
+        SpectralReconstructionCheckpoint
+            Validated solver snapshot with owned numerical state.
+        """
+        ...
+    def save(self, *, path: Path) -> None:
+        """Atomically replace local JSON with lossless validated iteration state.
+
+        Parameters
+        ----------
+        path
+            Destination file with an existing parent directory. File work releases
+            the GIL; failures raise FpmError and leave an existing destination intact.
+        """
+        ...
+
+class SpectralMixingDiagnostics:
+    """Linear weight diagnostics in stable exposure/channel order.
+
+    Shapes refer to scalar detector exposures and declared channels. These describe
+    calibration weights rather than spatial forward operators or nonlinear recovery.
+    """
+
+    channel_ids: list[str]
+    """Stable channel IDs corresponding to the matrix columns."""
+    matrix: FloatArray
+    """Independent writable float64 copy shaped (detector frames, channels)."""
+    singular_values: list[float]
+    """Descending singular values, with min(frames, channels) entries."""
+    rank: int
+    """Singular-value count strictly above the stated absolute tolerance."""
+    relative_tolerance: float
+    """Dimensionless singular-value threshold relative to the largest value."""
+    absolute_tolerance: float
+    """Actual singular-value threshold in effective mode-weight units."""
+    condition_number: float | None
+    """Largest/smallest ratio, or None for deficient columns or overflowing ratio."""
+
+class SpectralResultBundle:
+    """Separately tagged spectral persistence with lazy verified numerical loading.
+
+    Contains channel NPY arrays, Parquet trace/metadata, and resumable JSON state.
+    Optional records preserve joint OPD or phase-mixing diagnostics. Result array
+    getters return independent writable copies; the Rust result cache is immutable.
+    File loading and verification release the GIL. Ordinary bundles are rejected.
+    """
+
+    path: Path
+    """Canonical local published directory containing manifest.json."""
+    run_id: str
+    """Stable table and manifest identity supplied on export."""
+    label: str | None
+    """Optional human-readable export label retained in the manifest."""
+    artifacts: dict[str, BundleArtifact]
+    """NPY, Parquet and checkpoint descriptors indexed by semantic role."""
+    result: SpectralReconstructionResult
+    """Verified channel arrays and trace; getters yield independent writable copies."""
+    checkpoint: SpectralReconstructionCheckpoint
+    """Verified final resumable solver state, preserving exact metadata and gauge."""
+    joint_result: MultiWavelengthSolverResult | None
+    """Authoritative joint OPD result and initialization records, or None for AP."""
+    unwrapped_opd: OpticalPathDifferenceResult | None
+    """Optional post-AP phase-mixing diagnostics, preserving invalid NaN pixels."""
+    def verify(self) -> BundleVerificationResult:
+        """Check every artifact hash/size, numerical state and table consistency."""
+        ...
+    def clear_cache(self) -> None:
+        """Release cached channel arrays so the next read reloads and verifies them."""
+        ...
+
+def read_spectral_bundle(path: Path) -> SpectralResultBundle:
+    """Open a spectral manifest without loading scientific arrays; release the GIL.
+
+    Parameters
+    ----------
+    path
+        Existing spectral directory. Unsafe paths, invalid descriptors, wrong
+        kind/version or missing artifacts raise FpmError; ordinary bundles fail.
+
+    Returns
+    -------
+    SpectralResultBundle
+        Lazy verified channel fields, checkpoint and optional OPD records.
+    """
+    ...
+
+class SpectralDataset:
+    """Resident version-two spectral dataset with explicit external conversion metadata.
+
+    Scalar detector frames remain grayscale. Channel IDs, vacuum wavelengths,
+    response provenance and sparse exposure ordering are explicit and validated.
+    No registration, resampling or RGB demixing is inferred. Arrays are writable copies.
+    """
+
+    path: Path
+    """Local converted bundle directory from which data were loaded."""
+    measurements: MeasurementStack
+    """Copied resident scalar detector stack including masks and weights."""
+    model: SpectralImagePlaneModel
+    """Owned ordered compiled kernels sharing a validated common grid."""
+    response_provenance: dict[str, str]
+    """Required response/weight/calibration origins keyed by stable channel ID."""
+    provenance: dict[str, str]
+    """Converter-supplied dataset provenance key/value metadata."""
+    measurement_units: str | None
+    """Optional semantic detector units such as camera counts."""
+    ground_truth_objects: list[ComplexArray | None]
+    """Optional copied complex128 common-grid truth in stable channel order."""
+    valid_object_masks: list[MaskArray | None]
+    """Optional copied binary uint8 truth-validity masks in channel order."""
+    def reconstruction_problem(self) -> SpectralReconstructionProblem:
+        """Copy resident data and compiled channels into an owned spectral problem."""
+        ...
+
+def load_spectral_dataset(*, path: Path) -> SpectralDataset:
+    """Load an explicitly converted version-two profile entirely offline.
+
+    Parameters
+    ----------
+    path
+        Local directory containing dataset.json, compiled kernels and scalar frames.
+        Validates safe paths including symlink containment, explicit wavelengths,
+        stable channel order, sparse references and response provenance.
+
+    Returns
+    -------
+    SpectralDataset
+        Resident data, model and optional per-channel truth. File work releases
+        the GIL; invalid profiles and file failures raise DatasetError. Ordinary
+        version-one data requires the existing single-wavelength loader.
+    """
+    ...

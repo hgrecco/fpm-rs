@@ -61,6 +61,15 @@ Spectral channel
   produces a different k-vector at each wavelength. See
   [Narrowband spectral channels](core-concepts.md#narrowband-spectral-channels).
 
+Spectral mixing matrix
+: A table of declared channel weights for each physical detector exposure. Its
+  numerical rank counts independently weighted channel combinations at a stated
+  tolerance; its condition number describes sensitivity of that linear weight
+  table. Different Fourier crops and pupils remain separate operators, so this
+  does not prove nonlinear reconstruction is recoverable. See
+  [Inspect declared mixing and benchmark recovery](../guides/reconstruction.md#inspect-declared-mixing-and-benchmark-recovery)
+  for the matrix definition, singular-value threshold and references.
+
 Spectral multiplexing
 : Combining intensities from several wavelength channels in one grayscale
   detector exposure. The acquisition plan explicitly records the contributing

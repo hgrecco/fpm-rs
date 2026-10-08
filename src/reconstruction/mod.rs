@@ -17,13 +17,15 @@ mod result;
 mod runner;
 mod schedule;
 mod spectral;
+pub(crate) mod spectral_checkpoint;
 mod state;
 mod trace;
 
 #[cfg(feature = "parquet")]
 pub use crate::tabular::parquet::{
     BUNDLE_FORMAT_VERSION, BundleArrays, BundleArtifact, BundleExportOptions, BundlePreviews,
-    BundleTables, BundleVerificationResult, ResultBundle, read_bundle,
+    BundleTables, BundleVerificationResult, ResultBundle, SPECTRAL_BUNDLE_FORMAT_VERSION,
+    SpectralResultBundle, read_bundle, read_spectral_bundle,
 };
 pub use batch::Batch;
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, ReconstructionCheckpoint};
@@ -40,6 +42,9 @@ pub use schedule::FrameSchedule;
 pub use spectral::{
     SpectralChannelResult, SpectralFrameSchedule, SpectralReconstructionProblem,
     SpectralReconstructionResult, SpectralReconstructionState, SpectralRunner,
+};
+pub use spectral_checkpoint::{
+    SPECTRAL_CHECKPOINT_FORMAT_VERSION, SpectralCheckpointOptions, SpectralReconstructionCheckpoint,
 };
 pub use state::{
     AdaptiveAlternatingProjectionAuxiliaryState, AdmmAuxiliaryState, AlgorithmAuxiliaryState,

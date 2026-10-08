@@ -1,6 +1,7 @@
 //! Object-only amplitude projection for sparse narrowband spectral exposures.
 
 use num_complex::Complex64;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Result,
@@ -66,6 +67,14 @@ pub trait SpectralReconstructionAlgorithm {
         1
     }
 
+    /// Returns canonical JSON stepping options for a stateless checkpointable solver.
+    /// `None` (the default) disables capture/resume for custom implementations.
+    /// Implementors opting in must keep every persistent numerical variable in
+    /// the spectral state and exclude only the total iteration target here.
+    fn checkpoint_configuration(&self) -> Option<String> {
+        None
+    }
+
     /// Runs with sequential physical detector order and default initialization.
     fn run<M: MeasurementRead>(
         self,
@@ -96,7 +105,8 @@ pub trait SpectralReconstructionAlgorithm {
 /// S. Dong, R. Shiradkar, P. Nanda, and G. Zheng,
 /// [“Spectral multiplexing and coherent-state decomposition in Fourier ptychographic imaging”](https://doi.org/10.1364/BOE.5.001757),
 /// *Biomedical Optics Express* **5**(6), 1757–1767 (2014).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpectralAlternatingProjection {
     /// Positive number of complete physical acquisition passes.
     pub iterations: usize,
@@ -265,5 +275,10 @@ impl SpectralReconstructionAlgorithm for SpectralAlternatingProjection {
     }
     fn batch_size(&self) -> usize {
         self.batch_size
+    }
+    fn checkpoint_configuration(&self) -> Option<String> {
+        let mut configuration = self.clone();
+        configuration.iterations = 1;
+        serde_json::to_string(&configuration).ok()
     }
 }

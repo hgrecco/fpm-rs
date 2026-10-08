@@ -121,6 +121,10 @@ impl SpectralImagePlaneModel {
     /// let problem = SpectralReconstructionProblem::new(measurements, model)?;
     /// let result = SpectralAlternatingProjection::default().iterations(2).run(&problem)?;
     /// assert_eq!(result.channels.len(), 2);
+    /// let continued = fpm_rs::reconstruction::SpectralRunner::new(
+    ///     SpectralAlternatingProjection::default().iterations(3),
+    /// ).with_checkpoint(result.checkpoint.unwrap()).run(&problem)?;
+    /// assert_eq!(continued.runtime.completed_iterations, 3);
     /// # Ok(())
     /// # }
     /// ```
@@ -207,6 +211,61 @@ impl SpectralImagePlaneModel {
         };
         model.validate()?;
         Ok(model)
+    }
+
+    /// Assembles validated wavelength kernels already compiled on one common grid.
+    /// Used by external dataset converters; rejects missing wavelength metadata,
+    /// duplicate IDs/wavelengths, incompatible sampling, and uncovered local frames.
+    pub fn from_compiled_channels(
+        channels: Vec<SpectralModelChannel>,
+        acquisition: SpectralAcquisitionPlan,
+        object_coupling: ObjectCoupling,
+    ) -> Result<Self> {
+        let model = Self {
+            channels,
+            acquisition,
+            object_coupling,
+        };
+        model.validate()?;
+        Ok(model)
+    }
+
+    /// Reports the collapsed detector-exposure/channel mode-weight matrix.
+    /// Each entry sums detector gain × spectral weight × local frame gain ×
+    /// local incoherent source-weight sum. Background and measurement masks/weights
+    /// are excluded. Different crops and pupils remain separate forward operators;
+    /// matrix rank alone does not establish nonlinear reconstruction identifiability.
+    ///
+    /// `relative_tolerance` must be finite and nonnegative; omission uses
+    /// `max(exposures, channels) * f64::EPSILON`. Rank counts singular values
+    /// strictly above `largest * relative_tolerance`. Singular values use a scaled
+    /// cyclic one-sided Jacobi SVD, transposing wide matrices. Nonconvergence fails.
+    ///
+    /// # References
+    /// NumPy, [matrix_rank documentation](https://numpy.org/doc/stable/reference/generated/numpy.linalg.matrix_rank.html),
+    /// for the default numerical-rank threshold. LAPACK 3.12.1,
+    /// [DGESVJ documentation](https://www.netlib.org/lapack/explore-html/d9/deb/group__gesvj_ga7aec05d2a1523bbeee77ece21b12187c.html),
+    /// for one-sided Jacobi SVD; this crate implements its own cyclic rotations.
+    pub fn mixing_diagnostics(
+        &self,
+        relative_tolerance: Option<f64>,
+    ) -> Result<super::SpectralMixingDiagnostics> {
+        self.validate()?;
+        let mut matrix = Array2::zeros((self.frame_count(), self.channels.len()));
+        for (row_index, row) in self.acquisition.frames().iter().enumerate() {
+            for contribution in &row.contributions {
+                let kernel = &self.channels[contribution.channel].model;
+                matrix[[row_index, contribution.channel]] += row.gain
+                    * contribution.spectral_weight
+                    * kernel.frame_gain(contribution.local_frame)?
+                    * local_weight_sum(kernel, contribution.local_frame);
+            }
+        }
+        super::mixing::diagnose(
+            self.channels.iter().map(|c| c.channel_id.clone()).collect(),
+            matrix,
+            relative_tolerance,
+        )
     }
 
     /// Borrows the ordered channel metadata and ordinary numerical kernels.

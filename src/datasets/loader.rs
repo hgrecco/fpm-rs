@@ -17,7 +17,8 @@ use crate::{
     reconstruction::ReconstructionProblem,
 };
 
-/// Current version of the language-neutral dataset bundle format.
+/// Version of the ordinary configuration-based dataset profile.
+/// Spectral bundles use the separate version-two profile.
 pub const DATASET_FORMAT_VERSION: u32 = 1;
 
 /// The `dataset.json` entry point defined by `dataset_spec.md`.
@@ -185,6 +186,11 @@ impl DatasetLoader {
     /// mask, provenance, and measurement units entirely from local files.
     pub fn load(&self) -> Result<Dataset> {
         let manifest_path = self.manifest_path();
+        if self.format_version()? == 2 {
+            return Err(Error::Dataset(
+                "ordinary load expected 1; spectral version-2 data requires load_spectral".into(),
+            ));
+        }
         let manifest: DatasetManifest =
             serde_json::from_reader(BufReader::new(File::open(&manifest_path)?))?;
         if manifest.format_version != DATASET_FORMAT_VERSION {
@@ -266,7 +272,7 @@ fn validate_image_set_paths(label: &str, images: &ImageSet) -> Result<()> {
     }
 }
 
-fn validate_contained_path(label: &str, path: &Path) -> Result<()> {
+pub(super) fn validate_contained_path(label: &str, path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path
             .components()
@@ -280,7 +286,7 @@ fn validate_contained_path(label: &str, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_json_array<T>(path: PathBuf, label: &str) -> Result<Array2<T>>
+pub(super) fn load_json_array<T>(path: PathBuf, label: &str) -> Result<Array2<T>>
 where
     T: for<'de> Deserialize<'de>,
 {

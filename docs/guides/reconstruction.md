@@ -208,8 +208,8 @@ All channels require the same detector shape and object-plane pixel pitch;
 automatic sizing uses the union of every channel's Fourier crop bounds. Shared
 direct `KVectorList` geometry, registration/resampling, finite spectral
 bandwidth, pupil recovery, and physical calibration are excluded. The current
-spectral workflow does not use ordinary checkpoints, result bundles, or dataset
-schemas; their explicit spectral extensions remain in `ROADMAP.md`.
+spectral workflow uses separately tagged checkpoints/result bundles and the
+explicit version-2 spectral dataset profile described below.
 
 The solver streams physical exposures and evaluates all their coherent modes
 before any update, applies one amplitude ratio, then uses the canonical crop
@@ -426,7 +426,122 @@ implementation extensions; this does not reproduce that publication's solver.
 The initialization hierarchy uses the Mirsky–Shaked reference above. Nondispersive
 OPD, registered common grids, matched effective resolution, and a calibrated
 reference remain assumptions. Pupil/calibration/dispersion recovery and ordinary
-checkpoints are not supported by this solver.
+checkpoints use a separate spectral format described below.
+
+### Persist and resume spectral solvers
+
+Both solvers return a final `SpectralReconstructionCheckpoint`. Creating it
+requires one additional streaming pass over detector values, masks and weights
+for a SHA-256 fingerprint; no full data copy is needed. The snapshot stores the
+ordered compiled kernels, sparse detector plan, fixed pupils/calibration,
+stepping options and trace. Spectral AP retains centered spectra and schedule;
+joint descent retains authoritative OPD, amplitudes, bounds, fixed gauge and
+automatic initialization records. Ordinary checkpoint format 2 is independent
+of spectral checkpoint format 1.
+
+```python
+partial = fpm.SpectralAlternatingProjection(iterations=20).run(
+    problem=problem, seed=7,
+    checkpoint_directory="spectral-checkpoints", checkpoint_every=5,
+)
+checkpoint = partial.checkpoint
+checkpoint.save(path="spectral-final.json")
+loaded = fpm.SpectralReconstructionCheckpoint.load(path="spectral-final.json")
+continued = fpm.SpectralAlternatingProjection(iterations=50).run(
+    problem=problem, resume=loaded,
+)
+
+joint.checkpoint.save(path="joint-final.json")
+continued_joint = fpm.MultiWavelengthGradientDescent(iterations=150).run_from_checkpoint(
+    problem=problem, checkpoint=joint.checkpoint,
+)
+```
+
+The iteration target includes saved iterations and may increase; every other
+stepping option must match. Omitted AP ordering inherits the saved schedule.
+Explicit ordering must match. Changed channel order, wavelengths, grid,
+coupling, pupil, calibration, detector data, masks or weights fail validation.
+AP restores centered spectra directly; joint resume does not rerun AP/unwrapping
+or project the saved gauge. Scientific arrays/objectives match an uninterrupted
+run exactly; accumulated wall times naturally differ. Checkpoints are written
+at complete AP passes or accepted joint updates, periodically and at the final
+boundary. Initial guesses cannot accompany an AP resume. In Rust use
+`SpectralRunner::with_checkpoint`/`with_checkpoint_options`, or joint
+`run_from_checkpoint`/`run_with_options`.
+
+```python
+bundle = continued.write_bundle(path="spectral-result", label="three channels")
+# For joint OPD, write the enclosing result to preserve its authoritative map.
+joint_bundle = continued_joint.write_bundle(path="joint-result")
+reopened = fpm.read_spectral_bundle(joint_bundle.path)
+reopened.verify()
+restored_joint = reopened.joint_result
+print(restored_joint.opd_m.mean(), reopened.checkpoint.completed_iterations)
+```
+
+Spectral bundle format 1 has its own manifest kind. It stores lossless
+per-channel object, spectrum, amplitude, phase and pupil/support NPY files,
+Parquet channel/history/metric tables, and the full resumable state. Joint
+bundles retain OPD and initialization records; writing a post-AP
+`MultiWavelengthReconstructionResult` also retains unwrapping diagnostics,
+including invalid NaN pixels. `read_spectral_bundle` rejects ordinary bundles,
+and `read_bundle` rejects spectral bundles. Artifact hashes, sizes, safe paths,
+dtypes/shapes and state consistency are checked when loaded; `verify` checks
+every artifact and table. Metadata loads eagerly; channel arrays load together
+on first result access and are cached in Rust. Python result getters return
+independent writable copies. Spectral bundles currently omit PNG previews.
+
+### Inspect declared mixing and benchmark recovery
+
+```python
+diagnostic = model.mixing_diagnostics()
+print(diagnostic.rank, diagnostic.condition_number, diagnostic.channel_ids)
+```
+
+The matrix is shaped `(detector exposures, channels)`. Each entry sums detector
+gain × spectral weight × local gain × local incoherent source-weight sum.
+Background and measurement masks/weights are excluded. Rank counts singular
+values strictly above the largest value times the relative tolerance, default
+`max(exposures, channels) * float64 epsilon`, following NumPy's
+[`matrix_rank` documentation](https://numpy.org/doc/stable/reference/generated/numpy.linalg.matrix_rank.html).
+`src/model/mixing.rs` implements a scaled cyclic one-sided Jacobi SVD, following
+the column-orthogonalization formulation in LAPACK 3.12.1's
+[DGESVJ documentation](https://www.netlib.org/lapack/explore-html/d9/deb/group__gesvj_ga7aec05d2a1523bbeee77ece21b12187c.html).
+Condition is `None` for deficient column rank or an overflowing ratio. These
+weights do not include differing Fourier crops/pupils, so linear rank does not
+prove nonlinear recovery. Exposure noise and spatial calibration still matter.
+
+Run the offline benchmark with a pass sweep and a common runtime ceiling:
+
+```sh
+pixi run python python/examples/benchmark_multi_wavelength.py \
+  --passes 10 40 160 --repeats 3 --runtime-budget-s 2 \
+  --output spectral-benchmark.json
+```
+
+The fixture has registered nondispersive OPD, three calibrated wavelengths,
+27 separate or coded exposures, and unit total spectral weight per exposure.
+AP and joint descent receive identical perturbed OPD/amplitude fields. It
+reports per-channel piston-aligned relative field error, referenced OPD RMSE,
+valid fraction, noisy/clean smoothed amplitude MSE, runtime, peak/baseline
+process RSS, and failure rates across repeated noise seeds. Separate AP is also
+compared against ordinary per-channel AP with both using the same default
+weighted measured-amplitude initialization. Peak RSS is
+measured in fresh processes at solver completion, before ordinary parity runs.
+It includes the interpreter, fixture and result/checkpoint storage; baseline
+RSS is reported rather than claiming solver-only memory.
+
+Cross-talk is defined here as the largest absolute projection coefficient of
+one channel's amplitude error onto another channel's mean-subtracted true
+amplitude contrast. Noise is additive Gaussian detector noise with sigma
+relative to the global mean clean intensity, followed by nonnegative clipping.
+Failure means an exception, invalid OPD pixels, or OPD RMSE above the configurable
+`--failure-opd-nm` threshold (100 nm is a fixture criterion). Fixed-pass results
+report actual completed passes and contribution evaluations. Runtime comparisons
+select the best sampled intensity fit under the same ceiling; they are discrete
+budget comparisons, not identical wall times. These small synthetic cases do
+not establish performance on experimental data, registration mismatch,
+dispersion or blind pupil/calibration recovery.
 
 ## Build the problem
 

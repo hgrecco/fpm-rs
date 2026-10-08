@@ -1,4 +1,4 @@
-# Local Fourier-Ptychography Dataset Format, Version 1
+# Local Fourier-Ptychography Dataset Format, Versions 1 and 2
 
 This is a language-neutral specification for a reader or writer. It defines
 the files, JSON values, image encodings, coordinate conventions, and the
@@ -59,7 +59,7 @@ depend on symbolic links.
 
 ```json
 {
-  "format_version": 2,
+  "format_version": 1,
   "measurement_manifest": "measurements.json",
   "configuration": "configuration.json",
   "ground_truth_object": "ground-truth.json",
@@ -81,6 +81,88 @@ depend on symbolic links.
 | `valid_object_mask` | string or `null` | no | Safe relative path to a binary array. It requires `ground_truth_object`. |
 | `provenance` | object mapping strings to strings | no | Defaults to `{}`. No key or value may be empty or whitespace-only. |
 | `measurement_units` | string or `null` | no | A non-empty description such as `"camera counts"`. |
+
+## Spectral dataset manifest: version 2
+
+Version 1 retains the ordinary configuration-based profile above. Version 2
+uses the same grayscale measurement manifest and scalar-frame encodings, with
+an explicit sparse spectral exposure plan and one externally compiled kernel
+per channel. `DatasetLoader.load` rejects version 2 with a `load_spectral`
+message; `load_spectral` rejects version 1. Conversion remains external. RGB
+planes do not imply calibrated wavelength channels.
+
+```json
+{
+  "format_version": 2,
+  "measurement_manifest": "measurements.json",
+  "channels": [
+    {"channel_id": "green", "wavelength_vacuum_m": 5.32e-7,
+     "compiled_model": "kernels/green.json",
+     "response_provenance": "532 nm filter; measured unity response and source powers"},
+    {"channel_id": "red", "wavelength_vacuum_m": 6.30e-7,
+     "compiled_model": "kernels/red.json",
+     "response_provenance": "630 nm filter; detector response encoded in spectral weights"}
+  ],
+  "object_coupling": "independent",
+  "acquisition": {"frames": [
+    {"contributions": [{"channel": 0, "local_frame": 0, "spectral_weight": 1.0}],
+     "gain": 1.0, "background": 0.0},
+    {"contributions": [{"channel": 1, "local_frame": 0, "spectral_weight": 0.8}],
+     "gain": 1.0, "background": 0.0}
+  ]},
+  "provenance": {"source": "external narrowband converter"},
+  "measurement_units": "camera counts"
+}
+```
+
+The strict top-level fields are `format_version`, `measurement_manifest`,
+`channels`, `object_coupling`, `acquisition`, and optional `provenance` and
+`measurement_units`. Provenance/units retain version-1 validation. Channel
+order is semantic and shared by every channel-indexed result. At least one
+channel is required. Each strict channel record requires nonempty unique
+`channel_id`, positive distinct finite `wavelength_vacuum_m`, a safe relative
+`compiled_model` path, and nonempty `response_provenance` describing the origins
+of wavelength response, weights and calibration. Optional `ground_truth_object`
+and `valid_object_mask` paths use the existing row-major array encoding; masks
+require truth. Their shapes must equal the common reconstruction grid, truth
+must be finite complex binary64, and masks must be binary uint8. Channel truths
+may differ even when a shared-complex reconstruction approximation is selected.
+
+A kernel file contains the compiled-model JSON record defined below, rather
+than the whole `SimulationConfiguration`. Its sampling wavelength must exactly
+match the channel declaration. Every kernel has the same detector shape,
+reconstruction shape and object-plane detector pitch; the local crop bounds and
+pupil can differ. The converter compiles all kernels onto the common grid.
+`background` must be `null` in every local kernel: detector backgrounds belong
+only to physical exposure rows. Local `frame_gains` may be `null` (unity) or one
+finite positive gain per local frame. `multiplexing_matrix` may be `null` for
+one-source local frames or an ordered array of sparse rows, each a nonempty
+array of `[source_index, nonnegative_weight]` pairs. Indices must be valid and
+unique within a row, with a finite positive total effective weight. Local
+source powers are already included in those weights/gains; do not multiply
+them into spectral weights a second time. All kernel arrays use the existing
+sampling, Fourier-crop sign, row-major layout and pupil conventions. External
+Python converters may use `ImagePlaneModel.save_json` to emit this record.
+
+`object_coupling` is exactly `"independent"` or `"shared_complex"`.
+`acquisition` has exactly one `frames` array whose order matches the measurement
+manifest. Each strict detector row requires `contributions`, positive finite
+`gain`, and finite nonnegative `background`. Each contribution requires unsigned
+`channel` (index in `channels`), unsigned `local_frame` (index in that kernel),
+and finite nonnegative `spectral_weight`. Duplicate channel/local-frame pairs
+are rejected, zero contributions are removed, and remaining contributions are
+sorted by channel/local frame. Every local frame must participate, and every
+physical row must have finite positive effective mode weight. The prediction is
+`gain * sum(spectral_weight * local_intensity) + background`; local intensity
+already includes local source weights and frame gain. Separate exposures have
+one contributing channel; multiplexed exposures have several. No coherent
+cross-wavelength interference is modeled.
+
+Every referenced file must remain inside its own manifest directory, including
+when resolving symlinks. Loading validates model/frame shape and count before
+returning resident data. It never resamples, registers, demixes RGB, or accesses
+the network. Registered archives may declare profile 2 and use `open_spectral`
+through the same verified-download/cache mechanism as profile 1.
 
 ## Measurement manifest: `measurements.json`
 
@@ -380,7 +462,7 @@ values.
 | `sampling` | Numerical sampling record, calculated below. `coordinate_convention` is exactly `"CenteredPositiveK"`. |
 | `image_shape` | Exact copy of top-level `image_shape`. |
 | `reconstruction_shape` | Exact copy of top-level `reconstruction_shape`. |
-| `frame_gains` | One explicit `1.0` value per frame in the basic direct-vector profile. |
+| `frame_gains` | `null` (unity) or one explicit `1.0` value per frame in the basic direct-vector profile. |
 | `background` | Exact copy of the experiment's `optical_background`. |
 | `multiplexing_matrix` | `null` in the basic direct-vector profile. |
 
@@ -655,7 +737,7 @@ this shape:
 | `id` | Required non-empty stable identifier containing only ASCII letters, digits, `.`, `_`, or `-`. It must not be `.` or `..`. |
 | `version` | Required non-empty immutable version using the same character set as `id`. One registry contains at most one current version of an ID. |
 | `title`, `description` | Required non-empty human-readable strings. |
-| `format_version` | Required unsigned integer identifying the bundle format. It must be `1` for this specification. |
+| `format_version` | Required unsigned integer identifying the bundle format. It must be `1` for the ordinary profile or `2` for the spectral profile. |
 | `archive.url` | Required non-empty URL identifying immutable `.tar.zst` content. |
 | `archive.sha256` | Required SHA-256 of the archive exactly as downloaded, encoded as 64 hexadecimal characters. |
 | `archive.size_bytes` | Required positive compressed archive size. |

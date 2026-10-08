@@ -23,7 +23,11 @@ enum Command {
     /// Download and validate one dataset or every registry entry.
     Download(Selection),
     /// Download if necessary, open, and validate one dataset.
-    Open { id: String },
+    Open {
+        id: String,
+        #[arg(long)]
+        spectral: bool,
+    },
     /// Remove one dataset or the complete managed cache.
     Clean(Selection),
 }
@@ -83,7 +87,20 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Command::Open { id } => {
+        Command::Open { id, spectral } => {
+            if spectral {
+                let dataset = registry.open_spectral(&id)?;
+                println!("id={id}");
+                println!("path={}", dataset.source_path().display());
+                println!("frames={}", dataset.measurements().frame_count());
+                println!("image_shape={:?}", dataset.model().image_shape());
+                println!(
+                    "reconstruction_shape={:?}",
+                    dataset.model().reconstruction_shape()
+                );
+                println!("channels={}", dataset.model().channels().len());
+                return Ok(());
+            }
             let dataset = registry.open(&id)?;
             let path = dataset.source_path().map_or_else(
                 || "<programmatic>".into(),

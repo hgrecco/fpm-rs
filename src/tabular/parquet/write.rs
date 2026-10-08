@@ -659,7 +659,7 @@ fn validate_written_artifact(workspace: &Path, artifact: &ManifestArtifact) -> R
     Ok(())
 }
 
-fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
+pub(super) fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     let temporary = path.with_extension("tmp");
     write_json_sync(&temporary, value)?;
     fs::rename(temporary, path)?;
@@ -675,7 +675,7 @@ fn write_json_sync(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn validate_run_id(run_id: &str) -> Result<()> {
+pub(super) fn validate_run_id(run_id: &str) -> Result<()> {
     if run_id.is_empty() || run_id.len() > 256 || run_id.chars().any(char::is_control) {
         return Err(Error::InvalidParameter {
             name: "run_id",
@@ -685,7 +685,7 @@ fn validate_run_id(run_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn unique_paths(requested: &Path) -> Result<(PathBuf, PathBuf)> {
+pub(super) fn unique_paths(requested: &Path) -> Result<(PathBuf, PathBuf)> {
     if requested.file_name().is_none() {
         return Err(Error::InvalidParameter {
             name: "bundle path",

@@ -1,7 +1,7 @@
 # Datasets
 
-`fpm-rs` uses one bundle format and one loader regardless of where data came
-from:
+`fpm-rs` uses explicit ordinary (version 1) and spectral (version 2) profiles
+with a local loader, regardless of where data came from:
 
 ```text
 dataset_spec + dataset files -> DatasetLoader -> Dataset -> reconstruction
@@ -43,6 +43,35 @@ fn main() -> Result<()> {
 `DatasetLoader` validates safe paths, measurements, configuration and compiled
 models, optional truth and masks, provenance, and units. It never accesses the
 network.
+
+## Open an explicit spectral bundle
+
+Version 2 stores stable channel IDs, positive distinct vacuum wavelengths,
+response/weight provenance, per-channel compiled kernels on a common grid, and
+an explicit sparse detector exposure plan. Frames remain grayscale. External
+converters produce this metadata; RGB image planes are not inferred channels.
+The [dataset specification](https://github.com/hgrecco/fpm-rs/blob/main/dataset_spec.md#spectral-dataset-manifest-version-2)
+defines the strict profile. Channel kernels can be emitted by
+`ImagePlaneModel.save_json(path=...)` from Python.
+
+```python
+spectral = fpm.load_spectral_dataset(path="/data/converted-spectral-fpm")
+problem = spectral.reconstruction_problem()
+print(spectral.model.channel_ids, spectral.response_provenance)
+result = fpm.SpectralAlternatingProjection(iterations=50).run(problem=problem)
+```
+
+In Rust use `DatasetLoader::new(path)?.load_spectral()?`, then
+`reconstruction_problem()`. Local loading stays offline and rejects missing
+response provenance, wavelength/kernel mismatches, incompatible common grids,
+invalid sparse references, unsafe paths (including escaping symlinks), and
+non-grayscale frames. Optional truth/masks remain channel ordered. Ordinary
+`load` and spectral `load_spectral` reject the other profile explicitly.
+
+For a registered spectral ID, use `registry.open_spectral(id)` in either
+language, or `fpm-datasets open ID --spectral`. Registry profile versions 1 and
+2 share verified downloads, staging, cache repair and cleanup; the registry
+schema itself remains version 1.
 
 ## Discover and open registered datasets
 

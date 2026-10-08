@@ -313,6 +313,15 @@ impl PyDatasetRegistry {
             .map_err(to_dataset_py_err)
     }
 
+    /// Opens a registered version-two spectral ID through verified download/cache operations.
+    /// Releases the GIL; version-one data requires open instead.
+    fn open_spectral(&self, py: Python<'_>, id: String) -> PyResult<PySpectralDataset> {
+        let registry = self.inner.clone();
+        py.detach(move || registry.open_spectral(&id))
+            .map(PySpectralDataset::new)
+            .map_err(to_dataset_py_err)
+    }
+
     fn clean(&self, py: Python<'_>, id: String) -> PyResult<bool> {
         let registry = self.inner.clone();
         py.detach(move || registry.clean(&id))
@@ -324,6 +333,102 @@ impl PyDatasetRegistry {
         py.detach(move || registry.clean_all())
             .map_err(to_dataset_py_err)
     }
+}
+
+/// Resident version-two spectral dataset loaded entirely offline from converted files.
+/// Channel IDs, vacuum wavelengths and response provenance are explicit; no RGB
+/// channel inference or registration occurs. Scientific getters return writable copies.
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "SpectralDataset",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PySpectralDataset {
+    inner: Arc<fpm_rs::datasets::SpectralDataset>,
+}
+impl PySpectralDataset {
+    fn new(inner: fpm_rs::datasets::SpectralDataset) -> Self {
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+}
+#[pymethods]
+impl PySpectralDataset {
+    #[getter]
+    fn path(&self) -> PathBuf {
+        self.inner.source_path().to_owned()
+    }
+    #[getter]
+    fn measurements(&self) -> PyMeasurementStack {
+        PyMeasurementStack {
+            inner: Arc::new(self.inner.measurements().clone()),
+        }
+    }
+    #[getter]
+    fn model(&self) -> crate::spectral::PySpectralImagePlaneModel {
+        crate::spectral::PySpectralImagePlaneModel {
+            inner: Arc::new(self.inner.model().clone()),
+        }
+    }
+    #[getter]
+    fn response_provenance(&self) -> std::collections::BTreeMap<String, String> {
+        self.inner
+            .manifest()
+            .channels
+            .iter()
+            .map(|c| (c.channel_id.clone(), c.response_provenance.clone()))
+            .collect()
+    }
+    #[getter]
+    fn provenance(&self) -> std::collections::BTreeMap<String, String> {
+        self.inner.manifest().provenance.clone()
+    }
+    #[getter]
+    fn measurement_units(&self) -> Option<String> {
+        self.inner.manifest().measurement_units.clone()
+    }
+    #[getter]
+    fn ground_truth_objects(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Vec<Option<Py<PyArray2<fpm_rs::Complex64>>>>> {
+        self.inner
+            .ground_truth_objects()
+            .iter()
+            .map(|v| {
+                v.as_ref()
+                    .map(|a| complex_array2_to_py(py, a.clone()))
+                    .transpose()
+            })
+            .collect()
+    }
+    #[getter]
+    fn valid_object_masks(&self, py: Python<'_>) -> PyResult<Vec<Option<Py<PyArray2<u8>>>>> {
+        self.inner
+            .valid_object_masks()
+            .iter()
+            .map(|v| v.as_ref().map(|a| array2_to_py(py, a.clone())).transpose())
+            .collect()
+    }
+    fn reconstruction_problem(&self) -> crate::spectral::PySpectralReconstructionProblem {
+        crate::spectral::PySpectralReconstructionProblem {
+            measurements: Arc::new(self.inner.measurements().clone()),
+            model: Arc::new(self.inner.model().clone()),
+        }
+    }
+}
+/// Loads an explicit version-two spectral profile from a local directory, with no network.
+/// Validates compiled kernels, scalar frames, sparse exposure order and contained paths.
+/// File work releases the GIL; failures raise DatasetError.
+#[pyfunction]
+#[pyo3(signature=(*,path))]
+fn load_spectral_dataset(py: Python<'_>, path: PathBuf) -> PyResult<PySpectralDataset> {
+    py.detach(move || fpm_rs::datasets::DatasetLoader::new(path)?.load_spectral())
+        .map(PySpectralDataset::new)
+        .map_err(to_dataset_py_err)
 }
 
 #[pyfunction]
@@ -349,6 +454,8 @@ fn open_dataset(
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDatasetRegistryEntry>()?;
     module.add_class::<PyDataset>()?;
+    module.add_class::<PySpectralDataset>()?;
+    module.add_function(wrap_pyfunction!(load_spectral_dataset, module)?)?;
     module.add_class::<PyDatasetRegistry>()?;
     module.add_function(wrap_pyfunction!(open_dataset, module)?)?;
     Ok(())

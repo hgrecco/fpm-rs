@@ -7,6 +7,7 @@
 
 mod loader;
 mod registry;
+mod spectral;
 mod subset;
 
 pub use loader::{DATASET_FORMAT_VERSION, Dataset, DatasetLoader, DatasetManifest};
@@ -16,3 +17,8 @@ pub use registry::{
     DatasetRegistry, DatasetRegistryDocument, DatasetRegistryEntry, DatasetSource, open_dataset,
 };
 pub use subset::{DatasetSubset, DatasetSubsetBuilder, FrameSelector, Rect};
+
+pub use spectral::{
+    SPECTRAL_DATASET_FORMAT_VERSION, SpectralDataset, SpectralDatasetChannel,
+    SpectralDatasetManifest,
+};

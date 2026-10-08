@@ -295,30 +295,11 @@ Remaining promotion work:
 The implemented spectral, phase-unwrapping, and joint OPD workflows are
 documented in
 [reconstruct multiple wavelengths](docs/guides/reconstruction.md#reconstruct-multiple-wavelengths).
-Remaining work:
+Spectral checkpoints/result bundles, the explicit spectral dataset profile,
+mixing diagnostics, and the
+[recovery benchmark](python/examples/benchmark_multi_wavelength.py) are implemented.
+Remaining extensions:
 
-- [ ] **Design first:** Add versioned spectral checkpoints and result bundles
-  for both spectral AP and joint OPD descent. Preserve channel IDs/order,
-  wavelengths, coupling, common grid, sparse acquisition plan, object state,
-  pupils, gains/background, trace, algorithm options, and schedule state. Joint
-  OPD persistence must also retain amplitudes, OPD bounds, phase reference/gauge,
-  and initialization diagnostics without rerunning initialization on resume.
-  Reject ordinary/spectral interchange and model-defining metadata changes;
-  verify exact resume and Rust/Python bundle round trips.
-- [ ] **Design first:** Extend `dataset_spec` through a new schema version with
-  explicit spectral channels and sparse detector-frame contributions. Preserve
-  grayscale detector frames, single-wavelength compatibility, and offline
-  loading. Require external converters to supply wavelength, channel, spectral
-  response/weight provenance, and separate/multiplexed acquisition ordering;
-  do not infer calibrated channels from RGB images.
-- [ ] Add channel mixing-matrix rank and condition diagnostics without treating
-  linear mixing rank as proof of nonlinear recoverability.
-- [ ] Expand recovery benchmarks beyond the existing deterministic fixtures.
-  Compare separate runs with ordinary per-channel reconstruction and compare
-  multiplexed spectral AP with joint OPD descent under matched acquisition and
-  update/runtime budgets. Report runtime, peak memory, channel-wise
-  gauge-aligned error, OPD error, cross-talk, noise sensitivity, and failure
-  rates.
 - [ ] **Design first:** Add explicit wavelength-field registration and effective
   resolution matching before OPD mixing. Define physical coordinates,
   resampling, masks, and phase-reference transport; the current unwrapping

@@ -13,6 +13,8 @@ mod multi_wavelength;
 mod reconstruction;
 mod simulation;
 mod spectral;
+mod spectral_bundle;
+mod spectral_checkpoint;
 
 use pyo3::prelude::*;
 
@@ -31,6 +33,8 @@ fn _core(module: &Bound<'_, PyModule>) -> PyResult<()> {
     measurements::register(module)?;
     simulation::register(module)?;
     reconstruction::register(module)?;
+    spectral_checkpoint::register(module)?;
+    spectral_bundle::register(module)?;
     spectral::register(module)?;
     multi_wavelength::register(module)?;
     Ok(())

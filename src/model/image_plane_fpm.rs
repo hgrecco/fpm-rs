@@ -114,6 +114,25 @@ impl<'de> Deserialize<'de> for ImagePlaneModel {
 }
 
 impl ImagePlaneModel {
+    /// Saves this validated compiled kernel as float-roundtrip JSON.
+    /// Intended for external dataset converters; overwrites the destination and
+    /// synchronizes file contents. Does not create parent directories or access the network.
+    pub fn save_json(&self, path: impl AsRef<std::path::Path>) -> Result<()> {
+        self.validate()?;
+        let file = std::fs::File::create(path)?;
+        serde_json::to_writer_pretty(&file, self)?;
+        file.sync_all()?;
+        Ok(())
+    }
+    /// Loads and validates a compiled kernel JSON entirely from local files.
+    /// Preserves explicit sampling metadata, source weights, crops and fixed pupil.
+    pub fn load_json(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let model: Self =
+            serde_json::from_reader(std::io::BufReader::new(std::fs::File::open(path)?))?;
+        model.validate()?;
+        Ok(model)
+    }
+
     /// Builds and validates a non-multiplexed model from explicitly compiled components.
     ///
     /// `k_vectors` and `crop_indices` must have equal non-zero source counts. `pupil`

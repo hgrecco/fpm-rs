@@ -5,6 +5,7 @@ use std::{sync::Arc, time::Instant};
 use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 use num_complex::Complex64;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Result,
@@ -20,7 +21,11 @@ use crate::{
     },
 };
 
-use super::{Batch, IterationRecord, ReconstructionTrace, RuntimeInfo};
+use super::{
+    Batch, IterationRecord, ReconstructionTrace, RuntimeInfo, SpectralCheckpointOptions,
+    SpectralReconstructionCheckpoint,
+    spectral_checkpoint::{StoredSolver, fingerprints},
+};
 
 /// Validated pairing of scalar detector measurements and a compiled spectral model.
 ///
@@ -327,7 +332,8 @@ impl SpectralReconstructionState {
 }
 
 /// Ordering of physical detector exposures for a spectral solver.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SpectralFrameSchedule {
     /// Visit exposures in declared acquisition order.
     #[default]
@@ -405,6 +411,9 @@ pub struct SpectralReconstructionResult {
     pub trace: ReconstructionTrace,
     /// Algorithm name, completed iterations, and elapsed seconds.
     pub runtime: RuntimeInfo,
+    /// Final iteration-boundary state for supported stateless solvers. Joint
+    /// descent keeps its resumable state in the enclosing OPD result instead.
+    pub checkpoint: Option<SpectralReconstructionCheckpoint>,
 }
 
 /// Executor for a spectral algorithm, distinct from ordinary reconstruction.
@@ -416,6 +425,9 @@ pub struct SpectralRunner<A> {
     algorithm: A,
     schedule: SpectralFrameSchedule,
     initial_objects: Option<Vec<Array2<Complex64>>>,
+    checkpoint: Option<SpectralReconstructionCheckpoint>,
+    checkpoint_options: SpectralCheckpointOptions,
+    explicit_schedule: bool,
 }
 
 impl<A: SpectralReconstructionAlgorithm> SpectralRunner<A> {
@@ -450,18 +462,36 @@ impl<A: SpectralReconstructionAlgorithm> SpectralRunner<A> {
             algorithm,
             schedule: SpectralFrameSchedule::default(),
             initial_objects: None,
+            checkpoint: None,
+            checkpoint_options: SpectralCheckpointOptions::default(),
+            explicit_schedule: false,
         }
     }
 
     /// Selects physical detector ordering; channel/local-frame order stays canonical.
     pub fn with_schedule(mut self, schedule: SpectralFrameSchedule) -> Self {
         self.schedule = schedule;
+        self.explicit_schedule = true;
         self
     }
 
     /// Sets owned initial complex fields in stored-object order, validated when run.
     pub fn with_initial_objects(mut self, objects: Vec<Array2<Complex64>>) -> Self {
         self.initial_objects = Some(objects);
+        self
+    }
+
+    /// Restores a validated spectral solver snapshot. Initial objects cannot
+    /// also be supplied. Its schedule is inherited unless explicitly selected,
+    /// in which case the schedule must match. `iterations` is the total target.
+    pub fn with_checkpoint(mut self, checkpoint: SpectralReconstructionCheckpoint) -> Self {
+        self.checkpoint = Some(checkpoint);
+        self
+    }
+
+    /// Configures periodic JSON files after complete passes and at completion.
+    pub fn with_checkpoint_options(mut self, options: SpectralCheckpointOptions) -> Self {
+        self.checkpoint_options = options;
         self
     }
 
@@ -479,14 +509,85 @@ impl<A: SpectralReconstructionAlgorithm> SpectralRunner<A> {
                 reason: "must be positive".into(),
             });
         }
-        self.schedule.order(problem.model.frame_count(), 0)?;
+        self.checkpoint_options.validate()?;
+        let configuration = self.algorithm.checkpoint_configuration();
         let started = Instant::now();
-        let mut state = match self.initial_objects {
-            Some(objects) => SpectralReconstructionState::from_objects(problem, objects)?,
-            None => self.algorithm.initialize(problem)?,
+        let algorithm_name = std::any::type_name::<A>().to_string();
+        let (mut state, mut trace, completed, elapsed_offset, signature) = match self.checkpoint {
+            Some(checkpoint) => {
+                if self.initial_objects.is_some() {
+                    return Err(Error::InvalidParameter {
+                        name: "initial_objects",
+                        reason: "cannot combine initial objects with a checkpoint".into(),
+                    });
+                }
+                checkpoint.validate_for_problem(problem)?;
+                let signature = checkpoint.fingerprints();
+                let StoredSolver::Spectral {
+                    algorithm,
+                    configuration: stored_configuration,
+                    spectra,
+                    schedule,
+                } = checkpoint.state
+                else {
+                    return Err(Error::InvalidParameter {
+                        name: "resume_from",
+                        reason: "joint OPD state cannot resume spectral AP".into(),
+                    });
+                };
+                if algorithm != algorithm_name
+                    || configuration.as_ref() != Some(&stored_configuration)
+                    || (self.explicit_schedule && self.schedule != schedule)
+                {
+                    return Err(Error::InvalidParameter {
+                        name: "resume_from",
+                        reason: "solver stepping options or schedule changed".into(),
+                    });
+                }
+                if self.algorithm.iterations() < checkpoint.completed_iterations {
+                    return Err(Error::InvalidParameter {
+                        name: "iterations",
+                        reason: "total target cannot precede checkpoint iterations".into(),
+                    });
+                }
+                self.schedule = schedule;
+                let objects = (0..problem.model.object_count())
+                    .map(|_| Array2::zeros(problem.model.reconstruction_shape()))
+                    .collect();
+                let mut state = SpectralReconstructionState::from_objects(problem, objects)?;
+                for (target, stored) in state.spectra.iter_mut().zip(spectra) {
+                    *target = StandardArray2::try_from(stored.into_array()?)?;
+                }
+                (
+                    state,
+                    checkpoint.trace,
+                    checkpoint.completed_iterations,
+                    checkpoint.elapsed_seconds,
+                    Some(signature),
+                )
+            }
+            None => {
+                let signature = configuration
+                    .as_ref()
+                    .map(|_| fingerprints(problem))
+                    .transpose()?;
+                let state = match self.initial_objects {
+                    Some(objects) => SpectralReconstructionState::from_objects(problem, objects)?,
+                    None => self.algorithm.initialize(problem)?,
+                };
+                (state, ReconstructionTrace::default(), 0, 0.0, signature)
+            }
         };
-        let mut trace = ReconstructionTrace::default();
-        for iteration in 0..self.algorithm.iterations() {
+        if self.checkpoint_options.directory.is_some() && configuration.is_none() {
+            return Err(Error::InvalidParameter {
+                name: "checkpoint_options",
+                reason: "this custom spectral algorithm has not opted into stateless checkpointing"
+                    .into(),
+            });
+        }
+        self.schedule
+            .order(problem.model.frame_count(), completed)?;
+        for iteration in completed..self.algorithm.iterations() {
             let order = self
                 .schedule
                 .order(problem.model.frame_count(), iteration)?;
@@ -513,11 +614,33 @@ impl<A: SpectralReconstructionAlgorithm> SpectralRunner<A> {
             trace.iterations.push(IterationRecord {
                 iteration: iteration + 1,
                 objective,
-                elapsed_seconds: started.elapsed().as_secs_f64(),
+                elapsed_seconds: elapsed_offset + started.elapsed().as_secs_f64(),
             });
             output
                 .metrics
                 .append_records(iteration + 1, &mut trace.algorithm_metrics);
+            if self.checkpoint_options.directory.is_some()
+                && (iteration + 1).is_multiple_of(self.checkpoint_options.every)
+            {
+                let checkpoint = SpectralReconstructionCheckpoint::capture(
+                    problem.model.clone(),
+                    signature.as_ref().unwrap(),
+                    iteration + 1,
+                    elapsed_offset + started.elapsed().as_secs_f64(),
+                    trace.clone(),
+                    StoredSolver::Spectral {
+                        algorithm: algorithm_name.clone(),
+                        configuration: configuration.clone().unwrap(),
+                        spectra: state
+                            .spectra
+                            .iter()
+                            .map(|a| crate::array_serde::Array2Data::from_view(a.ndarray_view()))
+                            .collect(),
+                        schedule: self.schedule.clone(),
+                    },
+                );
+                self.checkpoint_options.write(&checkpoint, false)?;
+            }
         }
         let high_shape = problem.model.reconstruction_shape();
         let mut objects = Vec::new();
@@ -551,12 +674,36 @@ impl<A: SpectralReconstructionAlgorithm> SpectralRunner<A> {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let elapsed_seconds = elapsed_offset + started.elapsed().as_secs_f64();
+        let checkpoint = configuration.map(|configuration| {
+            SpectralReconstructionCheckpoint::capture(
+                problem.model.clone(),
+                signature.as_ref().unwrap(),
+                self.algorithm.iterations(),
+                elapsed_seconds,
+                trace.clone(),
+                StoredSolver::Spectral {
+                    algorithm: algorithm_name,
+                    configuration,
+                    spectra: state
+                        .spectra
+                        .iter()
+                        .map(|a| crate::array_serde::Array2Data::from_view(a.ndarray_view()))
+                        .collect(),
+                    schedule: self.schedule,
+                },
+            )
+        });
+        if let Some(checkpoint) = &checkpoint {
+            self.checkpoint_options.write(checkpoint, true)?;
+        }
         Ok(SpectralReconstructionResult {
             channels,
+            checkpoint,
             object_coupling: problem.model.object_coupling(),
             trace,
             runtime: RuntimeInfo {
-                elapsed_seconds: started.elapsed().as_secs_f64(),
+                elapsed_seconds,
                 completed_iterations: self.algorithm.iterations(),
                 stopped_early: false,
                 algorithm: std::any::type_name::<A>()

@@ -248,11 +248,73 @@ fn coupling_name(value: ObjectCoupling) -> &'static str {
 )]
 #[derive(Clone)]
 pub(crate) struct PySpectralImagePlaneModel {
-    inner: Arc<SpectralImagePlaneModel>,
+    pub(crate) inner: Arc<SpectralImagePlaneModel>,
 }
 
 #[pymethods]
 impl PySpectralImagePlaneModel {
+    /// Reports declared exposure weights, singular values, numerical rank and condition.
+    /// Does not establish nonlinear recoverability. The default relative threshold
+    /// is max(frames,channels)*binary64 epsilon; NumPy matrix_rank documents this rule.
+    /// Uses a scaled cyclic one-sided Jacobi SVD as described by LAPACK DGESVJ.
+    /// Returns an owned diagnostic record whose array getters are writable copies.
+    #[pyo3(signature=(*,relative_tolerance=None))]
+    fn mixing_diagnostics(
+        &self,
+        py: Python<'_>,
+        relative_tolerance: Option<f64>,
+    ) -> PyResult<PySpectralMixingDiagnostics> {
+        let model = self.inner.clone();
+        let inner = py
+            .detach(move || model.mixing_diagnostics(relative_tolerance))
+            .map_err(to_py_err)?;
+        Ok(PySpectralMixingDiagnostics {
+            inner: Arc::new(inner),
+        })
+    }
+    /// Assembles externally compiled common-grid kernels with stable channel IDs.
+    #[staticmethod]
+    #[pyo3(signature=(*,channel_ids,models,acquisition,object_coupling="independent"))]
+    fn from_compiled_channels(
+        channel_ids: Vec<String>,
+        models: Vec<PyRef<'_, PyImagePlaneModel>>,
+        acquisition: PyRef<'_, PySpectralAcquisitionPlan>,
+        object_coupling: &str,
+    ) -> PyResult<Self> {
+        if channel_ids.len() != models.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "one channel ID per compiled model is required",
+            ));
+        }
+        let coupling = match object_coupling {
+            "independent" => ObjectCoupling::Independent,
+            "shared_complex" => ObjectCoupling::SharedComplex,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "invalid object_coupling",
+                ));
+            }
+        };
+        let channels = channel_ids
+            .into_iter()
+            .zip(models)
+            .map(|(channel_id, model)| fpm_rs::model::SpectralModelChannel {
+                channel_id,
+                model: (*model.inner).clone(),
+            })
+            .collect();
+        Ok(Self {
+            inner: Arc::new(
+                SpectralImagePlaneModel::from_compiled_channels(
+                    channels,
+                    acquisition.inner.clone(),
+                    coupling,
+                )
+                .map_err(to_py_err)?,
+            ),
+        })
+    }
+
     #[getter]
     fn channel_ids(&self) -> Vec<String> {
         self.inner
@@ -466,6 +528,40 @@ impl PySpectralReconstructionResult {
 
 #[pymethods]
 impl PySpectralReconstructionResult {
+    /// Saves lossless channel fields, trace and resumable state in a spectral bundle.
+    /// Existing destinations receive a numbered sibling. File work releases the GIL.
+    #[pyo3(signature=(*,path,run_id=None,label=None))]
+    fn write_bundle(
+        &self,
+        py: Python<'_>,
+        path: std::path::PathBuf,
+        run_id: Option<String>,
+        label: Option<String>,
+    ) -> PyResult<crate::spectral_bundle::PySpectralResultBundle> {
+        let inner = self.inner.clone();
+        py.detach(move || {
+            inner.write_bundle(
+                path,
+                fpm_rs::tabular::parquet::BundleExportOptions {
+                    run_id,
+                    label,
+                    include_previews: false,
+                },
+            )
+        })
+        .map(crate::spectral_bundle::PySpectralResultBundle::from_core)
+        .map_err(to_py_err)
+    }
+
+    #[getter]
+    fn checkpoint(&self) -> Option<crate::spectral_checkpoint::PySpectralReconstructionCheckpoint> {
+        self.inner.checkpoint.as_ref().map(|c| {
+            crate::spectral_checkpoint::PySpectralReconstructionCheckpoint {
+                inner: Arc::new(c.clone()),
+            }
+        })
+    }
+
     /// Mixes referenced independent channel phases into a nondispersive OPD map.
     /// Exactly one of phase_offsets_rad and reference_mask is required.
     /// reference_mask and mask are copied C-contiguous uint8 common-grid arrays.
@@ -588,7 +684,7 @@ impl PySpectralAlternatingProjection {
     /// Requires independent object coupling and exactly one phase reference choice.
     /// NumPy inputs are copied; computation releases the GIL and validation raises FpmError.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, problem, unwrapper, phase_offsets_rad=None, reference_mask=None, reference_opd_m=0.0, mask=None, initial_objects=None, frame_order=None, seed=None))]
+    #[pyo3(signature = (*, problem, unwrapper, phase_offsets_rad=None, reference_mask=None, reference_opd_m=0.0, mask=None, initial_objects=None, frame_order=None, seed=None, resume=None, checkpoint_directory=None, checkpoint_every=1))]
     fn run_opd(
         &self,
         py: Python<'_>,
@@ -601,6 +697,9 @@ impl PySpectralAlternatingProjection {
         initial_objects: Option<PyReadonlyArray3<'_, Complex64>>,
         frame_order: Option<Vec<usize>>,
         seed: Option<u64>,
+        resume: Option<PyRef<'_, crate::spectral_checkpoint::PySpectralReconstructionCheckpoint>>,
+        checkpoint_directory: Option<std::path::PathBuf>,
+        checkpoint_every: usize,
     ) -> PyResult<PyMultiWavelengthReconstructionResult> {
         let reference =
             extract_phase_reference(phase_offsets_rad, reference_mask, reference_opd_m)?;
@@ -615,7 +714,16 @@ impl PySpectralAlternatingProjection {
             }));
         }
         let spectral = self
-            .run(py, problem, initial_objects, frame_order, seed)?
+            .run(
+                py,
+                problem,
+                initial_objects,
+                frame_order,
+                seed,
+                resume,
+                checkpoint_directory,
+                checkpoint_every,
+            )?
             .inner;
         let unwrapper = unwrapper.inner.clone();
         let inner = py
@@ -653,7 +761,8 @@ impl PySpectralAlternatingProjection {
     /// frame_order is a global detector permutation; seed selects a deterministic
     /// per-pass shuffle, and the two options are mutually exclusive.
     /// Returns owned channel records; releases the GIL and raises FpmError on failure.
-    #[pyo3(signature = (*, problem, initial_objects=None, frame_order=None, seed=None))]
+    #[pyo3(signature = (*, problem, initial_objects=None, frame_order=None, seed=None, resume=None, checkpoint_directory=None, checkpoint_every=1))]
+    #[allow(clippy::too_many_arguments)]
     fn run(
         &self,
         py: Python<'_>,
@@ -661,6 +770,9 @@ impl PySpectralAlternatingProjection {
         initial_objects: Option<PyReadonlyArray3<'_, Complex64>>,
         frame_order: Option<Vec<usize>>,
         seed: Option<u64>,
+        resume: Option<PyRef<'_, crate::spectral_checkpoint::PySpectralReconstructionCheckpoint>>,
+        checkpoint_directory: Option<std::path::PathBuf>,
+        checkpoint_every: usize,
     ) -> PyResult<PySpectralReconstructionResult> {
         if frame_order.is_some() && seed.is_some() {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -677,12 +789,22 @@ impl PySpectralAlternatingProjection {
                     .collect(),
             );
         }
+        let explicit_schedule = frame_order.is_some() || seed.is_some();
         let schedule = match (frame_order, seed) {
             (Some(order), _) => SpectralFrameSchedule::Explicit(order),
             (_, Some(seed)) => SpectralFrameSchedule::RandomShuffle { seed },
             _ => SpectralFrameSchedule::Sequential,
         };
-        runner = runner.with_schedule(schedule);
+        if explicit_schedule {
+            runner = runner.with_schedule(schedule);
+        }
+        if let Some(resume) = resume {
+            runner = runner.with_checkpoint((*resume.inner).clone());
+        }
+        runner = runner.with_checkpoint_options(crate::spectral_checkpoint::options(
+            checkpoint_directory,
+            checkpoint_every,
+        ));
         let measurements = problem.measurements.clone();
         let model = problem.model.clone();
         let inner = py
@@ -889,6 +1011,35 @@ pub(crate) struct PyMultiWavelengthReconstructionResult {
 
 #[pymethods]
 impl PyMultiWavelengthReconstructionResult {
+    /// Saves AP fields together with phase-mixing diagnostics, preserving invalid NaNs.
+    #[pyo3(signature=(*,path,run_id=None,label=None))]
+    fn write_bundle(
+        &self,
+        py: Python<'_>,
+        path: std::path::PathBuf,
+        run_id: Option<String>,
+        label: Option<String>,
+    ) -> PyResult<crate::spectral_bundle::PySpectralResultBundle> {
+        let spectral = self.spectral.clone();
+        let opd = self.opd.clone();
+        py.detach(move || {
+            fpm_rs::reconstruction::MultiWavelengthReconstructionResult {
+                spectral: (*spectral).clone(),
+                opd: (*opd).clone(),
+            }
+            .write_bundle(
+                path,
+                fpm_rs::tabular::parquet::BundleExportOptions {
+                    run_id,
+                    label,
+                    include_previews: false,
+                },
+            )
+        })
+        .map(crate::spectral_bundle::PySpectralResultBundle::from_core)
+        .map_err(to_py_err)
+    }
+
     #[getter]
     fn spectral(&self) -> PySpectralReconstructionResult {
         PySpectralReconstructionResult {
@@ -903,10 +1054,56 @@ impl PyMultiWavelengthReconstructionResult {
     }
 }
 
+/// Numerical diagnostics of declared exposure/channel mode weights.
+/// Matrix columns follow channel_ids; getters return writable float64 copies.
+/// condition_number is None for deficient column rank or an overflowing ratio.
+#[pyclass(
+    module = "fpm_rs._core",
+    name = "SpectralMixingDiagnostics",
+    frozen,
+    from_py_object
+)]
+#[derive(Clone)]
+pub(crate) struct PySpectralMixingDiagnostics {
+    inner: Arc<fpm_rs::model::SpectralMixingDiagnostics>,
+}
+#[pymethods]
+impl PySpectralMixingDiagnostics {
+    #[getter]
+    fn channel_ids(&self) -> Vec<String> {
+        self.inner.channel_ids.clone()
+    }
+    #[getter]
+    fn matrix(&self, py: Python<'_>) -> PyResult<Py<PyArray2<f64>>> {
+        array2_to_py(py, self.inner.matrix.clone())
+    }
+    #[getter]
+    fn singular_values(&self) -> Vec<f64> {
+        self.inner.singular_values.clone()
+    }
+    #[getter]
+    fn rank(&self) -> usize {
+        self.inner.rank
+    }
+    #[getter]
+    fn relative_tolerance(&self) -> f64 {
+        self.inner.relative_tolerance
+    }
+    #[getter]
+    fn absolute_tolerance(&self) -> f64 {
+        self.inner.absolute_tolerance
+    }
+    #[getter]
+    fn condition_number(&self) -> Option<f64> {
+        self.inner.condition_number
+    }
+}
+
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySyntheticWavelengthUnwrapper>()?;
     module.add_class::<PyOpticalPathDifferenceResult>()?;
     module.add_class::<PyMultiWavelengthReconstructionResult>()?;
+    module.add_class::<PySpectralMixingDiagnostics>()?;
     module.add_class::<PySpectralChannel>()?;
     module.add_class::<PySpectralGeometry>()?;
     module.add_class::<PySpectralFrame>()?;

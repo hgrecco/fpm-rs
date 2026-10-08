@@ -42,6 +42,7 @@ pub use joint_reconstruction::{
 };
 pub use metrics::{AlgorithmIterationMetrics, NoIterationMetrics, StepOutput, StepSummary};
 pub use mpie::Mpie;
+pub(crate) use multi_wavelength::Gauge;
 pub use multi_wavelength::{MultiWavelengthGradientDescent, MultiWavelengthSolverResult};
 pub use spectral::{SpectralAlternatingProjection, SpectralReconstructionAlgorithm};
 

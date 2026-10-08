@@ -24,3 +24,5 @@ the Fourier and array conventions shared by both objects.
 ::: fpm_rs.compile_spectral_model
 
 ::: fpm_rs.SpectralReconstructionProblem
+
+::: fpm_rs.SpectralMixingDiagnostics

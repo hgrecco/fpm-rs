@@ -374,3 +374,70 @@ fn cleanup_refuses_an_unmarked_directory() -> Result<()> {
     assert_eq!(fs::read(cache.join("preserved"))?, b"user data");
     Ok(())
 }
+
+#[test]
+fn registry_opens_repairs_and_caches_explicit_spectral_profile_offline() -> Result<()> {
+    use fpm_rs::datasets::{SpectralDatasetChannel, SpectralDatasetManifest};
+    use fpm_rs::experiment::SpectralAcquisitionPlan;
+    use fpm_rs::model::ObjectCoupling;
+    let temporary = TempDir::new()?;
+    let bundle = temporary.path().join("bundle");
+    write_bundle(&bundle)?;
+    let configuration = SimulationConfiguration::load(bundle.join("configuration.json"))?;
+    configuration
+        .compiled_models
+        .reconstruction_model
+        .save_json(bundle.join("kernel.json"))?;
+    let manifest = SpectralDatasetManifest {
+        format_version: 2,
+        measurement_manifest: "measurements.json".into(),
+        channels: vec![SpectralDatasetChannel {
+            channel_id: "green".into(),
+            wavelength_vacuum_m: 532e-9,
+            compiled_model: "kernel.json".into(),
+            response_provenance:
+                "Generated unity response, explicit source weights and exposure order".into(),
+            ground_truth_object: None,
+            valid_object_mask: None,
+        }],
+        object_coupling: ObjectCoupling::Independent,
+        acquisition: SpectralAcquisitionPlan::separate(&[1])?,
+        provenance: Default::default(),
+        measurement_units: Some("counts".into()),
+    };
+    serde_json::to_writer(fs::File::create(bundle.join("dataset.json"))?, &manifest)?;
+    let archive_path = temporary.path().join("spectral.tar.zst");
+    let encoder = zstd::Encoder::new(fs::File::create(&archive_path)?, 1)?;
+    let mut archive = tar::Builder::new(encoder);
+    for relative in [
+        "dataset.json",
+        "measurements.json",
+        "kernel.json",
+        "frames/frame.png",
+    ] {
+        archive.append_path_with_name(bundle.join(relative), relative)?;
+    }
+    archive.into_inner()?.finish()?;
+    let mut spectral_entry = entry("spectral", &archive_path);
+    spectral_entry.format_version = 2;
+    let registry_path = temporary.path().join("registry.json");
+    write_registry(&registry_path, vec![spectral_entry])?;
+    let registry = DatasetRegistry::new(
+        registry_path.display().to_string(),
+        temporary.path().join("cache"),
+    )?;
+    let installed = registry.download("spectral")?;
+    assert!(registry.list()?[0].cached);
+    assert!(registry.open("spectral").is_err());
+    assert!(installed.join("kernel.json").is_file());
+    let dataset = registry.open_spectral("spectral")?;
+    assert_eq!(dataset.measurements().as_slice()[0], 7.0);
+    dataset.reconstruction_problem()?;
+    fs::remove_file(installed.join("kernel.json"))?;
+    registry.open_spectral("spectral")?;
+    assert!(installed.join("kernel.json").is_file());
+    fs::remove_file(archive_path)?;
+    registry.open_spectral("spectral")?;
+    assert!(registry.clean("spectral")?);
+    Ok(())
+}

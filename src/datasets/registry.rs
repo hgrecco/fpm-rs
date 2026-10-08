@@ -13,7 +13,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};
 
-use super::{DATASET_FORMAT_VERSION, Dataset, DatasetLoader};
+use super::{
+    DATASET_FORMAT_VERSION, Dataset, DatasetLoader, SPECTRAL_DATASET_FORMAT_VERSION,
+    SpectralDataset,
+};
 
 /// Registry document version understood by this release.
 pub const DATASET_REGISTRY_VERSION: u32 = 1;
@@ -86,7 +89,7 @@ pub struct DatasetRegistryEntry {
     pub title: String,
     /// Human-readable scientific and acquisition summary.
     pub description: String,
-    /// Dataset bundle format version expected after extraction.
+    /// Dataset profile expected after extraction: one for ordinary, two for spectral.
     pub format_version: u32,
     /// Immutable download location, digest, and byte size.
     pub archive: DatasetArchive,
@@ -101,7 +104,7 @@ pub struct DatasetRegistryEntry {
 }
 
 impl DatasetRegistryEntry {
-    /// Validates all version-1 entry invariants.
+    /// Validates registry-version-one metadata and supported dataset profile versions.
     pub fn validate(&self) -> Result<()> {
         validate_component("dataset id", &self.id)?;
         validate_component("dataset version", &self.version)?;
@@ -118,10 +121,13 @@ impl DatasetRegistryEntry {
         ] {
             validate_nonempty(label, value)?;
         }
-        if self.format_version != DATASET_FORMAT_VERSION {
+        if !matches!(
+            self.format_version,
+            DATASET_FORMAT_VERSION | SPECTRAL_DATASET_FORMAT_VERSION
+        ) {
             return Err(Error::Dataset(format!(
-                "dataset '{}' declares unsupported format version {}; expected {}",
-                self.id, self.format_version, DATASET_FORMAT_VERSION
+                "dataset '{}' declares unsupported format version {}; expected 1 or 2",
+                self.id, self.format_version
             )));
         }
         if self.archive.size_bytes == 0 {
@@ -329,6 +335,14 @@ impl DatasetRegistry {
     /// A corrupt current installation is removed and installed once more.
     pub fn open(&self, id: &str) -> Result<Dataset> {
         let path = self.download(id)?;
+        if matches!(
+            DatasetLoader::new(&path)?.format_version(),
+            Ok(SPECTRAL_DATASET_FORMAT_VERSION)
+        ) {
+            return Err(Error::Dataset(
+                "spectral dataset requires open_spectral".into(),
+            ));
+        }
         match self.load_cached_dataset(&path) {
             Ok(dataset) => Ok(dataset),
             Err(first_error) => {
@@ -347,6 +361,41 @@ impl DatasetRegistry {
                         "cached dataset '{id}' was invalid ({first_error}); reinstall also failed: {second_error}"
                     ))
                 })
+            }
+        }
+    }
+
+    /// Opens an explicit spectral registry profile, downloading a registered ID if needed.
+    /// Uses the same verified archive and managed cache as ordinary data. Version-one
+    /// profiles must use `open`; local converted profiles use `DatasetLoader::load_spectral`.
+    pub fn open_spectral(&self, id: &str) -> Result<SpectralDataset> {
+        let path = self.download(id)?;
+        if matches!(
+            DatasetLoader::new(&path)?.format_version(),
+            Ok(DATASET_FORMAT_VERSION)
+        ) {
+            return Err(Error::Dataset("ordinary dataset requires open".into()));
+        }
+        let load = |path: &Path| -> Result<SpectralDataset> {
+            let _lock = self.lock_cache()?;
+            DatasetLoader::new(path)?.load_spectral()
+        };
+        match load(&path) {
+            Ok(dataset) => Ok(dataset),
+            Err(first_error) => {
+                let registry = self.load_registry()?;
+                let entry = registry.entry(id)?.clone();
+                {
+                    let _lock = self.lock_cache()?;
+                    if path.exists() {
+                        self.validate_managed_tree(&path)?;
+                        fs::remove_dir_all(&path)?;
+                    }
+                }
+                let repaired = self.install(&entry)?;
+                load(&repaired).map_err(|second_error| Error::Dataset(format!(
+                    "cached spectral dataset '{id}' was invalid ({first_error}); reinstall also failed: {second_error}"
+                )))
             }
         }
     }
@@ -431,7 +480,7 @@ impl DatasetRegistry {
                     entry.id
                 )));
             }
-            DatasetLoader::new(&staging_path)?.load()?;
+            DatasetLoader::new(&staging_path)?.validate_profile(entry.format_version)?;
             let metadata = InstallMetadata {
                 cache_format_version: 1,
                 id: entry.id.clone(),
