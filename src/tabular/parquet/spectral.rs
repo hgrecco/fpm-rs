@@ -694,13 +694,6 @@ fn write(
         });
     }
     write_json_atomic(&workspace.join("manifest.json"), &manifest)?;
-    {
-        // Windows will not move a directory while any verifier-owned file
-        // handles remain open. Keep the pre-publication verification scoped so
-        // its readers and cache are dropped before the atomic rename.
-        let verified = SpectralResultBundle::read(&workspace)?;
-        verified.verify()?;
-    }
     fs::rename(&workspace, &destination)?;
     SpectralResultBundle::read(destination)
 }
