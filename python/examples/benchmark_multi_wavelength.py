@@ -11,13 +11,46 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import resource
 import subprocess
 import sys
 import time
 
 import numpy as np
 import fpm_rs as fpm
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+else:
+    import resource
+
+
+if sys.platform == "win32":
+
+    class _ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("page_fault_count", wintypes.DWORD),
+            ("peak_working_set_size", ctypes.c_size_t),
+            ("working_set_size", ctypes.c_size_t),
+            ("quota_peak_paged_pool_usage", ctypes.c_size_t),
+            ("quota_paged_pool_usage", ctypes.c_size_t),
+            ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
+            ("quota_non_paged_pool_usage", ctypes.c_size_t),
+            ("pagefile_usage", ctypes.c_size_t),
+            ("peak_pagefile_usage", ctypes.c_size_t),
+        ]
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    _get_process_memory_info = _psapi.GetProcessMemoryInfo
+    _get_process_memory_info.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_ProcessMemoryCounters),
+        wintypes.DWORD,
+    ]
+    _get_process_memory_info.restype = wintypes.BOOL
 
 
 def fixture(mixed: bool, noise: float, seed: int, shape: tuple[int, int]):
@@ -104,7 +137,15 @@ def fixture(mixed: bool, noise: float, seed: int, shape: tuple[int, int]):
 
 
 def peak_mib():
-    """Normalize fresh-process peak resident-set bytes/kilobytes to MiB."""
+    """Return fresh-process peak resident memory in MiB on every supported OS."""
+    if sys.platform == "win32":
+        counters = _ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        if not _get_process_memory_info(
+            _kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return counters.peak_working_set_size / 1024**2
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return rss / (1024**2 if sys.platform == "darwin" else 1024)
 

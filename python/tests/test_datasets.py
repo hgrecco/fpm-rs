@@ -17,7 +17,7 @@ def ordinary_dataset(tmp_path):
     cache = tmp_path / "cache"
     root = cache / "datasets" / "fixture" / "1"
     root.mkdir(parents=True)
-    (cache / ".fpm-rs-dataset-cache").write_text("fpm-rs managed dataset cache v1\n")
+    (cache / ".fpm-rs-dataset-cache").write_bytes(b"fpm-rs managed dataset cache v1\n")
     (root / ".fpm-rs-install.json").write_text(
         json.dumps(
             {
