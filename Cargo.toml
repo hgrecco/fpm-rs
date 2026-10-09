@@ -39,11 +39,14 @@ license = "MIT"
 
 [workspace.dependencies]
 approx = "0.5"
+chacha20 = { version = "0.10.2", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 csv = "1.3"
 dirs = "6"
+event-listener = { version = "5.4.2", default-features = false }
 fpm-rs = { path = "." }
 fs2 = "0.4"
+h2 = { version = "0.4.16", default-features = false }
 image = {
   version = "0.25",
   default-features = false,
@@ -58,6 +61,7 @@ pyo3 = { version = "0.29", features = ["extension-module"] }
 rand = "0.9"
 rand_distr = "0.5"
 rustfft = "6.2"
+rustls = { version = "0.23.45", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
@@ -107,6 +111,17 @@ zstd.workspace = true
 [dev-dependencies]
 approx.workspace = true
 tempfile.workspace = true
+
+# Cargo resolves target dependencies even when their cfg is false. Keep
+# security floors for transitive dependencies without activating unused Polars
+# dependencies or adding public features. Remove these bounds when upstream
+# minimum versions cover RUSTSEC-2026-0258 (h2), RUSTSEC-2026-0285 (rustls),
+# RUSTSEC-2026-0221 (event-listener), and the yanked chacha20 0.10.1 release.
+[target."cfg(any())".dependencies]
+chacha20.workspace = true
+event-listener.workspace = true
+h2.workspace = true
+rustls.workspace = true
 
 [features]
 default = []
