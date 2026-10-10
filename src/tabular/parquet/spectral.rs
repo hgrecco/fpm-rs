@@ -3,7 +3,7 @@ use super::{
     BundleArtifact, BundleExportOptions, BundleVerificationResult,
     manifest::ManifestArtifact,
     npy,
-    write::{sha256, unique_paths, validate_run_id, write_json_atomic},
+    write::{publish_workspace, sha256, unique_paths, validate_run_id, write_json_atomic},
 };
 use crate::{
     Error, Result,
@@ -694,7 +694,7 @@ fn write(
         });
     }
     write_json_atomic(&workspace.join("manifest.json"), &manifest)?;
-    fs::rename(&workspace, &destination)?;
+    publish_workspace(&workspace, &destination)?;
     SpectralResultBundle::read(destination)
 }
 type Descriptor = (Option<String>, Option<Vec<u64>>, &'static str);

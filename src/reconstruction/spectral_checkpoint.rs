@@ -314,10 +314,16 @@ impl SpectralReconstructionCheckpoint {
             .unwrap_or_else(|| Path::new("."));
         let temporary = parent.join(format!(".spectral-checkpoint-{}.tmp", uuid::Uuid::new_v4()));
         let result = (|| -> Result<()> {
-            let mut writer = BufWriter::new(File::create(&temporary)?);
-            serde_json::to_writer(&mut writer, self)?;
-            writer.flush()?;
-            writer.get_ref().sync_all()?;
+            // Close the file before publishing it: Windows does not permit a
+            // rename while a writer that disallows delete sharing is open.
+            // This also keeps checkpoint publication independent of platform
+            // file-sharing defaults.
+            {
+                let mut writer = BufWriter::new(File::create(&temporary)?);
+                serde_json::to_writer(&mut writer, self)?;
+                writer.flush()?;
+                writer.get_ref().sync_all()?;
+            }
             fs::rename(&temporary, path)?;
             Ok(())
         })();
