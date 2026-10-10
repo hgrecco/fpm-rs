@@ -146,6 +146,12 @@ first.
 
 ### Fixed
 
+- Restored Windows spectral-bundle exports by syncing generated Parquet tables
+  through their writable handles. Benchmark scripts now report peak process
+  memory through the supported Windows API.
+- Updated indirect `chacha20`, `event-listener`, `h2`, and `rustls`
+  dependencies to the versions required by the project's current security
+  policy.
 - Removed obsolete tests and API documentation for the withdrawn solver,
   restoring constructor-signature and subpixel-crop coverage for active
   algorithms and eliminating the skips that failed complete-suite validation.
