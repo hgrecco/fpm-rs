@@ -56,6 +56,10 @@ jobs:
     name: Miri array and serialization invariants
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      # configuration_tests exercises the public save/load API through tempfile;
+      # permit those filesystem syscalls while Miri checks Rust memory behavior.
+      MIRIFLAGS: -Zmiri-disable-isolation
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
