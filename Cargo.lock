@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "fpm-rs"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "approx",
  "chacha20",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "fpm-rs-python"
-version = "0.2.0-beta.2"
+version = "0.2.0-beta.3"
 dependencies = [
  "fpm-rs",
  "numpy",

@@ -7,7 +7,7 @@ authors:
   - family-names: "Grecco"
     given-names: "Hernán E."
     email: "hernan.grecco@gmail.com"
-version: "0.2.0-beta.2"
+version: "0.2.0-beta.3"
 license: MIT
 repository-code: "https://github.com/hgrecco/fpm-rs"
 url: "https://hgrecco.github.io/fpm-rs"
