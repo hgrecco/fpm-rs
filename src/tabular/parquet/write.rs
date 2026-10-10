@@ -296,7 +296,7 @@ pub(crate) fn write_result_bundle(
     };
     // The manifest is deliberately the final write within the workspace.
     write_json_sync(&workspace.join("manifest.json"), &manifest)?;
-    publish_workspace(&workspace, &final_path)?;
+    fs::rename(&workspace, &final_path)?;
     ResultBundle::read(&final_path)
 }
 
@@ -721,35 +721,4 @@ pub(super) fn unique_paths(requested: &Path) -> Result<(PathBuf, PathBuf)> {
         name: "bundle path",
         reason: "could not generate a unique output name".into(),
     })
-}
-
-/// Publishes a complete workspace only after its manifest has been written.
-///
-/// Windows may briefly deny a directory rename while a virus scanner or indexer
-/// still has a newly written artifact open. Retrying only that transient error
-/// keeps the manifest-last publication contract without masking other I/O
-/// failures.
-pub(super) fn publish_workspace(workspace: &Path, destination: &Path) -> Result<()> {
-    #[cfg(windows)]
-    {
-        use std::{thread, time::Duration};
-
-        let delays = [10, 20, 40, 80, 160, 320, 640];
-        for delay_ms in delays {
-            match fs::rename(workspace, destination) {
-                Ok(()) => return Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                    thread::sleep(Duration::from_millis(delay_ms));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        fs::rename(workspace, destination)?;
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        fs::rename(workspace, destination)?;
-        Ok(())
-    }
 }

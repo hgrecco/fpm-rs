@@ -3,7 +3,7 @@ use super::{
     BundleArtifact, BundleExportOptions, BundleVerificationResult,
     manifest::ManifestArtifact,
     npy,
-    write::{publish_workspace, sha256, unique_paths, validate_run_id, write_json_atomic},
+    write::{sha256, unique_paths, validate_run_id, write_json_atomic},
 };
 use crate::{
     Error, Result,
@@ -656,18 +656,21 @@ fn write(
                     crate::tabular::algorithm_metrics_dataframe(&manifest.run_id, &manifest.trace)?
                 }
             };
-            ParquetWriter::new(File::create(&file)?)
-                .with_key_value_metadata(Some(KeyValueMetadata::from_static(vec![
-                    ("fpm.bundle_kind".into(), KIND.into()),
-                    (
-                        "fpm.bundle_format_version".into(),
-                        SPECTRAL_BUNDLE_FORMAT_VERSION.to_string(),
-                    ),
-                    ("fpm.run_id".into(), manifest.run_id.clone()),
-                    ("fpm.table_role".into(), role.clone()),
-                ])))
-                .finish(&mut table)?;
-            File::open(&file)?.sync_all()?;
+            let mut output = File::create(&file)?;
+            {
+                ParquetWriter::new(&mut output)
+                    .with_key_value_metadata(Some(KeyValueMetadata::from_static(vec![
+                        ("fpm.bundle_kind".into(), KIND.into()),
+                        (
+                            "fpm.bundle_format_version".into(),
+                            SPECTRAL_BUNDLE_FORMAT_VERSION.to_string(),
+                        ),
+                        ("fpm.run_id".into(), manifest.run_id.clone()),
+                        ("fpm.table_role".into(), role.clone()),
+                    ])))
+                    .finish(&mut table)?;
+            }
+            output.sync_all()?;
         } else {
             let parts: Vec<_> = role.split('.').collect();
             let c = &result.channels[parts[1]
@@ -694,7 +697,7 @@ fn write(
         });
     }
     write_json_atomic(&workspace.join("manifest.json"), &manifest)?;
-    publish_workspace(&workspace, &destination)?;
+    fs::rename(&workspace, &destination)?;
     SpectralResultBundle::read(destination)
 }
 type Descriptor = (Option<String>, Option<Vec<u64>>, &'static str);
